@@ -4,17 +4,15 @@ import { Navbar, Nav, Container } from 'react-bootstrap';
 
 import MasterSetup from './components/MasterSetup';
 import InputStation from './components/InputStation';
-import SpcChart from './components/SpcChart'; 
 import Dashboard from './components/Dashboard';
+import { API_ORIGIN, APP_BASE } from './utils/config';
 
 import './index.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
-// const BACKEND_URL = 'http://localhost:5000';
-const BACKEND_URL = '/Mecha-Spc-Realtime';
+const BACKEND_URL = `${API_ORIGIN}${APP_BASE}`;
 
 const API_BASE = `${BACKEND_URL}/api`;
-// const API_BASE = '/Mecha-Spc-Realtime/api';
 
 const apiCall = async (endpoint, options = {}) => {
   const token = localStorage.getItem('token');
@@ -26,35 +24,36 @@ const apiCall = async (endpoint, options = {}) => {
       'Content-Type': 'application/json',
       ...(token && { Authorization: `Bearer ${token}` }),
     },
-    ...restOptions, 
-    body: body ? JSON.stringify(body) : undefined, 
+    ...restOptions,
+    body: body ? JSON.stringify(body) : undefined,
   };
 
-  try {
-    const response = await fetch(`${API_BASE}${endpoint}`, config);
-    
-    let data;
-    const text = await response.text();
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      data = text;
-    }
-    // const data = await response.json(); // (แบบเดิม)
+  const response = await fetch(`${API_BASE}${endpoint}`, config);
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        window.location.href = '/Mecha-Spc-Realtime/';
-        throw new Error('Session expired');
-      }
-      throw new Error(data?.message || data || 'Something went wrong');
-    }
-    return data;
-  } catch (error) {
-    throw error;
+  let data;
+  const text = await response.text();
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    data = text;
   }
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = `${APP_BASE}/`;
+      throw new Error('Session expired');
+    }
+    // backend ตอบ error มาในรูป { error: "..." } ไม่ใช่ { message: "..." }
+    // ถ้าอ่านผิด key จะได้ [object Object] แทนข้อความจริง
+    const reason =
+      data?.error ||
+      data?.message ||
+      (typeof data === 'string' && data ? data : `Request failed (${response.status})`);
+    throw new Error(reason);
+  }
+  return data;
 };
 
 const NotFound = () => (
@@ -65,58 +64,9 @@ const NotFound = () => (
   </Container>
 );
 
-// const Dashboard = () => {
-//   const [specs, setSpecs] = React.useState([]);
-
-//   React.useEffect(() => {
-//     const fetchSpecs = async () => {
-//        const tree = await apiCall('/master/tree');
-//        // กรองเอาเฉพาะที่มี Spec ID
-//        const uniqueSpecs = tree.filter(t => t.s_id);
-//        setSpecs(uniqueSpecs);
-//     };
-//     fetchSpecs();
-//   }, []);
-
-//   return (
-//     <Container className="mt-4">
-//         <h2>📊 Real-time SPC Dashboard</h2>
-//         <div className="row">
-//             {specs.map(spec => (
-//                 <div className="col-md-6" key={spec.s_id}>
-//                     <SpcChart spec={spec} />
-//                 </div>
-//             ))}
-//         </div>
-//     </Container>
-//   );
-// };
-
-const ConditionalNavbar = () => {
-  return (
-    <Navbar bg="dark" variant="dark" expand="lg" className="mb-4">
-      <Container>
-        <Navbar.Brand as={Link} to="/">Mecha Attend</Navbar.Brand>
-        <Navbar.Toggle aria-controls="basic-navbar-nav" />
-        <Navbar.Collapse id="basic-navbar-nav">
-          <Nav className="me-auto">
-          </Nav>
-        </Navbar.Collapse>
-      </Container>
-    </Navbar>
-  );
-};
-
-const Layout = ({ children }) => (
-  <>
-    <ConditionalNavbar />
-    <Container>{children}</Container>
-  </>
-);
-
 const App = () => {
   return (
-    <Router basename="/Mecha-Spc-Realtime">
+    <Router basename={APP_BASE}>
       <Navbar bg="dark" variant="dark" expand="lg">
         <Container>
           <Navbar.Brand as={Link} to="/">Mecha SPC Realtime</Navbar.Brand>
@@ -127,11 +77,12 @@ const App = () => {
           </Nav>
         </Container>
       </Navbar>
-      
+
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/input" element={<InputStation />} />
         <Route path="/master" element={<MasterSetup />} />
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </Router>
   );

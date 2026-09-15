@@ -34,8 +34,8 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // Static Files
-app.use('/Mecha-Spc-Realtime', express.static(path.join(__dirname, 'build')));
-app.use('/Mecha-Spc-Realtime/static', express.static(path.join(__dirname, 'build/static')));
+// หมายเหตุ: หน้าเว็บ (frontend/build) เสิร์ฟโดย Apache ไม่ใช่ Express
+// ที่นี่จึงเหลือแค่ API + socket.io + โฟลเดอร์ uploads เท่านั้น
 app.use('/Mecha-Spc-Realtime/uploads', express.static(uploadDir)); // ให้เข้าถึงรูปภาพได้
 
 // Database Pool
@@ -50,6 +50,33 @@ const dbConfig = {
   queueLimit: 0,
 };
 const dbPool = mysql.createPool(dbConfig);
+
+// ========== HELPERS ==========
+
+// คอลัมน์ที่อนุญาตให้เขียนได้ของแต่ละตาราง
+// ชื่อคอลัมน์ต่อเข้า SQL ตรง ๆ (parameterize ชื่อคอลัมน์ไม่ได้) จึงต้อง whitelist
+// รายการนี้ต้องตรงกับที่ MasterSetup.handleSave ส่งมาจริง
+const ALLOWED_COLUMNS = {
+  divisions: ['name'],
+  machines: ['division_id', 'name'],
+  parts: ['machine_id', 'part_name', 'part_no'],
+  specs: ['part_id', 'spec_name', 'ucl', 'lcl', 'target'],
+};
+const allowedTables = Object.keys(ALLOWED_COLUMNS);
+
+// ค่าจากฟอร์มมาเป็น string เสมอ จึงต้อง coerce ก่อนตรวจ ไม่ใช่เช็ค typeof
+const isIntLike = (v) => v !== null && v !== undefined && v !== '' && Number.isInteger(Number(v));
+const isNumLike = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
+
+// แยก data ออกเป็นคอลัมน์ที่ใช้ได้ / คีย์ที่ไม่รู้จัก
+const pickColumns = (table, data) => {
+  const allowed = ALLOWED_COLUMNS[table];
+  const keys = Object.keys(data || {});
+  return {
+    keys: keys.filter((k) => allowed.includes(k)),
+    invalid: keys.filter((k) => !allowed.includes(k)),
+  };
+};
 
 // ========== API ROUTES ==========
 
@@ -76,12 +103,14 @@ app.get('/Mecha-Spc-Realtime/api/master/tree', async (req, res) => {
 app.post('/Mecha-Spc-Realtime/api/master/add', async (req, res) => {
     const { table, data } = req.body; // table: 'divisions', 'machines', etc.
     // Safety check for table name to prevent injection
-    const allowedTables = ['divisions', 'machines', 'parts', 'specs'];
     if (!allowedTables.includes(table)) return res.status(400).json({ error: "Invalid table" });
 
+    const { keys, invalid } = pickColumns(table, data);
+    if (invalid.length) return res.status(400).json({ error: `Invalid column(s): ${invalid.join(', ')}` });
+    if (!keys.length) return res.status(400).json({ error: "No data to insert" });
+
     try {
-        const keys = Object.keys(data);
-        const values = Object.values(data);
+        const values = keys.map((k) => data[k]);
         const placeholders = keys.map(() => '?').join(',');
         
         const sql = `INSERT INTO ${table} (${keys.join(',')}) VALUES (${placeholders})`;
@@ -97,16 +126,21 @@ app.post('/Mecha-Spc-Realtime/api/master/add', async (req, res) => {
 app.post('/Mecha-Spc-Realtime/api/measure', async (req, res) => {
     // รับ lot_no มาด้วย
     const { spec_id, value, sampling_no, checker_name, lot_no } = req.body;
+
+    if (!isIntLike(spec_id)) return res.status(400).json({ error: "spec_id must be a number" });
+    if (!isNumLike(value)) return res.status(400).json({ error: "value must be a number" });
+    if (!isIntLike(sampling_no)) return res.status(400).json({ error: "sampling_no must be an integer" });
+
     try {
         await dbPool.execute(
             `INSERT INTO measurements (spec_id, value, sampling_no, checker_name, lot_no) VALUES (?, ?, ?, ?, ?)`,
-            [spec_id, value, sampling_no, checker_name, lot_no]
+            [Number(spec_id), Number(value), Number(sampling_no), checker_name ?? null, lot_no ?? null]
         );
 
         // ดึงข้อมูลล่าสุดส่ง Socket (รวม lot_no)
         const [history] = await dbPool.query(
             `SELECT value, sampling_no, lot_no, measured_at FROM measurements WHERE spec_id = ? ORDER BY measured_at ASC`,
-            [spec_id]
+            [Number(spec_id)]
         );
 
         io.emit(`spc_data_${spec_id}`, history); // Real-time update
@@ -116,9 +150,11 @@ app.post('/Mecha-Spc-Realtime/api/measure', async (req, res) => {
 
 // 4. API: Get Historical Data (For initial graph load)
 app.get('/Mecha-Spc-Realtime/api/spc/:specId', async (req, res) => {
+    if (!isIntLike(req.params.specId)) return res.status(400).json({ error: "Invalid spec id" });
+
     const { start, end } = req.query; // รับ query param ?start=...&end=...
     let sql = `SELECT value, sampling_no, lot_no, measured_at FROM measurements WHERE spec_id = ?`;
-    let params = [req.params.specId];
+    let params = [Number(req.params.specId)];
 
     if (start && end) {
         sql += ` AND DATE(measured_at) BETWEEN ? AND ?`;
@@ -134,8 +170,10 @@ app.get('/Mecha-Spc-Realtime/api/spc/:specId', async (req, res) => {
 });
 
 app.get('/Mecha-Spc-Realtime/api/history/:partId', async (req, res) => {
+    if (!isIntLike(req.params.partId)) return res.status(400).json({ error: "Invalid part id" });
+
     try {
-        const partId = req.params.partId;
+        const partId = Number(req.params.partId);
         // Query Join เพื่อดึงชื่อ Spec และค่า UCL/LCL มาเทียบสถานะ
         const sql = `
             SELECT 
@@ -164,22 +202,25 @@ app.get('/Mecha-Spc-Realtime/api/history/:partId', async (req, res) => {
 
 app.put('/Mecha-Spc-Realtime/api/master/update', async (req, res) => {
     const { table, id, data } = req.body;
-    
+
     // Whitelist check
-    const allowedTables = ['divisions', 'machines', 'parts', 'specs'];
     if (!allowedTables.includes(table)) return res.status(400).json({ error: "Invalid table" });
+    if (!isIntLike(id)) return res.status(400).json({ error: "Invalid id" });
+
+    const { keys, invalid } = pickColumns(table, data);
+    if (invalid.length) return res.status(400).json({ error: `Invalid column(s): ${invalid.join(', ')}` });
+    if (!keys.length) return res.status(400).json({ error: "No data to update" });
 
     try {
-        const keys = Object.keys(data);
-        const values = Object.values(data);
-        
+        const values = keys.map((k) => data[k]);
+
         // สร้าง query string เช่น: "name = ?, ucl = ?, target = ?"
         const setClause = keys.map(key => `${key} = ?`).join(', ');
         
         // ต่อท้ายด้วย ID
         const sql = `UPDATE ${table} SET ${setClause} WHERE id = ?`;
         
-        await dbPool.execute(sql, [...values, id]);
+        await dbPool.execute(sql, [...values, Number(id)]);
         
         io.emit('master_updated'); // แจ้ง Client อื่นให้ Refresh
         res.json({ success: true });
@@ -189,21 +230,23 @@ app.put('/Mecha-Spc-Realtime/api/master/update', async (req, res) => {
 // 6. API: Universal DELETE
 app.delete('/Mecha-Spc-Realtime/api/master/delete', async (req, res) => {
     const { table, id } = req.body;
-    
-    const allowedTables = ['divisions', 'machines', 'parts', 'specs'];
+
     if (!allowedTables.includes(table)) return res.status(400).json({ error: "Invalid table" });
+    if (!isIntLike(id)) return res.status(400).json({ error: "Invalid id" });
 
     try {
-        await dbPool.execute(`DELETE FROM ${table} WHERE id = ?`, [id]);
+        // FK ทุกเส้นเป็น ON DELETE CASCADE ข้อมูลลูกจะถูกลบตามอัตโนมัติ
+        await dbPool.execute(`DELETE FROM ${table} WHERE id = ?`, [Number(id)]);
         
         io.emit('master_updated');
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// React Fallback
-app.get('/Mecha-Spc-Realtime/*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+// API ที่ไม่มีอยู่จริง ต้องตอบ JSON ไม่ใช่ HTML
+// (หน้าเว็บกับ React fallback เป็นหน้าที่ของ Apache)
+app.use('/Mecha-Spc-Realtime/api', (req, res) => {
+  res.status(404).json({ error: `Not found: ${req.method} ${req.originalUrl}` });
 });
 
 // เปลี่ยนจาก app.listen เป็น server.listen เพื่อรองรับ Socket.io
