@@ -1,118 +1,145 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Container, Row, Col, Form, Card } from 'react-bootstrap';
-import { apiCall } from '../App';
-import socket from '../utils/socket';
-import { normalizeTree } from '../utils/normalize';
-import SpcChart from './SpcChart';
+// frontend/src/components/Dashboard.js — จอ realtime ของไลน์ เลือกรุ่นแล้วเห็นทุกจุดตรวจ
+//
+// ต่างจากระบบเดิมตรง: เข้า room ของรุ่นที่ดูอยู่เท่านั้น พอมีใบตรวจใหม่เข้ามา server ส่ง
+// แค่ "จุดไหนเปลี่ยนบ้าง" มาให้ แล้วหน้านี้โหลดใหม่เฉพาะกราฟที่กระทบ
+// (ของเดิม broadcast ประวัติทั้งก้อนของทุก spec ให้ทุกเครื่องทุกครั้งที่มีคนบันทึก)
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Container, Row, Col, Form, Card, Badge, Alert } from 'react-bootstrap';
+import { apiCall } from '../utils/api';
+import { on, joinModel, leaveModel } from '../utils/socket';
+import { normalizeRows, normalizeChart } from '../utils/normalize';
+import ControlChart from './ControlChart';
 
 const Dashboard = () => {
-    const [tree, setTree] = useState([]);
+  const [models, setModels] = useState([]);
+  const [modelId, setModelId] = useState('');
+  const [charts, setCharts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [alerts, setAlerts] = useState([]);
 
-    // Filters
-    const [filters, setFilters] = useState({
-        division: '',
-        machine: '',
-        part: '',
-        startDate: '',
-        endDate: ''
-    });
+  // เก็บรุ่นปัจจุบันไว้ใน ref ด้วย เพราะ handler ของ socket ถูกผูกครั้งเดียว
+  // ถ้าอ่านจาก state ตรง ๆ มันจะค้างอยู่ที่ค่าตอนผูก (stale closure)
+  const modelIdRef = useRef('');
+  modelIdRef.current = modelId;
 
-    const load = useCallback(async () => {
-        try {
-            const data = await apiCall('/master/tree');
-            setTree(normalizeTree(data));
-        } catch (e) {
-            console.error('Load master tree failed', e);
-        }
-    }, []);
+  useEffect(() => {
+    apiCall('/master/models')
+      .then((ms) => setModels(normalizeRows(ms)))
+      .catch((e) => setError(e.message));
+  }, []);
 
-    useEffect(() => { load(); }, [load]);
+  // โหลดกราฟทุกจุดของรุ่น — ใช้ /reports/model/:id เพราะดึงค่าวัดทีเดียวแล้วแยกให้
+  const loadAll = useCallback(async (id) => {
+    if (!id) return setCharts([]);
+    setLoading(true);
+    try {
+      const data = await apiCall(`/reports/model/${id}`);
+      setCharts(data.charts.map(normalizeChart));
+      setError(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-    // backend ยิง master_updated ทุกครั้งที่แก้ master data → โหลดใหม่ให้อัตโนมัติ
-    useEffect(() => {
-        socket.on('master_updated', load);
-        return () => socket.off('master_updated', load);
-    }, [load]);
-
-    // Filter Logic — เก็บทั้ง id และ name ไว้ด้วยกัน
-    // (เดิมเก็บแต่ชื่อแล้ว find ย้อนกลับด้วยชื่อ ถ้าชื่อซ้ำจะได้ id ผิด และถ้าหาไม่เจอจะ crash)
-    const uniqueDivs = [...new Map(
-        tree.filter(t => t.d_id).map(i => [i.d_id, { id: i.d_id, name: i.d_name }])
-    ).values()];
-
-    const filteredMachines = [...new Map(tree
-        .filter(t => t.m_id && (!filters.division || String(t.d_id) === String(filters.division)))
-        .map(i => [i.m_id, { id: i.m_id, name: i.m_name }])).values()];
-
-    const filteredParts = [...new Map(tree
-        .filter(t =>
-            t.p_id &&
-            (!filters.division || String(t.d_id) === String(filters.division)) &&
-            (!filters.machine || String(t.m_id) === String(filters.machine))
-        )
-        .map(i => [i.p_id, { id: i.p_id, name: i.part_name }])).values()];
-
-    // Final Specs to Show
-    const displayedSpecs = tree.filter(t => {
-        return t.s_id &&
-               (!filters.division || String(t.d_id) === String(filters.division)) &&
-               (!filters.machine || String(t.m_id) === String(filters.machine)) &&
-               (!filters.part || String(t.p_id) === String(filters.part));
-    });
-
-    return (
-        <Container fluid className="mt-3">
-            {/* Filter Bar */}
-            <Card className="mb-4 p-3 bg-light shadow-sm">
-                <Row className="g-2">
-                    <Col md={2}>
-                        {/* เปลี่ยน Division ต้องล้าง Machine/Part ด้วย ไม่งั้นค้างค่าเก่าแล้วไม่มีกราฟขึ้นเลย */}
-                        <Form.Select
-                            value={filters.division}
-                            onChange={e => setFilters({ ...filters, division: e.target.value, machine: '', part: '' })}
-                        >
-                            <option value="">All Divisions</option>
-                            {uniqueDivs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                        </Form.Select>
-                    </Col>
-                    <Col md={2}>
-                        <Form.Select
-                            value={filters.machine}
-                            onChange={e => setFilters({ ...filters, machine: e.target.value, part: '' })}
-                        >
-                            <option value="">All Machines</option>
-                            {filteredMachines.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                        </Form.Select>
-                    </Col>
-                    <Col md={3}>
-                        <Form.Select
-                            value={filters.part}
-                            onChange={e => setFilters({ ...filters, part: e.target.value })}
-                        >
-                            <option value="">All Parts</option>
-                            {filteredParts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </Form.Select>
-                    </Col>
-                    <Col md={2}>
-                         <Form.Control type="date" value={filters.startDate} onChange={e => setFilters({...filters, startDate: e.target.value})} />
-                    </Col>
-                    <Col md={2}>
-                         <Form.Control type="date" value={filters.endDate} onChange={e => setFilters({...filters, endDate: e.target.value})} />
-                    </Col>
-                </Row>
-            </Card>
-
-            {/* Charts Grid */}
-            <Row>
-                {displayedSpecs.length === 0 ? <p className="text-center text-muted">No specs match your filter.</p> :
-                 displayedSpecs.map(spec => (
-                    <Col md={6} xl={4} key={spec.s_id}>
-                        {/* ส่ง Date Filter props ไปให้ Chart โหลดข้อมูลเอง */}
-                        <SpcChart spec={spec} dateFilter={{start: filters.startDate, end: filters.endDate}} />
-                    </Col>
-                ))}
-            </Row>
-        </Container>
+  // โหลดใหม่เฉพาะจุดที่เพิ่งมีข้อมูลเข้า ไม่ใช่ทั้งรุ่น
+  const reloadCheckpoints = useCallback(async (ids) => {
+    const fresh = await Promise.all(
+      ids.map((id) => apiCall(`/charts/${id}`).then(normalizeChart).catch(() => null))
     );
+    setCharts((prev) =>
+      prev.map((c) => fresh.find((f) => f?.checkpoint?.id === c.checkpoint?.id) ?? c)
+    );
+  }, []);
+
+  useEffect(() => { loadAll(modelId); }, [modelId, loadAll]);
+
+  // เข้า/ออก room ตามรุ่นที่ดูอยู่
+  useEffect(() => {
+    if (!modelId) return undefined;
+    joinModel(modelId);
+    return () => leaveModel(modelId);
+  }, [modelId]);
+
+  useEffect(() => on('inspection_saved', (payload) => {
+    if (String(payload.modelId) !== String(modelIdRef.current)) return;
+
+    reloadCheckpoints(payload.checkpointIds);
+    setAlerts((prev) => [{
+      id: payload.inspectionId,
+      at: new Date(),
+      moNo: payload.moNo,
+      subgroupNo: payload.subgroupNo,
+      result: payload.overallResult,
+      ngCount: payload.ngCheckpointIds?.length ?? 0,
+    }, ...prev].slice(0, 5));
+  }), [reloadCheckpoints]);
+
+  // ล็อก baseline ที่เครื่องอื่น → เส้นลิมิตเปลี่ยน ต้องโหลดกราฟนั้นใหม่
+  useEffect(() => on('baseline_updated', (payload) => {
+    if (String(payload.modelId) !== String(modelIdRef.current)) return;
+    reloadCheckpoints([payload.checkpointId]);
+  }), [reloadCheckpoints]);
+
+  useEffect(() => on('master_updated', () => loadAll(modelIdRef.current)), [loadAll]);
+
+  const outOfControl = charts.filter((c) => (c.violations?.length ?? 0) > 0);
+
+  return (
+    <Container fluid className="mt-3 pb-5">
+      <Row className="align-items-center mb-3 g-2">
+        <Col md={4}>
+          <Form.Select value={modelId} onChange={(e) => setModelId(e.target.value)}>
+            <option value="">-- เลือกรุ่นที่จะแสดง --</option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>{m.model_code} — {m.model_name}</option>
+            ))}
+          </Form.Select>
+        </Col>
+        <Col>
+          {modelId && !loading && (
+            <>
+              <Badge bg="secondary" className="me-2">{charts.length} จุดตรวจ</Badge>
+              {outOfControl.length > 0
+                ? <Badge bg="danger">{outOfControl.length} จุด out of control</Badge>
+                : <Badge bg="success">ทุกจุด in control</Badge>}
+            </>
+          )}
+        </Col>
+      </Row>
+
+      {error && <Alert variant="danger">{error}</Alert>}
+
+      {/* ใบตรวจที่เพิ่งเข้ามาสด ๆ — หน้างานต้องเห็นทันทีว่ามี NG */}
+      {alerts.length > 0 && (
+        <Card className="mb-3">
+          <Card.Header className="py-1 small">ใบตรวจล่าสุดที่เข้ามา</Card.Header>
+          <Card.Body className="py-2">
+            {alerts.map((a) => (
+              <div key={a.id} className="small">
+                <Badge bg={a.result === 'NG' ? 'danger' : 'success'} className="me-2">{a.result}</Badge>
+                {a.at.toLocaleTimeString('th-TH')} · MO {a.moNo} · subgroup #{a.subgroupNo}
+                {a.ngCount > 0 && <span className="text-danger ms-2">({a.ngCount} จุดไม่ผ่าน)</span>}
+              </div>
+            ))}
+          </Card.Body>
+        </Card>
+      )}
+
+      {!modelId && <Alert variant="light" className="text-center text-muted">เลือกรุ่นเพื่อดูกราฟ</Alert>}
+      {modelId && loading && <div className="text-center text-muted py-4">กำลังโหลด…</div>}
+
+      <Row>
+        {charts.map((c) => (
+          <Col xl={6} key={c.checkpoint.id}>
+            <ControlChart chart={c} />
+          </Col>
+        ))}
+      </Row>
+    </Container>
+  );
 };
+
 export default Dashboard;

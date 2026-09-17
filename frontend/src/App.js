@@ -1,92 +1,48 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, NavLink } from 'react-router-dom';
 import { Navbar, Nav, Container } from 'react-bootstrap';
 
-import MasterSetup from './components/MasterSetup';
-import InputStation from './components/InputStation';
+import InspectionSheet from './components/InspectionSheet';
 import Dashboard from './components/Dashboard';
-import { API_ORIGIN, APP_BASE } from './utils/config';
+import ReportPage from './components/ReportPage';
+import MasterSetup from './components/MasterSetup';
+import { APP_BASE } from './utils/config';
 
 import './index.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
-const BACKEND_URL = `${API_ORIGIN}${APP_BASE}`;
-
-const API_BASE = `${BACKEND_URL}/api`;
-
-const apiCall = async (endpoint, options = {}) => {
-  const token = localStorage.getItem('token');
-
-  const { body, ...restOptions } = options;
-
-  const config = {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-    },
-    ...restOptions,
-    body: body ? JSON.stringify(body) : undefined,
-  };
-
-  const response = await fetch(`${API_BASE}${endpoint}`, config);
-
-  let data;
-  const text = await response.text();
-  try {
-    data = JSON.parse(text);
-  } catch (e) {
-    data = text;
-  }
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = `${APP_BASE}/`;
-      throw new Error('Session expired');
-    }
-    // backend ตอบ error มาในรูป { error: "..." } ไม่ใช่ { message: "..." }
-    // ถ้าอ่านผิด key จะได้ [object Object] แทนข้อความจริง
-    const reason =
-      data?.error ||
-      data?.message ||
-      (typeof data === 'string' && data ? data : `Request failed (${response.status})`);
-    throw new Error(reason);
-  }
-  return data;
-};
-
 const NotFound = () => (
   <Container className="text-center mt-5">
-    <h2>404 - Page Not Found</h2>
-    <p>Sorry kub. Don't Have This Page eiei</p>
+    <h2>404 — ไม่พบหน้านี้</h2>
     <Link to="/">กลับหน้าหลัก</Link>
   </Container>
 );
 
-const App = () => {
-  return (
-    <Router basename={APP_BASE}>
-      <Navbar bg="dark" variant="dark" expand="lg">
-        <Container>
-          <Navbar.Brand as={Link} to="/">Mecha SPC Realtime</Navbar.Brand>
+const App = () => (
+  <Router basename={APP_BASE}>
+    <Navbar bg="dark" variant="dark" expand="lg">
+      <Container fluid>
+        <Navbar.Brand as={Link} to="/">Mecha QC Inspection</Navbar.Brand>
+        <Navbar.Toggle aria-controls="main-nav" />
+        <Navbar.Collapse id="main-nav">
           <Nav className="me-auto">
-            <Nav.Link as={Link} to="/">Dashboard</Nav.Link>
-            <Nav.Link as={Link} to="/input">Input Station</Nav.Link>
-            <Nav.Link as={Link} to="/master">Master Setup</Nav.Link>
+            <Nav.Link as={NavLink} to="/" end>ใบตรวจ</Nav.Link>
+            <Nav.Link as={NavLink} to="/dashboard">Dashboard</Nav.Link>
+            <Nav.Link as={NavLink} to="/report">รายงาน</Nav.Link>
+            <Nav.Link as={NavLink} to="/master">ตั้งค่า Master</Nav.Link>
           </Nav>
-        </Container>
-      </Navbar>
+        </Navbar.Collapse>
+      </Container>
+    </Navbar>
 
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/input" element={<InputStation />} />
-        <Route path="/master" element={<MasterSetup />} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
-    </Router>
-  );
-};
+    <Routes>
+      <Route path="/" element={<InspectionSheet />} />
+      <Route path="/dashboard" element={<Dashboard />} />
+      <Route path="/report" element={<ReportPage />} />
+      <Route path="/master" element={<MasterSetup />} />
+      <Route path="*" element={<NotFound />} />
+    </Routes>
+  </Router>
+);
 
 export default App;
-export { apiCall, API_BASE, BACKEND_URL };

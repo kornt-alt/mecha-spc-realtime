@@ -1,283 +1,530 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Container, Form, Button, Card, Row, Col, Alert, Table } from 'react-bootstrap';
-import { apiCall } from '../App';
-import socket from '../utils/socket';
-import { normalizeTree } from '../utils/normalize';
+// frontend/src/components/MasterSetup.js — ตั้งค่า master ทั้งหมด
+//
+// ของเดิมมีปุ่มแก้/ลบให้เฉพาะ spec ส่วน division/machine/part เพิ่มได้อย่างเดียว
+// (จะแก้ต้องเข้าไปทำที่ DB ตรง ๆ) รอบนี้ทำให้ครบทุกชั้น + จัดลำดับจุดตรวจ + baseline
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Container, Row, Col, Card, Form, Button, Table, Badge, Alert, Nav, Modal } from 'react-bootstrap';
+import { apiCall } from '../utils/api';
+import { on } from '../utils/socket';
+import { normalizeRows, normalizeCheckpoints, numOrNull, toNum } from '../utils/normalize';
 
-// ช่องตัวเลขที่เว้นว่างต้องส่ง null ไม่ใช่ '' (คอลัมน์เป็น decimal NULLable)
-const numOrNull = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
+const CHAR_TYPES = [
+  { value: 'variable', label: 'วัดค่า (variable)' },
+  { value: 'attribute', label: 'ตรวจด้วยตา (attribute)' },
+];
+
+const blankCheckpoint = () => ({
+  name: '', char_type: 'variable', unit: '', gauge: '',
+  usl: '', lsl: '', target: '', sample_size: 1, is_critical: false, is_active: true,
+});
 
 const MasterSetup = () => {
-    const [tree, setTree] = useState([]);
-    const [msg, setMsg] = useState('');
+  const [tab, setTab] = useState('models');
+  const [lookups, setLookups] = useState({ divisions: [], machines: [], inspectors: [] });
+  const [models, setModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [checkpoints, setCheckpoints] = useState([]);
+  const [msg, setMsg] = useState(null);
+  const [baselineInfo, setBaselineInfo] = useState(null);
 
-    // Selection States (สำหรับการเลือก Hierarchy)
-    const [selectedDiv, setSelectedDiv] = useState('');
-    const [selectedMachine, setSelectedMachine] = useState('');
-    const [selectedPart, setSelectedPart] = useState('');
+  // setMsg เป็น setter ที่ React การันตีว่าคงที่ ห่อ useMemo ไว้ให้ say/fail คงที่ตาม
+  // ไม่งั้น useCallback ที่เรียกใช้จะถูกสร้างใหม่ทุก render แล้ว useEffect วิ่งรัว
+  const { say, fail } = useMemo(() => {
+    const s = (variant, text) => setMsg({ variant, text });
+    return { say: s, fail: (e) => s('danger', e.message) };
+  }, []);
 
-    // Input States (สำหรับกรอกข้อมูลใหม่)
-    // ต้องแยกกันคนละ state ไม่งั้นพิมพ์ช่องหนึ่งแล้วอีกสองช่องขึ้นตามทันที
-    const [newDivName, setNewDivName] = useState('');
-    const [newMachineName, setNewMachineName] = useState('');
-    const [newPartName, setNewPartName] = useState('');
-    const [specData, setSpecData] = useState({ name: '', ucl: '', lcl: '', target: '' });
+  // ── โหลด ──────────────────────────────────────────────────────────────
+  const loadAll = useCallback(async () => {
+    try {
+      const [lk, ms] = await Promise.all([
+        apiCall('/master/lookups?all=1'),
+        apiCall('/master/models?all=1'),
+      ]);
+      setLookups(lk);
+      setModels(normalizeRows(ms));
+    } catch (e) { fail(e); }
+  }, [fail]);
 
-    // ✅ EDIT MODE STATES
-    const [editingId, setEditingId] = useState(null); // ID ที่กำลังแก้
-    const [editLevel, setEditLevel] = useState('');   // ระดับที่กำลังแก้ (ตอนนี้รองรับแค่ spec)
+  const loadCheckpoints = useCallback(async (modelId) => {
+    if (!modelId) return setCheckpoints([]);
+    try {
+      const { checkpoints: cps } = await apiCall(`/master/models/${modelId}?all=1`);
+      setCheckpoints(normalizeCheckpoints(cps));
+    } catch (e) { fail(e); }
+  }, [fail]);
 
-    const refreshTree = useCallback(async () => {
-        try {
-            const data = await apiCall('/master/tree');
-            setTree(normalizeTree(data));
-        } catch (e) {
-            console.error('Load master tree failed', e);
-        }
-    }, []);
+  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => on('master_updated', loadAll), [loadAll]);
+  useEffect(() => { loadCheckpoints(selectedModel); }, [selectedModel, loadCheckpoints]);
 
-    useEffect(() => { refreshTree(); }, [refreshTree]);
+  // ── CRUD กลาง ─────────────────────────────────────────────────────────
+  const save = async (table, data, id) => {
+    try {
+      const res = id
+        ? await apiCall('/master/update', { method: 'PUT', body: { table, id, data } })
+        : await apiCall('/master/add', { method: 'POST', body: { table, data } });
 
-    // มีคนแก้ master ที่เครื่องอื่น → โหลดใหม่
-    useEffect(() => {
-        socket.on('master_updated', refreshTree);
-        return () => socket.off('master_updated', refreshTree);
-    }, [refreshTree]);
+      say('success', id ? 'แก้ไขแล้ว' : 'เพิ่มแล้ว');
+      if (res.baselineMayBeStale) {
+        say('warning', 'แก้ sample_size แล้ว — baseline เดิมของจุดนี้ใช้ไม่ได้ ต้องกด Re-baseline ใหม่');
+      }
+      await loadAll();
+      if (table === 'checkpoints') await loadCheckpoints(selectedModel);
+      return true;
+    } catch (e) { fail(e); return false; }
+  };
 
-    // Filter Logic
-    const getDivs = () => [...new Map(tree.map(i => [i.d_id, {id: i.d_id, name: i.d_name}])).values()].filter(i=>i.id);
-    const getMachines = () => [...new Map(tree.filter(i => String(i.d_id) === String(selectedDiv)).map(i => [i.m_id, {id: i.m_id, name: i.m_name}])).values()].filter(i=>i.id);
-    const getParts = () => [...new Map(tree.filter(i => String(i.m_id) === String(selectedMachine)).map(i => [i.p_id, {id: i.p_id, name: i.part_name}])).values()].filter(i=>i.id);
-    const getSpecs = () => tree.filter(i => String(i.p_id) === String(selectedPart) && i.s_id).map(i => ({...i}));
+  const remove = async (table, id, label) => {
+    if (!window.confirm(`ลบ "${label}" ?\n\nถ้ามีใบตรวจอ้างอิงอยู่ ระบบจะไม่ยอมลบ — ให้ปิดใช้งานแทน`)) return;
+    try {
+      await apiCall('/master/delete', { method: 'DELETE', body: { table, id } });
+      say('success', 'ลบแล้ว');
+      await loadAll();
+      if (table === 'checkpoints') await loadCheckpoints(selectedModel);
+    } catch (e) { fail(e); }
+  };
 
-    // ✅ ฟังก์ชัน Save รองรับทั้ง ADD และ UPDATE
-    const handleSave = async (level) => {
-        let body = {};
-        let table = '';
+  const moveCheckpoint = async (id, direction) => {
+    try {
+      await apiCall(`/master/checkpoints/${id}/move`, { method: 'PUT', body: { direction } });
+      await loadCheckpoints(selectedModel);
+    } catch (e) { fail(e); }
+  };
 
-        // เช็คว่ากำลัง Update หรือ Add ใหม่
-        const isUpdate = (editingId !== null && editLevel === level);
+  // ── baseline ──────────────────────────────────────────────────────────
+  const previewBaseline = async (cp) => {
+    try {
+      setBaselineInfo({ checkpoint: cp, ...(await apiCall(`/charts/${cp.id}/baseline/preview`)) });
+    } catch (e) { fail(e); }
+  };
 
-        // Map Data ตาม Level — key ต้องตรงกับชื่อคอลัมน์ใน DB (backend whitelist ไว้)
-        if (level === 'division') {
-            table = 'divisions';
-            if(!newDivName) return alert("Please enter name");
-            body = { name: newDivName };
-        } else if (level === 'machine') {
-            table = 'machines';
-            if(!selectedDiv) return alert("Select Division first");
-            if(!newMachineName) return alert("Please enter name");
-            body = { division_id: selectedDiv, name: newMachineName };
-        } else if (level === 'part') {
-            table = 'parts';
-            if(!selectedMachine) return alert("Select Machine first");
-            if(!newPartName) return alert("Please enter name");
-            body = { machine_id: selectedMachine, part_name: newPartName, part_no: 'N/A' };
-        } else if (level === 'spec') {
-            table = 'specs';
-            if(!selectedPart) return alert("Select Part first");
-            if(!specData.name) return alert("Please enter spec name");
-            body = {
-                part_id: selectedPart,
-                spec_name: specData.name,
-                ucl: numOrNull(specData.ucl),
-                lcl: numOrNull(specData.lcl),
-                target: numOrNull(specData.target)
-            };
-        }
+  const confirmBaseline = async () => {
+    try {
+      await apiCall(`/charts/${baselineInfo.checkpoint.id}/baseline`, { method: 'POST', body: {} });
+      setBaselineInfo(null);
+      say('success', 'ล็อก control limit แล้ว');
+      await loadCheckpoints(selectedModel);
+    } catch (e) { fail(e); }
+  };
 
-        try {
-            if (isUpdate) {
-                // กรณี Update
-                await apiCall('/master/update', {
-                    method: 'PUT',
-                    body: { table, id: editingId, data: body }
-                });
-                setMsg(`Updated ${level} successfully!`);
-            } else {
-                // กรณี Add New
-                await apiCall('/master/add', {
-                    method: 'POST',
-                    body: { table, data: body }
-                });
-                setMsg(`Added ${level} successfully!`);
-            }
+  const clearBaseline = async (cp) => {
+    if (!window.confirm(`ล้าง baseline ของ "${cp.name}" ?\n\nกราฟจะกลับไปคำนวณลิมิตสด (provisional)`)) return;
+    try {
+      await apiCall(`/charts/${cp.id}/baseline`, { method: 'DELETE' });
+      say('success', 'ล้าง baseline แล้ว');
+      await loadCheckpoints(selectedModel);
+    } catch (e) { fail(e); }
+  };
 
-            // Reset Form หลังบันทึกเสร็จ
-            handleCancel();
-            refreshTree();
-        } catch (e) { setMsg('Error: ' + e.message); }
-    };
+  return (
+    <Container fluid className="mt-3 pb-5">
+      <h4 className="mb-3">⚙️ ตั้งค่า Master</h4>
+      {msg && <Alert variant={msg.variant} dismissible onClose={() => setMsg(null)}>{msg.text}</Alert>}
 
-    // ✅ ฟังก์ชัน Delete
-    const handleDelete = async (table, id) => {
-        if(!window.confirm("Are you sure? This will delete all related data!")) return;
-        try {
-            await apiCall('/master/delete', {
-                method: 'DELETE',
-                body: { table, id }
-            });
-            setMsg('Deleted successfully');
-            refreshTree();
-        } catch (e) { setMsg('Error: ' + e.message); }
-    };
+      <Nav variant="tabs" activeKey={tab} onSelect={setTab} className="mb-3">
+        <Nav.Item><Nav.Link eventKey="models">รุ่น &amp; จุดตรวจ</Nav.Link></Nav.Item>
+        <Nav.Item><Nav.Link eventKey="divisions">Division</Nav.Link></Nav.Item>
+        <Nav.Item><Nav.Link eventKey="machines">เครื่อง</Nav.Link></Nav.Item>
+        <Nav.Item><Nav.Link eventKey="inspectors">ผู้ตรวจ</Nav.Link></Nav.Item>
+      </Nav>
 
-    // ✅ เริ่มโหมดแก้ไข Spec
-    const startEditSpec = (s) => {
-        setEditLevel('spec');
-        setEditingId(s.s_id);
-        // ค่าตัวเลขเป็น null ได้ ต้อง ?? '' ไม่งั้น input กลายเป็น uncontrolled
-        setSpecData({
-            name: s.spec_name ?? '',
-            ucl: s.ucl ?? '',
-            lcl: s.lcl ?? '',
-            target: s.target ?? ''
-        });
-    };
+      {tab === 'models' && (
+        <ModelsTab
+          models={models} divisions={lookups.divisions}
+          selectedModel={selectedModel} setSelectedModel={setSelectedModel}
+          checkpoints={checkpoints}
+          onSave={save} onRemove={remove} onMove={moveCheckpoint}
+          onPreviewBaseline={previewBaseline} onClearBaseline={clearBaseline}
+        />
+      )}
+      {tab === 'divisions' && (
+        <SimpleTab
+          title="Division" table="divisions" rows={lookups.divisions}
+          columns={[{ key: 'name', label: 'ชื่อ', required: true }]}
+          onSave={save} onRemove={remove} labelOf={(r) => r.name}
+        />
+      )}
+      {tab === 'machines' && (
+        <SimpleTab
+          title="เครื่อง" table="machines" rows={lookups.machines}
+          columns={[
+            { key: 'code', label: 'รหัส', required: true },
+            { key: 'name', label: 'ชื่อ', required: true },
+            { key: 'division_id', label: 'Division', type: 'select', options: lookups.divisions, required: true },
+            { key: 'is_active', label: 'ใช้งาน', type: 'check' },
+          ]}
+          onSave={save} onRemove={remove} labelOf={(r) => `${r.code} — ${r.name}`}
+        />
+      )}
+      {tab === 'inspectors' && (
+        <SimpleTab
+          title="ผู้ตรวจ" table="inspectors" rows={lookups.inspectors}
+          columns={[
+            { key: 'emp_code', label: 'รหัสพนักงาน', required: true },
+            { key: 'name', label: 'ชื่อ', required: true },
+            { key: 'division_id', label: 'Division', type: 'select', options: lookups.divisions },
+            { key: 'is_active', label: 'ใช้งาน', type: 'check' },
+          ]}
+          onSave={save} onRemove={remove} labelOf={(r) => r.name}
+        />
+      )}
 
-    // ✅ ยกเลิกโหมดแก้ไข ล้างค่ากลับเป็นค่าว่าง
-    const handleCancel = () => {
-        setEditingId(null);
-        setEditLevel('');
-        setNewDivName('');
-        setNewMachineName('');
-        setNewPartName('');
-        setSpecData({ name: '', ucl: '', lcl: '', target: '' });
-    };
-
-    return (
-        <Container className="mt-4 pb-5">
-            <h2>⚙️ Master Configuration</h2>
-            {msg && <Alert variant="success" onClose={()=>setMsg('')} dismissible>{msg}</Alert>}
-
-            <Row>
-                <Col md={4}>
-                    {/* 1. DIVISION */}
-                    <Card className="p-3 mb-3 bg-light">
-                        <h5>1. Division</h5>
-                        <Form.Control
-                            placeholder="New Division Name"
-                            value={newDivName}
-                            onChange={e=>setNewDivName(e.target.value)}
-                        />
-                        <Button className="mt-2 w-100" onClick={() => handleSave('division')}>Add Division</Button>
-
-                        <hr/>
-                        <Form.Label className="fw-bold">Select Division:</Form.Label>
-                        <Form.Select value={selectedDiv} onChange={e => { setSelectedDiv(e.target.value); setSelectedMachine(''); setSelectedPart(''); }}>
-                            <option value="">-- Select Division --</option>
-                            {getDivs().map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                        </Form.Select>
-                    </Card>
-
-                    {/* 2. MACHINE */}
-                    <Card className="p-3 mb-3" style={{opacity: selectedDiv ? 1 : 0.6}}>
-                        <h5>2. Machine</h5>
-                        <Form.Control
-                            placeholder="New Machine Name"
-                            value={newMachineName}
-                            onChange={e=>setNewMachineName(e.target.value)}
-                            disabled={!selectedDiv}
-                        />
-                        <Button className="mt-2 w-100" variant="info" onClick={() => handleSave('machine')} disabled={!selectedDiv}>Add Machine</Button>
-
-                        <hr/>
-                        <Form.Label className="fw-bold">Select Machine:</Form.Label>
-                        <Form.Select value={selectedMachine} disabled={!selectedDiv} onChange={e => { setSelectedMachine(e.target.value); setSelectedPart(''); }}>
-                            <option value="">-- Select Machine --</option>
-                            {getMachines().map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                        </Form.Select>
-                    </Card>
-
-                    {/* 3. PART */}
-                    <Card className="p-3 mb-3" style={{opacity: selectedMachine ? 1 : 0.6}}>
-                        <h5>3. Part</h5>
-                        <Form.Control
-                            placeholder="New Part Name"
-                            value={newPartName}
-                            onChange={e=>setNewPartName(e.target.value)}
-                            disabled={!selectedMachine}
-                        />
-                        <Button className="mt-2 w-100" variant="warning" onClick={() => handleSave('part')} disabled={!selectedMachine}>Add Part</Button>
-
-                        <hr/>
-                        <Form.Label className="fw-bold">Select Part:</Form.Label>
-                        <Form.Select value={selectedPart} disabled={!selectedMachine} onChange={e => setSelectedPart(e.target.value)}>
-                            <option value="">-- Select Part --</option>
-                            {getParts().map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </Form.Select>
-                    </Card>
-                </Col>
-
-                {/* 4. SPEC TABLE & FORM */}
-                <Col md={8}>
-                    <Card className={`p-3 border-${editingId ? 'warning' : 'secondary'} shadow-sm`} style={{opacity: selectedPart ? 1 : 0.6}}>
-                        <div className="d-flex justify-content-between align-items-center mb-3">
-                            <h4 className={editingId ? "text-warning" : "text-dark"}>
-                                {editingId ? '✏️ Updating Spec' : '4. Add / Manage Specs'}
-                            </h4>
-                            {editingId && <Button variant="secondary" size="sm" onClick={handleCancel}>Cancel Edit</Button>}
-                        </div>
-
-                        {/* Form สำหรับ Add/Edit Spec */}
-                        <Row className="g-2 mb-3">
-                            <Col md={3}><Form.Control placeholder="Spec Name" value={specData.name} onChange={e=>setSpecData({...specData, name:e.target.value})} /></Col>
-                            <Col md={2}><Form.Control placeholder="Target" type="number" value={specData.target} onChange={e=>setSpecData({...specData, target:e.target.value})} /></Col>
-                            <Col md={2}><Form.Control placeholder="USL" type="number" value={specData.ucl} onChange={e=>setSpecData({...specData, ucl:e.target.value})} /></Col>
-                            <Col md={2}><Form.Control placeholder="LSL" type="number" value={specData.lcl} onChange={e=>setSpecData({...specData, lcl:e.target.value})} /></Col>
-                            <Col md={3}>
-                                <Button
-                                    className="w-100"
-                                    variant={editingId ? "warning" : "success"}
-                                    onClick={() => handleSave('spec')}
-                                    disabled={!selectedPart}
-                                >
-                                    {editingId ? "Update Spec" : "Add Spec"}
-                                </Button>
-                            </Col>
-                        </Row>
-
-                        {/* ตารางแสดงรายการ Spec */}
-                        <Table striped bordered hover responsive>
-                            <thead className="table-dark">
-                                <tr>
-                                    <th>Spec Name</th>
-                                    <th>Target</th>
-                                    <th>Range (LSL-USL)</th>
-                                    <th style={{width: '140px'}}>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {getSpecs().length === 0 ? <tr><td colSpan="4" className="text-center">No Specs found for this part</td></tr> :
-                                    getSpecs().map(s => (
-                                        <tr key={s.s_id} className={editingId === s.s_id ? "table-warning" : ""}>
-                                            <td>{s.spec_name}</td>
-                                            <td>{s.target ?? '-'}</td>
-                                            <td>{s.lcl ?? '-'} - {s.ucl ?? '-'}</td>
-                                            <td>
-                                                <Button
-                                                    variant="primary" size="sm" className="me-2"
-                                                    onClick={() => startEditSpec(s)}
-                                                >
-                                                    Edit
-                                                </Button>
-                                                <Button
-                                                    variant="danger" size="sm"
-                                                    onClick={() => handleDelete('specs', s.s_id)}
-                                                >
-                                                    Del
-                                                </Button>
-                                            </td>
-                                        </tr>
-                                    ))
-                                }
-                            </tbody>
-                        </Table>
-                    </Card>
-                </Col>
-            </Row>
-        </Container>
-    );
+      <BaselineModal info={baselineInfo} onClose={() => setBaselineInfo(null)} onConfirm={confirmBaseline} />
+    </Container>
+  );
 };
+
+// ── แท็บ master ธรรมดา (division / เครื่อง / ผู้ตรวจ) ───────────────────────
+//
+// ตารางเดียวใช้ได้ทั้งสามชั้น เพราะ backend เป็น generic CRUD อยู่แล้ว
+// ⚠️ key ของ columns ต้องตรงชื่อคอลัมน์ใน DB เป๊ะ — ไม่อยู่ใน ALLOWED_COLUMNS จะถูกตอบ 400
+const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, labelOf }) => {
+  const blank = () => Object.fromEntries(columns.map((c) => [c.key, c.type === 'check' ? true : '']));
+  const [form, setForm] = useState(blank);
+  const [editingId, setEditingId] = useState(null);
+
+  const reset = () => { setForm(blank()); setEditingId(null); };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    for (const c of columns) {
+      if (c.required && form[c.key] === '') return window.alert(`กรอก "${c.label}" ก่อน`);
+    }
+    const data = Object.fromEntries(columns.map((c) => [
+      c.key,
+      c.type === 'check' ? (form[c.key] ? 1 : 0) : c.type === 'select' ? (form[c.key] || null) : form[c.key],
+    ]));
+    if (await onSave(table, data, editingId)) reset();
+  };
+
+  const startEdit = (row) => {
+    setEditingId(row.id);
+    // ⚠️ ค่า null ต้องกลายเป็น '' ไม่งั้น <Form.Control> เปลี่ยนเป็น uncontrolled กลางคัน
+    setForm(Object.fromEntries(columns.map((c) => [
+      c.key, c.type === 'check' ? Boolean(Number(row[c.key])) : row[c.key] ?? '',
+    ])));
+  };
+
+  return (
+    <Card>
+      <Card.Body>
+        <Form onSubmit={submit}>
+          <Row className="g-2 align-items-end mb-3">
+            {columns.map((c) => (
+              <Col md={c.type === 'check' ? 1 : 3} key={c.key}>
+                <Form.Label className="small mb-1">{c.label}</Form.Label>
+                {c.type === 'check' ? (
+                  <Form.Check
+                    checked={Boolean(form[c.key])}
+                    onChange={(e) => setForm((f) => ({ ...f, [c.key]: e.target.checked }))}
+                  />
+                ) : c.type === 'select' ? (
+                  <Form.Select
+                    value={form[c.key] ?? ''}
+                    onChange={(e) => setForm((f) => ({ ...f, [c.key]: e.target.value }))}
+                  >
+                    <option value="">--</option>
+                    {(c.options ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </Form.Select>
+                ) : (
+                  <Form.Control
+                    value={form[c.key] ?? ''}
+                    onChange={(e) => setForm((f) => ({ ...f, [c.key]: e.target.value }))}
+                  />
+                )}
+              </Col>
+            ))}
+            <Col md="auto">
+              <Button type="submit" variant={editingId ? 'warning' : 'success'}>
+                {editingId ? 'บันทึกการแก้ไข' : `เพิ่ม${title}`}
+              </Button>
+              {editingId && <Button variant="link" onClick={reset}>ยกเลิก</Button>}
+            </Col>
+          </Row>
+        </Form>
+
+        <Table striped bordered hover responsive size="sm" className="mb-0">
+          <thead className="table-dark">
+            <tr>{columns.map((c) => <th key={c.key}>{c.label}</th>)}<th style={{ width: 130 }}>จัดการ</th></tr>
+          </thead>
+          <tbody>
+            {rows.length === 0
+              ? <tr><td colSpan={columns.length + 1} className="text-center text-muted">ยังไม่มีข้อมูล</td></tr>
+              : rows.map((r) => (
+                <tr key={r.id} className={Number(r.is_active) === 0 ? 'text-muted' : ''}>
+                  {columns.map((c) => (
+                    <td key={c.key}>
+                      {c.type === 'check'
+                        ? (Number(r[c.key]) ? '✓' : '—')
+                        : c.type === 'select'
+                          ? (c.options ?? []).find((o) => String(o.id) === String(r[c.key]))?.name ?? '—'
+                          : r[c.key] ?? '—'}
+                    </td>
+                  ))}
+                  <td>
+                    <Button size="sm" variant="primary" className="me-1" onClick={() => startEdit(r)}>แก้</Button>
+                    <Button size="sm" variant="danger" onClick={() => onRemove(table, r.id, labelOf(r))}>ลบ</Button>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </Table>
+      </Card.Body>
+    </Card>
+  );
+};
+
+// ── แท็บรุ่น + จุดตรวจ ─────────────────────────────────────────────────────
+const ModelsTab = ({
+  models, divisions, selectedModel, setSelectedModel, checkpoints,
+  onSave, onRemove, onMove, onPreviewBaseline, onClearBaseline,
+}) => {
+  const [modelForm, setModelForm] = useState({ division_id: '', model_code: '', model_name: '', drawing_no: '', drawing_rev: '' });
+  const [editingModel, setEditingModel] = useState(null);
+  const [cpForm, setCpForm] = useState(blankCheckpoint);
+  const [editingCp, setEditingCp] = useState(null);
+
+  const resetModel = () => { setModelForm({ division_id: '', model_code: '', model_name: '', drawing_no: '', drawing_rev: '' }); setEditingModel(null); };
+  const resetCp = () => { setCpForm(blankCheckpoint()); setEditingCp(null); };
+
+  const submitModel = async (e) => {
+    e.preventDefault();
+    if (!modelForm.division_id || !modelForm.model_code || !modelForm.model_name) {
+      return window.alert('กรอก Division / รหัสรุ่น / ชื่อรุ่น ให้ครบ');
+    }
+    if (await onSave('models', modelForm, editingModel)) resetModel();
+  };
+
+  const submitCp = async (e) => {
+    e.preventDefault();
+    if (!selectedModel) return window.alert('เลือกรุ่นก่อน');
+    if (!cpForm.name) return window.alert('กรอกชื่อจุดตรวจ');
+
+    const isAttr = cpForm.char_type === 'attribute';
+    const data = {
+      model_id: selectedModel,
+      name: cpForm.name,
+      char_type: cpForm.char_type,
+      unit: cpForm.unit || null,
+      gauge: cpForm.gauge || null,
+      // จุด attribute ไม่มีค่าตัวเลข ส่ง null ทั้งหมดและบังคับ n = 1
+      usl: isAttr ? null : numOrNull(cpForm.usl),
+      lsl: isAttr ? null : numOrNull(cpForm.lsl),
+      target: isAttr ? null : numOrNull(cpForm.target),
+      sample_size: isAttr ? 1 : Number(cpForm.sample_size) || 1,
+      is_critical: cpForm.is_critical ? 1 : 0,
+      is_active: cpForm.is_active ? 1 : 0,
+    };
+    // seq_no ต่อท้ายอัตโนมัติตอนเพิ่มใหม่ — ลำดับปรับด้วยปุ่มลูกศรทีหลัง
+    if (!editingCp) data.seq_no = (checkpoints.reduce((m, c) => Math.max(m, c.seq_no), 0) || 0) + 1;
+
+    if (await onSave('checkpoints', data, editingCp)) resetCp();
+  };
+
+  const startEditCp = (cp) => {
+    setEditingCp(cp.id);
+    // ⚠️ toNum คืน null ได้ ต้อง ?? '' ก่อนใส่ input
+    setCpForm({
+      name: cp.name ?? '', char_type: cp.char_type, unit: cp.unit ?? '', gauge: cp.gauge ?? '',
+      usl: cp.usl ?? '', lsl: cp.lsl ?? '', target: cp.target ?? '',
+      sample_size: cp.sample_size ?? 1, is_critical: cp.is_critical, is_active: cp.is_active,
+    });
+  };
+
+  const cpField = (key) => ({
+    value: cpForm[key] ?? '',
+    onChange: (e) => setCpForm((f) => ({ ...f, [key]: e.target.value })),
+  });
+  const isAttr = cpForm.char_type === 'attribute';
+
+  return (
+    <Row>
+      {/* รุ่น */}
+      <Col lg={4}>
+        <Card className="mb-3">
+          <Card.Header>รุ่น (Model)</Card.Header>
+          <Card.Body>
+            <Form onSubmit={submitModel}>
+              <Form.Select
+                className="mb-2" value={modelForm.division_id}
+                onChange={(e) => setModelForm((f) => ({ ...f, division_id: e.target.value }))}
+              >
+                <option value="">-- Division --</option>
+                {divisions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </Form.Select>
+              <Form.Control className="mb-2" placeholder="รหัสรุ่น เช่น MDL-1001"
+                value={modelForm.model_code} onChange={(e) => setModelForm((f) => ({ ...f, model_code: e.target.value }))} />
+              <Form.Control className="mb-2" placeholder="ชื่อรุ่น"
+                value={modelForm.model_name} onChange={(e) => setModelForm((f) => ({ ...f, model_name: e.target.value }))} />
+              <Row className="g-2 mb-2">
+                <Col><Form.Control placeholder="เลขแบบ"
+                  value={modelForm.drawing_no} onChange={(e) => setModelForm((f) => ({ ...f, drawing_no: e.target.value }))} /></Col>
+                <Col xs={4}><Form.Control placeholder="Rev"
+                  value={modelForm.drawing_rev} onChange={(e) => setModelForm((f) => ({ ...f, drawing_rev: e.target.value }))} /></Col>
+              </Row>
+              <Button type="submit" className="w-100" variant={editingModel ? 'warning' : 'success'}>
+                {editingModel ? 'บันทึกการแก้ไข' : 'เพิ่มรุ่น'}
+              </Button>
+              {editingModel && <Button variant="link" className="w-100" onClick={resetModel}>ยกเลิก</Button>}
+            </Form>
+
+            <hr />
+            <Table size="sm" hover className="mb-0">
+              <tbody>
+                {models.map((m) => (
+                  <tr key={m.id} className={selectedModel === String(m.id) ? 'table-primary' : ''}>
+                    <td role="button" onClick={() => setSelectedModel(String(m.id))}>
+                      <div className="fw-bold">{m.model_code}</div>
+                      <div className="small text-muted">
+                        {m.model_name} · {toNum(m.checkpoint_count) || 0} จุด
+                        {!m.is_active && <Badge bg="secondary" className="ms-1">ปิดใช้งาน</Badge>}
+                      </div>
+                    </td>
+                    <td style={{ width: 96 }} className="text-end align-middle">
+                      <Button size="sm" variant="outline-primary" className="me-1"
+                        onClick={() => { setEditingModel(m.id); setModelForm({
+                          division_id: m.division_id ?? '', model_code: m.model_code ?? '',
+                          model_name: m.model_name ?? '', drawing_no: m.drawing_no ?? '', drawing_rev: m.drawing_rev ?? '',
+                        }); }}>แก้</Button>
+                      <Button size="sm" variant="outline-danger"
+                        onClick={() => onRemove('models', m.id, m.model_code)}>ลบ</Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </Card.Body>
+        </Card>
+      </Col>
+
+      {/* จุดตรวจ */}
+      <Col lg={8}>
+        <Card style={{ opacity: selectedModel ? 1 : 0.6 }}>
+          <Card.Header>
+            จุดตรวจ {selectedModel && `— ${models.find((m) => String(m.id) === selectedModel)?.model_code ?? ''}`}
+          </Card.Header>
+          <Card.Body>
+            <Form onSubmit={submitCp}>
+              <Row className="g-2 mb-2">
+                <Col md={4}><Form.Control placeholder="ชื่อจุดตรวจ" {...cpField('name')} disabled={!selectedModel} /></Col>
+                <Col md={3}>
+                  <Form.Select {...cpField('char_type')} disabled={!selectedModel}>
+                    {CHAR_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </Form.Select>
+                </Col>
+                <Col md={2}><Form.Control placeholder="หน่วย" {...cpField('unit')} disabled={!selectedModel || isAttr} /></Col>
+                <Col md={3}><Form.Control placeholder="เครื่องมือวัด" {...cpField('gauge')} disabled={!selectedModel} /></Col>
+              </Row>
+              <Row className="g-2 mb-2">
+                <Col md={2}><Form.Control type="number" step="0.0001" placeholder="LSL" {...cpField('lsl')} disabled={!selectedModel || isAttr} /></Col>
+                <Col md={2}><Form.Control type="number" step="0.0001" placeholder="Target" {...cpField('target')} disabled={!selectedModel || isAttr} /></Col>
+                <Col md={2}><Form.Control type="number" step="0.0001" placeholder="USL" {...cpField('usl')} disabled={!selectedModel || isAttr} /></Col>
+                <Col md={2}>
+                  {/* n = 1 → กราฟ I-MR · n >= 2 → กราฟ X-bar R (ตาราง A2/D3/D4 มีถึง 10) */}
+                  <Form.Control type="number" min="1" max="10" placeholder="ชิ้น/ครั้ง"
+                    {...cpField('sample_size')} disabled={!selectedModel || isAttr} />
+                </Col>
+                <Col md="auto" className="d-flex align-items-center gap-3">
+                  <Form.Check label="จุดวิกฤต" checked={cpForm.is_critical} disabled={!selectedModel}
+                    onChange={(e) => setCpForm((f) => ({ ...f, is_critical: e.target.checked }))} />
+                  <Form.Check label="ใช้งาน" checked={cpForm.is_active} disabled={!selectedModel}
+                    onChange={(e) => setCpForm((f) => ({ ...f, is_active: e.target.checked }))} />
+                </Col>
+                <Col md="auto">
+                  <Button type="submit" variant={editingCp ? 'warning' : 'success'} disabled={!selectedModel}>
+                    {editingCp ? 'บันทึก' : 'เพิ่มจุดตรวจ'}
+                  </Button>
+                  {editingCp && <Button variant="link" onClick={resetCp}>ยกเลิก</Button>}
+                </Col>
+              </Row>
+            </Form>
+
+            <Table striped bordered hover responsive size="sm" className="mb-0">
+              <thead className="table-dark">
+                <tr>
+                  <th style={{ width: 70 }}>ลำดับ</th><th>จุดตรวจ</th><th>ชนิด</th>
+                  <th>LSL ~ USL</th><th>n</th><th>Control limit</th><th style={{ width: 200 }}>จัดการ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {checkpoints.length === 0
+                  ? <tr><td colSpan="7" className="text-center text-muted">ยังไม่มีจุดตรวจ</td></tr>
+                  : checkpoints.map((cp, i) => (
+                    <tr key={cp.id} className={!cp.is_active ? 'text-muted' : ''}>
+                      <td>
+                        {cp.seq_no}
+                        <Button size="sm" variant="link" className="p-0 ms-1" disabled={i === 0}
+                          onClick={() => onMove(cp.id, 'up')}>▲</Button>
+                        <Button size="sm" variant="link" className="p-0" disabled={i === checkpoints.length - 1}
+                          onClick={() => onMove(cp.id, 'down')}>▼</Button>
+                      </td>
+                      <td>{cp.is_critical && '🔴 '}{cp.name}</td>
+                      <td className="small">{cp.char_type === 'attribute' ? 'ตรวจด้วยตา' : 'วัดค่า'}</td>
+                      <td className="small">
+                        {cp.char_type === 'attribute' ? '—' : `${cp.lsl ?? '-'} ~ ${cp.usl ?? '-'}`}
+                      </td>
+                      <td>{cp.char_type === 'attribute' ? '—' : cp.sample_size}</td>
+                      <td className="small">
+                        {cp.char_type === 'attribute' ? '—'
+                          : cp.baseline_locked_at
+                            ? <Badge bg="success">ล็อกแล้ว (n={cp.baseline_n}, {cp.baseline_subgroups} subgroup)</Badge>
+                            : <Badge bg="secondary">provisional</Badge>}
+                      </td>
+                      <td>
+                        <Button size="sm" variant="primary" className="me-1" onClick={() => startEditCp(cp)}>แก้</Button>
+                        {cp.char_type !== 'attribute' && (
+                          cp.baseline_locked_at
+                            ? <Button size="sm" variant="outline-warning" className="me-1"
+                                onClick={() => onClearBaseline(cp)}>ล้าง</Button>
+                            : <Button size="sm" variant="outline-success" className="me-1"
+                                onClick={() => onPreviewBaseline(cp)}>Baseline</Button>
+                        )}
+                        <Button size="sm" variant="danger" onClick={() => onRemove('checkpoints', cp.id, cp.name)}>ลบ</Button>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </Table>
+          </Card.Body>
+        </Card>
+      </Col>
+    </Row>
+  );
+};
+
+// ── ยืนยันก่อน freeze control limit ────────────────────────────────────────
+const BaselineModal = ({ info, onClose, onConfirm }) => (
+  <Modal show={Boolean(info)} onHide={onClose}>
+    <Modal.Header closeButton><Modal.Title>ล็อก Control Limit</Modal.Title></Modal.Header>
+    {info && (
+      <Modal.Body>
+        <p className="mb-2">จุดตรวจ: <strong>{info.checkpoint.name}</strong></p>
+        <Table size="sm" bordered>
+          <tbody>
+            <tr><td>ขนาด subgroup (n)</td><td>{info.n}</td></tr>
+            <tr><td>จำนวน subgroup</td><td>{info.subgroupCount}</td></tr>
+            <tr><td>X̿ (ค่ากลาง)</td><td>{info.xbarbar?.toFixed(4)}</td></tr>
+            <tr><td>R̄</td><td>{info.rbar?.toFixed(4)}</td></tr>
+            <tr>
+              <td>UCL / LCL ที่จะได้</td>
+              <td>{info.limits?.ucl?.toFixed(4)} / {info.limits?.lcl?.toFixed(4)}</td>
+            </tr>
+          </tbody>
+        </Table>
+        {!info.enoughSubgroups && (
+          <Alert variant="warning" className="mb-0 small">
+            มีแค่ {info.subgroupCount} subgroup — มาตรฐานแนะนำอย่างน้อย {info.minSubgroups} subgroup
+            ที่กระบวนการนิ่งแล้ว ล็อกตอนนี้ได้แต่ลิมิตจะยังไม่น่าเชื่อถือ กด Re-baseline ใหม่ได้ทีหลัง
+          </Alert>
+        )}
+      </Modal.Body>
+    )}
+    <Modal.Footer>
+      <Button variant="secondary" onClick={onClose}>ยกเลิก</Button>
+      <Button variant="primary" onClick={onConfirm}>ยืนยันล็อก</Button>
+    </Modal.Footer>
+  </Modal>
+);
 
 export default MasterSetup;

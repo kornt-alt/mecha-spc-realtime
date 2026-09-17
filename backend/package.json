@@ -5,14 +5,17 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "db:apply": "node db/migrate.js schema.sql",
+    "db:seed": "node db/migrate.js seed.sql",
+    "db:drop-legacy": "node db/migrate.js drop-legacy.sql",
+    "test": "node --test"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",
     "exceljs": "^4.4.0",
     "express": "^4.18.2",
-    "multer": "^2.0.2",
     "mysql2": "^3.15.3",
     "socket.io": "^4.8.3"
   },
