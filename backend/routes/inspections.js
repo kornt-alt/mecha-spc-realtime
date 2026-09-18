@@ -20,6 +20,7 @@ const isIntLike = (v) => v !== null && v !== undefined && v !== '' && Number.isI
 // payload:
 // {
 //   model_id, machine_id, inspector_id, mo_no, lot_no?, shift?, remark?,
+//   mo_item_no?, mo_item_name?, mo_draw?, mo_model_group?,   // สิ่งที่ IPBASS ตอบมา
 //   results: [
 //     { checkpoint_id, pieces: [{ piece_no, value }] },   // variable
 //     { checkpoint_id, judgment: 'OK'|'NG', ng_reason? }  // attribute
@@ -28,24 +29,36 @@ const isIntLike = (v) => v !== null && v !== undefined && v !== '' && Number.isI
 router.post('/', wrap(async (req, res) => {
   const b = req.body ?? {};
 
-  for (const [key, label] of [['model_id', 'รุ่น'], ['machine_id', 'เครื่อง'], ['inspector_id', 'ผู้ตรวจ']]) {
+  for (const [key, label] of [['model_id', 'item'], ['machine_id', 'เครื่อง'], ['inspector_id', 'ผู้ตรวจ']]) {
     if (!isIntLike(b[key])) throw new AppError(`ยังไม่ได้เลือก${label}`, 400);
   }
   const moNo = String(b.mo_no ?? '').trim();
   if (!moNo) throw new AppError('ยังไม่ได้กรอก MO No.', 400);
 
   const shift = b.shift === 'M' || b.shift === 'N' ? b.shift : shiftFromDate();
+
+  // ⚠️ mo_* = สิ่งที่ IPBASS MOPLAN ตอบมาสำหรับ MO ใบนี้ เก็บเป็น snapshot เฉย ๆ
+  //    ไม่ validate ไม่เอาไปตัดสินอะไร และ "ไม่มี" เป็นเรื่องปกติ (IPBASS ล่ม/ยังไม่ได้ตั้ง dept)
+  //    การค้นหา MO เป็น advisory ล้วน ห้ามทำให้บันทึกใบตรวจไม่ได้
+  const textOrNull = (v) => {
+    const t = String(v ?? '').trim();
+    return t === '' ? null : t;
+  };
+  const moItemNo     = textOrNull(b.mo_item_no);
+  const moItemName   = textOrNull(b.mo_item_name);
+  const moDraw       = textOrNull(b.mo_draw);
+  const moModelGroup = textOrNull(b.mo_model_group);
   const submitted = Array.isArray(b.results) ? b.results : [];
   if (submitted.length === 0) throw new AppError('ยังไม่ได้กรอกผลตรวจสักจุด', 400);
 
   const checkpoints = await fetchModelCheckpoints(b.model_id);
-  if (checkpoints.length === 0) throw new AppError('รุ่นนี้ยังไม่ได้ตั้งจุดตรวจไว้', 400);
+  if (checkpoints.length === 0) throw new AppError('item นี้ยังไม่ได้ตั้งจุดตรวจไว้', 400);
 
   const byId = new Map(checkpoints.map((c) => [c.id, c]));
   const submittedById = new Map();
   for (const item of submitted) {
     const cp = byId.get(Number(item.checkpoint_id));
-    if (!cp) throw new AppError(`จุดตรวจ id=${item.checkpoint_id} ไม่ได้อยู่ในรุ่นนี้`, 400);
+    if (!cp) throw new AppError(`จุดตรวจ id=${item.checkpoint_id} ไม่ได้อยู่ใน item นี้`, 400);
     if (submittedById.has(cp.id)) throw new AppError(`ส่งจุดตรวจ "${cp.name}" ซ้ำ`, 400);
     submittedById.set(cp.id, item);
   }
@@ -83,12 +96,14 @@ router.post('/', wrap(async (req, res) => {
 
     const [header] = await conn.execute(
       `INSERT INTO inspections
-         (model_id, machine_id, inspector_id, mo_no, lot_no, shift, subgroup_no, remark, overall_result)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (model_id, machine_id, inspector_id, mo_no, lot_no, shift, subgroup_no, remark, overall_result,
+          mo_item_no, mo_item_name, mo_draw, mo_model_group)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         Number(b.model_id), Number(b.machine_id), Number(b.inspector_id),
-        moNo, b.lot_no ? String(b.lot_no).trim() : null, shift, subgroupNo,
-        b.remark ? String(b.remark).trim() : null, overall,
+        moNo, textOrNull(b.lot_no), shift, subgroupNo,
+        textOrNull(b.remark), overall,
+        moItemNo, moItemName, moDraw, moModelGroup,
       ]
     );
     const inspectionId = header.insertId;
@@ -162,7 +177,7 @@ router.get('/', wrap(async (req, res) => {
   if (from && to) { where.push('DATE(i.inspected_at) BETWEEN ? AND ?'); params.push(from, to); }
 
   const [rows] = await query(
-    `SELECT i.*, m.model_code, m.model_name, mc.code AS machine_code, mc.name AS machine_name,
+    `SELECT i.*, m.item_no, m.item_name, mc.code AS machine_code, mc.name AS machine_name,
             ins.name AS inspector_name,
             (SELECT COUNT(*) FROM inspection_results r
               WHERE r.inspection_id = i.id AND r.judgment = 'NG') AS ng_count
@@ -184,7 +199,7 @@ router.get('/:id', wrap(async (req, res) => {
   const id = Number(req.params.id);
 
   const [[inspection]] = await query(
-    `SELECT i.*, m.model_code, m.model_name, mc.name AS machine_name, ins.name AS inspector_name
+    `SELECT i.*, m.item_no, m.item_name, mc.name AS machine_name, ins.name AS inspector_name
        FROM inspections i
        JOIN models m      ON m.id   = i.model_id
        JOIN machines mc   ON mc.id  = i.machine_id

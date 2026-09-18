@@ -3,16 +3,22 @@
 // ต่างจากระบบเดิมตรง: เข้า room ของรุ่นที่ดูอยู่เท่านั้น พอมีใบตรวจใหม่เข้ามา server ส่ง
 // แค่ "จุดไหนเปลี่ยนบ้าง" มาให้ แล้วหน้านี้โหลดใหม่เฉพาะกราฟที่กระทบ
 // (ของเดิม broadcast ประวัติทั้งก้อนของทุก spec ให้ทุกเครื่องทุกครั้งที่มีคนบันทึก)
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Container, Row, Col, Form, Card, Badge, Alert } from 'react-bootstrap';
+//
+// รุ่นที่กำลังดูอยู่ใน URL (?model=12) ลิงก์จากหน้าอื่นจึงพารุ่นมาด้วยได้ และรีเฟรชแล้วไม่หลุด
+//
+// ⚠️ ลำดับการ์ดเรียงตาม seq_no เสมอ ห้ามเรียงใหม่ตามสถานะ — socket ดันของใหม่เข้ามาได้ตลอด
+//    ถ้าเรียงตามสถานะ การ์ดจะสลับที่ใต้เมาส์คนที่กำลังอ่านอยู่ จุดที่ผิดใช้เส้นเหลืองซ้ายชี้แทน
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Container, Row, Col, Form, Card, Alert, Spinner } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
 import { on, joinModel, leaveModel } from '../utils/socket';
 import { normalizeRows, normalizeChart } from '../utils/normalize';
+import { useModelParam } from '../utils/useModelParam';
 import ControlChart from './ControlChart';
 
 const Dashboard = () => {
   const [models, setModels] = useState([]);
-  const [modelId, setModelId] = useState('');
+  const [modelId, setModelId] = useModelParam();
   const [charts, setCharts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -23,11 +29,19 @@ const Dashboard = () => {
   const modelIdRef = useRef('');
   modelIdRef.current = modelId;
 
+  // ⚠️ ดึงด้วย ?all=1 โดยตั้งใจ — ลิงก์จากหน้ารายงานพา ?model= ของรุ่นที่ถูกปิดใช้งานมาได้
+  //    ถ้าดึงเฉพาะรุ่นที่ active ช่องเลือกจะว่างทั้งที่กราฟโหลดขึ้น อธิบายตัวเองไม่ได้เลย
   useEffect(() => {
-    apiCall('/master/models')
+    apiCall('/master/models?all=1')
       .then((ms) => setModels(normalizeRows(ms)))
       .catch((e) => setError(e.message));
   }, []);
+
+  // ในลิสต์แสดงเฉพาะรุ่นที่ยังใช้งาน บวกรุ่นที่กำลังดูอยู่ (เผื่อมันถูกปิดไปแล้ว)
+  const visibleModels = useMemo(
+    () => models.filter((m) => m.is_active || String(m.id) === String(modelId)),
+    [models, modelId]
+  );
 
   // โหลดกราฟทุกจุดของรุ่น — ใช้ /reports/model/:id เพราะดึงค่าวัดทีเดียวแล้วแยกให้
   const loadAll = useCallback(async (id) => {
@@ -88,25 +102,29 @@ const Dashboard = () => {
   const outOfControl = charts.filter((c) => (c.violations?.length ?? 0) > 0);
 
   return (
-    <Container fluid className="mt-3 pb-5">
+    <Container fluid className="page">
+      <div className="page-head">
+        <h1>Dashboard</h1>
+        {modelId && !loading && (
+          <div className="page-head__meta num">
+            {charts.length} จุดตรวจสอบ
+            {outOfControl.length > 0
+              ? ` · ต้องดูก่อน ${outOfControl.length} จุด`
+              : ' · ทุกจุด in control'}
+          </div>
+        )}
+      </div>
+
       <Row className="align-items-center mb-3 g-2">
-        <Col md={4}>
+        <Col md={5} lg={4}>
           <Form.Select value={modelId} onChange={(e) => setModelId(e.target.value)}>
-            <option value="">-- เลือกรุ่นที่จะแสดง --</option>
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>{m.model_code} — {m.model_name}</option>
+            <option value="">— เลือกรุ่นที่จะแสดง —</option>
+            {visibleModels.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.item_no} — {m.item_name} ({m.division_name}){m.is_active ? '' : ' (ปิดใช้งาน)'}
+              </option>
             ))}
           </Form.Select>
-        </Col>
-        <Col>
-          {modelId && !loading && (
-            <>
-              <Badge bg="secondary" className="me-2">{charts.length} จุดตรวจ</Badge>
-              {outOfControl.length > 0
-                ? <Badge bg="danger">{outOfControl.length} จุด out of control</Badge>
-                : <Badge bg="success">ทุกจุด in control</Badge>}
-            </>
-          )}
         </Col>
       </Row>
 
@@ -118,18 +136,27 @@ const Dashboard = () => {
           <Card.Header className="py-1 small">ใบตรวจล่าสุดที่เข้ามา</Card.Header>
           <Card.Body className="py-2">
             {alerts.map((a) => (
-              <div key={a.id} className="small">
-                <Badge bg={a.result === 'NG' ? 'danger' : 'success'} className="me-2">{a.result}</Badge>
-                {a.at.toLocaleTimeString('th-TH')} · MO {a.moNo} · subgroup #{a.subgroupNo}
-                {a.ngCount > 0 && <span className="text-danger ms-2">({a.ngCount} จุดไม่ผ่าน)</span>}
+              <div key={a.id} className="small d-flex align-items-center gap-2">
+                <span className={`verdict ${a.result === 'NG' ? 'verdict--ng' : 'verdict--ok'}`}>
+                  {a.result}
+                </span>
+                <span className="num">{a.at.toLocaleTimeString('th-TH')}</span>
+                <span>MO {a.moNo}</span>
+                <span className="num">subgroup #{a.subgroupNo}</span>
+                {a.ngCount > 0 && <span className="text-danger">({a.ngCount} จุดไม่ผ่าน)</span>}
               </div>
             ))}
           </Card.Body>
         </Card>
       )}
 
-      {!modelId && <Alert variant="light" className="text-center text-muted">เลือกรุ่นเพื่อดูกราฟ</Alert>}
-      {modelId && loading && <div className="text-center text-muted py-4">กำลังโหลด…</div>}
+      {!modelId && <div className="empty">เลือกรุ่นเพื่อดูกราฟ</div>}
+      {modelId && loading && (
+        <div className="empty"><Spinner animation="border" size="sm" className="me-2" />กำลังโหลดกราฟ</div>
+      )}
+      {modelId && !loading && charts.length === 0 && !error && (
+        <div className="empty">model นี้ยังไม่มีจุดตรวจสอบ หรือยังไม่มีใบตรวจสอบในระบบ</div>
+      )}
 
       <Row>
         {charts.map((c) => (

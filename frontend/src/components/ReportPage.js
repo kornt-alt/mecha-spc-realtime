@@ -1,13 +1,18 @@
 // frontend/src/components/ReportPage.js — รายงานรายรุ่น
 //
-// ต่างจาก Dashboard ตรงที่หน้านี้กรองย้อนหลังได้ (ช่วงวัน / MO / กะ / ผู้ตรวจ / เครื่อง)
+// ต่างจาก Dashboard ตรงที่หน้านี้กรองย้อนหลังได้ (ช่วงวัน / MO / shift / ผู้ตรวจ / เครื่อง)
 // และไม่รับ realtime — ตั้งใจ เพราะข้อมูลที่กำลังอ่านอยู่ไม่ควรขยับใต้มือระหว่างตรวจสอบ
 import React, { useCallback, useEffect, useState } from 'react';
-import { Container, Row, Col, Card, Form, Button, Table, Badge, Alert, Spinner } from 'react-bootstrap';
+import { Container, Row, Col, Card, Form, Button, Alert, Spinner } from 'react-bootstrap';
 import { apiCall, apiDownload } from '../utils/api';
 import { normalizeRows, normalizeChart } from '../utils/normalize';
 import { SHIFTS } from '../utils/config';
+import { useModelParam } from '../utils/useModelParam';
 import ControlChart from './ControlChart';
+import SpecValue from './SpecValue';
+
+// เกณฑ์ที่ฟอร์มของลูกค้าเขียนไว้ตรง ๆ: "CTF, min Cpk > 1.33"
+const CPK_TARGET = 1.33;
 
 const emptyFilter = () => ({ from: '', to: '', mo_no: '', shift: '', inspector_id: '', machine_id: '' });
 
@@ -29,7 +34,7 @@ const pct = (v) => (typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '—');
 const ReportPage = () => {
   const [models, setModels] = useState([]);
   const [lookups, setLookups] = useState({ machines: [], inspectors: [] });
-  const [modelId, setModelId] = useState('');
+  const [modelId, setModelId] = useModelParam(false);
   const [filter, setFilter] = useState(emptyFilter);
   const [applied, setApplied] = useState(emptyFilter);
   const [report, setReport] = useState(null);
@@ -80,17 +85,24 @@ const ReportPage = () => {
   const s = report?.summary;
 
   return (
-    <Container fluid className="mt-3 pb-5">
-      <h4 className="mb-3">📊 รายงานผลตรวจรายรุ่น</h4>
+    <Container fluid className="page">
+      <div className="page-head">
+        <h1>รายงานผลตรวจราย model</h1>
+        {report && !loading && (
+          <div className="page-head__meta num">{report.charts.length} จุดตรวจ</div>
+        )}
+      </div>
 
-      <Card className="mb-3 bg-light">
+      <Card className="mb-3">
         <Card.Body className="pb-2">
           <Row className="g-2 align-items-end">
             <Col md={3}>
-              <Form.Label className="small mb-1">รุ่น</Form.Label>
+              <Form.Label className="small mb-1">model</Form.Label>
               <Form.Select value={modelId} onChange={(e) => setModelId(e.target.value)}>
-                <option value="">-- เลือกรุ่น --</option>
-                {models.map((m) => <option key={m.id} value={m.id}>{m.model_code} — {m.model_name}</option>)}
+                <option value="">— เลือก model —</option>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.item_no} — {m.item_name} ({m.division_name})</option>
+                ))}
               </Form.Select>
             </Col>
             <Col md={2}>
@@ -106,7 +118,7 @@ const ReportPage = () => {
               <Form.Control {...field('mo_no')} placeholder="ทั้งหมด" />
             </Col>
             <Col md={1}>
-              <Form.Label className="small mb-1">กะ</Form.Label>
+              <Form.Label className="small mb-1">shift</Form.Label>
               <Form.Select {...field('shift')}>
                 <option value="">ทั้งหมด</option>
                 {SHIFTS.map((x) => <option key={x.code} value={x.code}>{x.code}</option>)}
@@ -135,13 +147,17 @@ const ReportPage = () => {
               </Button>
             </Col>
             <Col md="auto">
-              <Button variant="success" onClick={handleExport} disabled={!modelId || !report || exporting}>
-                {exporting ? <><Spinner size="sm" animation="border" className="me-1" />กำลังสร้าง</> : '⬇ Excel'}
+              {/* ไม่ใช้ variant="success" — เขียวสงวนไว้ให้ป้ายผลตัดสินอย่างเดียวทั้งระบบ
+                  ปุ่มนี้เป็นการกระทำ ไม่ใช่คำตัดสิน */}
+              <Button variant="outline-primary" onClick={handleExport} disabled={!modelId || !report || exporting}>
+                {exporting ? <><Spinner size="sm" animation="border" className="me-1" />กำลังสร้าง</> : 'ดาวน์โหลด Excel'}
               </Button>
             </Col>
             {dateIncomplete && (
               <Col>
-                <div className="text-warning small">
+                {/* ⚠️ ห้ามใช้ .text-warning ตรงนี้ — เหลืองของ bootstrap บนพื้นอ่อนได้ contrast 1.6:1
+                    ใช้ --amber-text ที่คำนวณมาให้ผ่าน 4.6:1 แทน */}
+                <div className="small" style={{ color: 'var(--amber-text)' }}>
                   กรอกวันที่ให้ครบทั้งสองช่อง ไม่งั้นระบบจะไม่กรองวันที่ให้
                 </div>
               </Col>
@@ -151,22 +167,37 @@ const ReportPage = () => {
       </Card>
 
       {error && <Alert variant="danger">{error}</Alert>}
-      {!modelId && <Alert variant="light" className="text-center text-muted">เลือกรุ่นเพื่อดูรายงาน</Alert>}
-      {loading && <div className="text-center text-muted py-4">กำลังโหลด…</div>}
+      {!modelId && <div className="empty">เลือกรุ่นเพื่อดูรายงาน</div>}
+      {loading && (
+        <div className="empty"><Spinner animation="border" size="sm" className="me-2" />กำลังโหลดรายงาน</div>
+      )}
 
       {report && !loading && (
         <>
+          {/* ตัวเลขสรุป — เงียบเมื่อปกติ มีสีเมื่อผิด
+              แดง = หลุดสเปก (ของเสีย) · เหลือง = หลุดคอนโทรล (process เปลี่ยน ของยังไม่เสีย) */}
           <Row className="g-2 mb-3">
             {[
-              { label: 'ใบตรวจทั้งหมด', value: s.totalInspections, variant: 'primary' },
-              { label: 'ใบที่มี NG', value: s.ngInspections, variant: s.ngInspections > 0 ? 'danger' : 'success' },
-              { label: '%NG (ระดับใบตรวจ)', value: pct(s.ngRate), variant: 'warning' },
-              { label: 'จุดที่ out of control', value: s.outOfControlCheckpoints, variant: s.outOfControlCheckpoints > 0 ? 'danger' : 'success' },
+              { label: 'ใบตรวจทั้งหมด', value: s.totalInspections, tone: '' },
+              { label: 'ใบที่มี NG', value: s.ngInspections, tone: s.ngInspections > 0 ? 'spec' : '' },
+              { label: '%NG (ระดับใบตรวจ)', value: pct(s.ngRate), tone: s.ngRate > 0 ? 'spec' : '' },
+              { label: 'จุดที่ out of control', value: s.outOfControlCheckpoints, tone: s.outOfControlCheckpoints > 0 ? 'control' : '' },
             ].map((c) => (
               <Col md={3} key={c.label}>
-                <Card className={`text-center border-${c.variant}`}>
+                <Card
+                  className="text-center"
+                  style={c.tone ? {
+                    borderLeft: `3px solid ${c.tone === 'spec' ? 'var(--red)' : 'var(--amber-line)'}`,
+                    background: c.tone === 'spec' ? '#FCECEE' : 'var(--amber-tint)',
+                  } : undefined}
+                >
                   <Card.Body className="py-2">
-                    <div className={`fs-4 fw-bold text-${c.variant}`}>{c.value}</div>
+                    <div
+                      className="fs-4 fw-bold num"
+                      style={c.tone ? { color: c.tone === 'spec' ? 'var(--red)' : 'var(--amber-text)' } : undefined}
+                    >
+                      {c.value}
+                    </div>
                     <div className="small text-muted">{c.label}</div>
                   </Card.Body>
                 </Card>
@@ -177,39 +208,70 @@ const ReportPage = () => {
           {/* สรุปรายจุด — ตัวเลขชุดเดียวกับที่กราฟข้างล่างใช้ (มาจาก analyze() ตัวเดียวกัน) */}
           <Card className="mb-3">
             <Card.Header className="py-2">สรุปรายจุดตรวจ</Card.Header>
-            <Table striped bordered hover responsive size="sm" className="mb-0">
-              <thead className="table-dark">
-                <tr>
-                  <th>ลำดับ</th><th>จุดตรวจ</th><th>ชนิด</th><th>LSL ~ USL</th><th>n</th>
-                  <th>Cp</th><th>Cpk</th><th>Pp</th><th>Ppk</th><th>NG</th><th>สถานะ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.charts.map((c) => {
-                  const cp = c.checkpoint;
-                  const cap = c.capability ?? {};
-                  const f = (v) => (typeof v === 'number' ? v.toFixed(2) : '—');
-                  return (
-                    <tr key={cp.id}>
-                      <td>{cp.seq_no}</td>
-                      <td>{cp.is_critical && '🔴 '}{cp.name}</td>
-                      <td className="small">{cp.char_type === 'attribute' ? 'ตรวจด้วยตา' : 'วัดค่า'}</td>
-                      <td className="small">{cp.char_type === 'attribute' ? '—' : `${cp.lsl ?? '-'} ~ ${cp.usl ?? '-'}`}</td>
-                      <td>{cp.char_type === 'attribute' ? '—' : cp.sample_size}</td>
-                      <td>{f(cap.cp)}</td><td>{f(cap.cpk)}</td><td>{f(cap.pp)}</td><td>{f(cap.ppk)}</td>
-                      <td>{c.ngCount ?? 0}{c.ngRate !== null && c.ngRate !== undefined && ` (${pct(c.ngRate)})`}</td>
-                      <td>
-                        {cp.char_type === 'attribute'
-                          ? '—'
-                          : (c.violations?.length ?? 0) > 0
-                            ? <Badge bg="danger">out of control</Badge>
-                            : <Badge bg="success">in control</Badge>}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </Table>
+            <div className="sheet-wrap" style={{ maxHeight: 'none', border: 0, borderRadius: 0 }}>
+              <table className="sheet">
+                <thead>
+                  <tr>
+                    <th scope="col" className="sheet__seq">#</th>
+                    <th scope="col" className="sheet__name">จุดตรวจ</th>
+                    <th scope="col" className="sheet__spec">สเปก</th>
+                    <th scope="col" className="text-end">n</th>
+                    <th scope="col" className="text-end">Cp</th>
+                    <th scope="col" className="text-end">Cpk</th>
+                    <th scope="col" className="text-end">Pp</th>
+                    <th scope="col" className="text-end">Ppk</th>
+                    <th scope="col" className="text-end">NG</th>
+                    <th scope="col">สถานะ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.charts.map((c) => {
+                    const cp = c.checkpoint;
+                    const cap = c.capability ?? {};
+                    const f = (v) => (typeof v === 'number' ? v.toFixed(2) : '—');
+                    const isAttr = cp.char_type === 'attribute';
+                    const outOfControl = (c.violations?.length ?? 0) > 0;
+                    // Cpk ต่ำกว่าเกณฑ์ของลูกค้าถือเป็นเรื่องต้องดู แต่ยังไม่ใช่ของเสีย → เหลือง
+                    const cpkStyle =
+                      typeof cap.cpk === 'number' && cap.cpk < CPK_TARGET
+                        ? { color: 'var(--amber-text)', fontWeight: 600 }
+                        : undefined;
+
+                    return (
+                      <tr key={cp.id}>
+                        <td className="sheet__seq">{cp.seq_no}</td>
+                        <th scope="row" className="sheet__name fw-normal">
+                          <b>{cp.name}</b>
+                          {cp.is_critical && (
+                            <span className="badge bg-light text-dark ms-1" title="จุดวิกฤต — CTF">CTF</span>
+                          )}
+                          {cp.gauge && <span className="sheet__gauge">{cp.gauge}</span>}
+                        </th>
+                        <td className="sheet__spec"><SpecValue checkpoint={cp} /></td>
+                        <td className="text-end num">{isAttr ? '—' : cp.sample_size}</td>
+                        <td className="text-end num">{f(cap.cp)}</td>
+                        <td className="text-end num" style={cpkStyle}>{f(cap.cpk)}</td>
+                        <td className="text-end num">{f(cap.pp)}</td>
+                        <td className="text-end num">{f(cap.ppk)}</td>
+                        <td className="text-end num">
+                          {c.ngCount ?? 0}
+                          {c.ngRate !== null && c.ngRate !== undefined && ` (${pct(c.ngRate)})`}
+                        </td>
+                        <td>
+                          {isAttr ? (
+                            <span className="text-muted">—</span>
+                          ) : outOfControl ? (
+                            <span style={{ color: 'var(--amber-text)', fontWeight: 600 }}>out of control</span>
+                          ) : (
+                            <span className="text-muted">in control</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </Card>
 
           <Row>

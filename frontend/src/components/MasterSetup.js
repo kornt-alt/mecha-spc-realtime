@@ -3,8 +3,10 @@
 // ของเดิมมีปุ่มแก้/ลบให้เฉพาะ spec ส่วน division/machine/part เพิ่มได้อย่างเดียว
 // (จะแก้ต้องเข้าไปทำที่ DB ตรง ๆ) รอบนี้ทำให้ครบทุกชั้น + จัดลำดับจุดตรวจ + baseline
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Container, Row, Col, Card, Form, Button, Table, Badge, Alert, Nav, Modal } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
+import { PREFILL_KEYS } from '../utils/useModelParam';
 import { on } from '../utils/socket';
 import { normalizeRows, normalizeCheckpoints, numOrNull, toNum } from '../utils/normalize';
 
@@ -18,11 +20,49 @@ const blankCheckpoint = () => ({
   usl: '', lsl: '', target: '', sample_size: 1, is_critical: false, is_active: true,
 });
 
+// ไอคอนลูกศรย้ายลำดับ — เดิมเป็นอักขระ ▲▼ ซึ่งขนาดและตำแหน่งเพี้ยนตามฟอนต์ที่เครื่องมี
+const Caret = ({ dir }) => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+    <path
+      d={dir === 'up' ? 'M6 3.5 10 8.5H2z' : 'M6 8.5 2 3.5h8z'}
+      fill="currentColor"
+    />
+  </svg>
+);
+
+const blankModel = () => ({ division_id: '', item_no: '', item_name: '', drawing_no: '', drawing_rev: '' });
+
+// ค่าที่หน้าใบตรวจหิ้วมาให้ทาง URL (ดู masterHref ใน utils/useModelParam.js)
+const readPrefill = (params) => {
+  const out = {};
+  for (const k of PREFILL_KEYS) {
+    const v = params.get(k);
+    if (v) out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+};
+
 const MasterSetup = () => {
+  const [params, setParams] = useSearchParams();
+
+  // ⚠️ อ่านครั้งเดียวตอน mount แล้วถือไว้เอง ห้ามอ่าน params สด ๆ ทุก render
+  //    <ModelsTab> เรนเดอร์ตามแท็บ กดไป Division แล้วกดกลับ = unmount แล้ว mount ใหม่
+  //    ถึงตอนนั้น params ถูกล้างไปแล้ว (effect ข้างล่าง) ถ้าไปอ่านสด ๆ มันจะ seed ด้วย
+  //    ค่าว่างทับของที่พิมพ์ไว้จนหายเกลี้ยง
+  const [prefill] = useState(() => readPrefill(params));
+
+  // ⚠️ ฟอร์มเพิ่ม/แก้ item ต้องอยู่ที่นี่ ไม่ใช่ใน <ModelsTab>
+  //    <ModelsTab> เรนเดอร์ตามแท็บ กดไป Division แล้วกดกลับ = unmount แล้ว mount ใหม่
+  //    สเตตที่อยู่ข้างในหายหมด — คนที่ถูกเด้งมาจาก MO แล้วแวะไปเพิ่ม Division ที่ขาด
+  //    จะกลับมาเจอฟอร์มว่างแล้วต้องพิมพ์ใหม่ทั้งหมด ซึ่งคือสิ่งที่ฟีเจอร์นี้ตั้งใจกำจัด
+  const [modelForm, setModelForm] = useState(() => ({ ...blankModel(), ...(prefill ?? {}) }));
+  const [editingModel, setEditingModel] = useState(null);
+
   const [tab, setTab] = useState('models');
   const [lookups, setLookups] = useState({ divisions: [], machines: [], inspectors: [] });
   const [models, setModels] = useState([]);
-  const [selectedModel, setSelectedModel] = useState('');
+  // ?model= = item ที่หน้าใบตรวจอยากให้เปิดค้างไว้ (ชื่อ param เดียวกับ Dashboard/ReportPage)
+  const [selectedModel, setSelectedModel] = useState(() => params.get('model') ?? '');
   const [checkpoints, setCheckpoints] = useState([]);
   const [msg, setMsg] = useState(null);
   const [baselineInfo, setBaselineInfo] = useState(null);
@@ -53,6 +93,18 @@ const MasterSetup = () => {
       setCheckpoints(normalizeCheckpoints(cps));
     } catch (e) { fail(e); }
   }, [fail]);
+
+  // ล้าง param ของ prefill ทิ้งหลังจับค่าไว้แล้ว — ไม่ล้างแล้วกด F5 หลังบันทึก ฟอร์มจะเด้ง
+  // กลับมาพร้อม item ที่เพิ่งเพิ่มไป กดเพิ่มซ้ำแล้วชน UNIQUE (division_id, item_no)
+  // ⚠️ เก็บ ?model= ไว้ มันคือ "กำลังดู item ไหน" เหมือนหน้าอื่น ไม่ใช่ prefill
+  useEffect(() => {
+    if (!prefill) return;
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      PREFILL_KEYS.forEach((k) => next.delete(k));
+      return next;
+    }, { replace: true });
+  }, [prefill, setParams]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
   useEffect(() => on('master_updated', loadAll), [loadAll]);
@@ -118,8 +170,10 @@ const MasterSetup = () => {
   };
 
   return (
-    <Container fluid className="mt-3 pb-5">
-      <h4 className="mb-3">⚙️ ตั้งค่า Master</h4>
+    <Container fluid className="page">
+      <div className="page-head">
+        <h1>ตั้งค่า Master</h1>
+      </div>
       {msg && <Alert variant={msg.variant} dismissible onClose={() => setMsg(null)}>{msg.text}</Alert>}
 
       <Nav variant="tabs" activeKey={tab} onSelect={setTab} className="mb-3">
@@ -131,6 +185,9 @@ const MasterSetup = () => {
 
       {tab === 'models' && (
         <ModelsTab
+          fromMo={Boolean(prefill)}
+          modelForm={modelForm} setModelForm={setModelForm}
+          editingModel={editingModel} setEditingModel={setEditingModel}
           models={models} divisions={lookups.divisions}
           selectedModel={selectedModel} setSelectedModel={setSelectedModel}
           checkpoints={checkpoints}
@@ -141,7 +198,11 @@ const MasterSetup = () => {
       {tab === 'divisions' && (
         <SimpleTab
           title="Division" table="divisions" rows={lookups.divisions}
-          columns={[{ key: 'name', label: 'ชื่อ', required: true }]}
+          columns={[
+            { key: 'name', label: 'ชื่อ', required: true },
+            // dept ของ IPBASS — ว่างไว้ได้ แต่การยิง MO หา item จะใช้ไม่ได้จนกว่าจะตั้ง
+            { key: 'ipbass_dept', label: 'IPBASS dept (เช่น T47183)' },
+          ]}
           onSave={save} onRemove={remove} labelOf={(r) => r.name}
         />
       )}
@@ -236,7 +297,7 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, labelOf }) =
               </Col>
             ))}
             <Col md="auto">
-              <Button type="submit" variant={editingId ? 'warning' : 'success'}>
+              <Button type="submit" variant={editingId ? 'warning' : 'primary'}>
                 {editingId ? 'บันทึกการแก้ไข' : `เพิ่ม${title}`}
               </Button>
               {editingId && <Button variant="link" onClick={reset}>ยกเลิก</Button>}
@@ -256,7 +317,7 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, labelOf }) =
                   {columns.map((c) => (
                     <td key={c.key}>
                       {c.type === 'check'
-                        ? (Number(r[c.key]) ? '✓' : '—')
+                        ? (Number(r[c.key]) ? 'ใช่' : '—')
                         : c.type === 'select'
                           ? (c.options ?? []).find((o) => String(o.id) === String(r[c.key]))?.name ?? '—'
                           : r[c.key] ?? '—'}
@@ -275,30 +336,35 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, labelOf }) =
   );
 };
 
-// ── แท็บรุ่น + จุดตรวจ ─────────────────────────────────────────────────────
+// ── แท็บ Item + จุดตรวจ ───────────────────────────────────────────────────
+//
+// "รุ่น" ของระบบนี้คือ item number ของ IPBASS — ตาราง/ตัวแปรยังชื่อ model/modelId ตามเดิม
+// เปลี่ยนแค่คอลัมน์ item_no/item_name กับข้อความบนหน้าจอ
+// ⚠️ modelForm / editingModel ถูกยกไปไว้ที่ <MasterSetup> เพราะแท็บทำให้ component นี้
+//    unmount (ดูคอมเมนต์ที่นั่น) · cpForm ยังอยู่ที่นี่ตามเดิม สลับแท็บแล้วยังหายอยู่
+//    แต่เป็นพฤติกรรมเดิมและไม่อยู่บนเส้นทางที่มาจาก MO
 const ModelsTab = ({
+  fromMo, modelForm, setModelForm, editingModel, setEditingModel,
   models, divisions, selectedModel, setSelectedModel, checkpoints,
   onSave, onRemove, onMove, onPreviewBaseline, onClearBaseline,
 }) => {
-  const [modelForm, setModelForm] = useState({ division_id: '', model_code: '', model_name: '', drawing_no: '', drawing_rev: '' });
-  const [editingModel, setEditingModel] = useState(null);
   const [cpForm, setCpForm] = useState(blankCheckpoint);
   const [editingCp, setEditingCp] = useState(null);
 
-  const resetModel = () => { setModelForm({ division_id: '', model_code: '', model_name: '', drawing_no: '', drawing_rev: '' }); setEditingModel(null); };
+  const resetModel = () => { setModelForm(blankModel()); setEditingModel(null); };
   const resetCp = () => { setCpForm(blankCheckpoint()); setEditingCp(null); };
 
   const submitModel = async (e) => {
     e.preventDefault();
-    if (!modelForm.division_id || !modelForm.model_code || !modelForm.model_name) {
-      return window.alert('กรอก Division / รหัสรุ่น / ชื่อรุ่น ให้ครบ');
+    if (!modelForm.division_id || !modelForm.item_no || !modelForm.item_name) {
+      return window.alert('กรอก Division / Item No. / ชื่อ item ให้ครบ');
     }
     if (await onSave('models', modelForm, editingModel)) resetModel();
   };
 
   const submitCp = async (e) => {
     e.preventDefault();
-    if (!selectedModel) return window.alert('เลือกรุ่นก่อน');
+    if (!selectedModel) return window.alert('เลือก item ก่อน');
     if (!cpForm.name) return window.alert('กรอกชื่อจุดตรวจ');
 
     const isAttr = cpForm.char_type === 'attribute';
@@ -345,6 +411,12 @@ const ModelsTab = ({
         <Card className="mb-3">
           <Card.Header>รุ่น (Model)</Card.Header>
           <Card.Body>
+            {fromMo && !editingModel && (
+              <Alert variant="info" className="py-2 px-3 mb-2 small">
+                ข้อมูลจาก MO เติมไว้ให้แล้ว — ตรวจดูแล้วกด <b>เพิ่ม Item</b> จากนั้นใส่จุดตรวจทางขวา
+                (เพิ่ม item เฉย ๆ ยังกรอกใบตรวจไม่ได้ ต้องมีจุดตรวจด้วย)
+              </Alert>
+            )}
             <Form onSubmit={submitModel}>
               <Form.Select
                 className="mb-2" value={modelForm.division_id}
@@ -353,18 +425,18 @@ const ModelsTab = ({
                 <option value="">-- Division --</option>
                 {divisions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
               </Form.Select>
-              <Form.Control className="mb-2" placeholder="รหัสรุ่น เช่น MDL-1001"
-                value={modelForm.model_code} onChange={(e) => setModelForm((f) => ({ ...f, model_code: e.target.value }))} />
-              <Form.Control className="mb-2" placeholder="ชื่อรุ่น"
-                value={modelForm.model_name} onChange={(e) => setModelForm((f) => ({ ...f, model_name: e.target.value }))} />
+              <Form.Control className="mb-2" placeholder="Item No. เช่น AAB-1001-01"
+                value={modelForm.item_no} onChange={(e) => setModelForm((f) => ({ ...f, item_no: e.target.value }))} />
+              <Form.Control className="mb-2" placeholder="ชื่อ item"
+                value={modelForm.item_name} onChange={(e) => setModelForm((f) => ({ ...f, item_name: e.target.value }))} />
               <Row className="g-2 mb-2">
                 <Col><Form.Control placeholder="เลขแบบ"
                   value={modelForm.drawing_no} onChange={(e) => setModelForm((f) => ({ ...f, drawing_no: e.target.value }))} /></Col>
                 <Col xs={4}><Form.Control placeholder="Rev"
                   value={modelForm.drawing_rev} onChange={(e) => setModelForm((f) => ({ ...f, drawing_rev: e.target.value }))} /></Col>
               </Row>
-              <Button type="submit" className="w-100" variant={editingModel ? 'warning' : 'success'}>
-                {editingModel ? 'บันทึกการแก้ไข' : 'เพิ่มรุ่น'}
+              <Button type="submit" className="w-100" variant={editingModel ? 'warning' : 'primary'}>
+                {editingModel ? 'บันทึกการแก้ไข' : 'เพิ่ม Item'}
               </Button>
               {editingModel && <Button variant="link" className="w-100" onClick={resetModel}>ยกเลิก</Button>}
             </Form>
@@ -375,20 +447,20 @@ const ModelsTab = ({
                 {models.map((m) => (
                   <tr key={m.id} className={selectedModel === String(m.id) ? 'table-primary' : ''}>
                     <td role="button" onClick={() => setSelectedModel(String(m.id))}>
-                      <div className="fw-bold">{m.model_code}</div>
+                      <div className="fw-bold">{m.item_no}</div>
                       <div className="small text-muted">
-                        {m.model_name} · {toNum(m.checkpoint_count) || 0} จุด
+                        {m.item_name} · {m.division_name} · {toNum(m.checkpoint_count) || 0} จุด
                         {!m.is_active && <Badge bg="secondary" className="ms-1">ปิดใช้งาน</Badge>}
                       </div>
                     </td>
                     <td style={{ width: 96 }} className="text-end align-middle">
                       <Button size="sm" variant="outline-primary" className="me-1"
                         onClick={() => { setEditingModel(m.id); setModelForm({
-                          division_id: m.division_id ?? '', model_code: m.model_code ?? '',
-                          model_name: m.model_name ?? '', drawing_no: m.drawing_no ?? '', drawing_rev: m.drawing_rev ?? '',
+                          division_id: m.division_id ?? '', item_no: m.item_no ?? '',
+                          item_name: m.item_name ?? '', drawing_no: m.drawing_no ?? '', drawing_rev: m.drawing_rev ?? '',
                         }); }}>แก้</Button>
                       <Button size="sm" variant="outline-danger"
-                        onClick={() => onRemove('models', m.id, m.model_code)}>ลบ</Button>
+                        onClick={() => onRemove('models', m.id, m.item_no)}>ลบ</Button>
                     </td>
                   </tr>
                 ))}
@@ -402,7 +474,7 @@ const ModelsTab = ({
       <Col lg={8}>
         <Card style={{ opacity: selectedModel ? 1 : 0.6 }}>
           <Card.Header>
-            จุดตรวจ {selectedModel && `— ${models.find((m) => String(m.id) === selectedModel)?.model_code ?? ''}`}
+            จุดตรวจ {selectedModel && `— ${models.find((m) => String(m.id) === selectedModel)?.item_no ?? ''}`}
           </Card.Header>
           <Card.Body>
             <Form onSubmit={submitCp}>
@@ -432,7 +504,7 @@ const ModelsTab = ({
                     onChange={(e) => setCpForm((f) => ({ ...f, is_active: e.target.checked }))} />
                 </Col>
                 <Col md="auto">
-                  <Button type="submit" variant={editingCp ? 'warning' : 'success'} disabled={!selectedModel}>
+                  <Button type="submit" variant={editingCp ? 'warning' : 'primary'} disabled={!selectedModel}>
                     {editingCp ? 'บันทึก' : 'เพิ่มจุดตรวจ'}
                   </Button>
                   {editingCp && <Button variant="link" onClick={resetCp}>ยกเลิก</Button>}
@@ -455,11 +527,18 @@ const ModelsTab = ({
                       <td>
                         {cp.seq_no}
                         <Button size="sm" variant="link" className="p-0 ms-1" disabled={i === 0}
-                          onClick={() => onMove(cp.id, 'up')}>▲</Button>
+                          aria-label={`ย้าย ${cp.name} ขึ้น`} title="ย้ายขึ้น"
+                          onClick={() => onMove(cp.id, 'up')}><Caret dir="up" /></Button>
                         <Button size="sm" variant="link" className="p-0" disabled={i === checkpoints.length - 1}
-                          onClick={() => onMove(cp.id, 'down')}>▼</Button>
+                          aria-label={`ย้าย ${cp.name} ลง`} title="ย้ายลง"
+                          onClick={() => onMove(cp.id, 'down')}><Caret dir="down" /></Button>
                       </td>
-                      <td>{cp.is_critical && '🔴 '}{cp.name}</td>
+                      <td>
+                        {cp.name}
+                        {cp.is_critical && (
+                          <span className="badge bg-light text-dark ms-1" title="จุดวิกฤต — CTF">CTF</span>
+                        )}
+                      </td>
                       <td className="small">{cp.char_type === 'attribute' ? 'ตรวจด้วยตา' : 'วัดค่า'}</td>
                       <td className="small">
                         {cp.char_type === 'attribute' ? '—' : `${cp.lsl ?? '-'} ~ ${cp.usl ?? '-'}`}
@@ -467,9 +546,17 @@ const ModelsTab = ({
                       <td>{cp.char_type === 'attribute' ? '—' : cp.sample_size}</td>
                       <td className="small">
                         {cp.char_type === 'attribute' ? '—'
+                          /* ⚠️ ของเดิมสลับกันอยู่: ล็อกแล้ว = เขียวเด่น · provisional = เทาจาง
+                             ทั้งที่ provisional คือสถานะที่ต้องไปทำอะไรสักอย่าง (เส้นลิมิตยังขยับ
+                             ตามข้อมูล จับความผิดปกติไม่ได้) ส่วนล็อกแล้วคือปกติ
+                             ตามหลักของทั้งระบบ: เงียบเมื่อปกติ มีสีเมื่อต้องดู */
                           : cp.baseline_locked_at
-                            ? <Badge bg="success">ล็อกแล้ว (n={cp.baseline_n}, {cp.baseline_subgroups} subgroup)</Badge>
-                            : <Badge bg="secondary">provisional</Badge>}
+                            ? (
+                              <span className="text-muted num">
+                                ล็อกแล้ว (n={cp.baseline_n}, {cp.baseline_subgroups} subgroup)
+                              </span>
+                            )
+                            : <Badge bg="warning">provisional</Badge>}
                       </td>
                       <td>
                         <Button size="sm" variant="primary" className="me-1" onClick={() => startEditCp(cp)}>แก้</Button>
@@ -477,7 +564,7 @@ const ModelsTab = ({
                           cp.baseline_locked_at
                             ? <Button size="sm" variant="outline-warning" className="me-1"
                                 onClick={() => onClearBaseline(cp)}>ล้าง</Button>
-                            : <Button size="sm" variant="outline-success" className="me-1"
+                            : <Button size="sm" variant="outline-primary" className="me-1"
                                 onClick={() => onPreviewBaseline(cp)}>Baseline</Button>
                         )}
                         <Button size="sm" variant="danger" onClick={() => onRemove('checkpoints', cp.id, cp.name)}>ลบ</Button>

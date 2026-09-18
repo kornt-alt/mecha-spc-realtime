@@ -13,6 +13,9 @@ jest.mock('./utils/socket', () => ({
 }));
 
 beforeEach(() => {
+  // ⚠️ jsdom เก็บ localStorage ข้ามเทสในไฟล์เดียวกัน หน้าใบตรวจจำ "สถานี" ไว้ที่นั่น
+  //    (utils/station.js) ถ้าไม่ล้าง เทสตัวแรกที่เขียนค่าจะไปโผล่ในเทสถัดไป
+  localStorage.clear();
   // jsdom ไม่มี fetch ให้ และหน้าใบตรวจยิง /master/lookups + /master/models ตอน mount
   global.fetch = jest.fn((url) => {
     const body = String(url).includes('/master/lookups')
@@ -34,7 +37,7 @@ test('renders the navbar brand', async () => {
 test('หน้าแรกคือใบตรวจ และโหลด master ตอน mount', async () => {
   render(<App />);
 
-  expect(await screen.findByText(/ใบตรวจสอบคุณภาพ/)).toBeInTheDocument();
+  expect(await screen.findByText('Check Station')).toBeInTheDocument();
   expect(global.fetch).toHaveBeenCalledWith(
     '/Mecha-Spc-Realtime/api/master/lookups',
     expect.any(Object)

@@ -99,3 +99,32 @@ test('ยังไม่มีข้อมูล → ไม่พัง', () => 
 
   expect(screen.getByText(/ยังไม่มีข้อมูลค่าวัด/)).toBeInTheDocument();
 });
+
+// ── สองเทสนี้คุมสิ่งที่เพิ่มเข้ามาตอนรีดีไซน์ ──────────────────────────────
+
+test('กฎ Nelson ที่ผิด ต้องอ่านได้เป็นข้อความโดยไม่ต้อง hover', () => {
+  // ⚠️ ของเดิมข้อมูลนี้อยู่ใน tooltip อย่างเดียว จอสัมผัสหน้าไลน์แตะไม่ติด
+  //    และ ResponsiveContainer ใน jsdom สูง 0 ทุกอย่างในกราฟจึงเทสไม่ได้เลย
+  //    รายการกฎต้องอยู่ "นอก" กราฟถึงจะทั้งใช้งานได้จริงและเทสได้
+  render(<ControlChart chart={{
+    checkpoint: checkpoint(), points: [point(0), point(1, { rules: [1, 5] }), point(2, { rules: [5] })],
+    limits: limits(), capability, mode: 'xbar-r',
+    violations: [{ index: 1, rules: [1, 5] }, { index: 2, rules: [5] }],
+  }} />);
+
+  expect(screen.getByText(/หลุด 3σ/)).toBeInTheDocument();
+  // กฎข้อ 5 โดนสอง subgroup ต้องรวมเป็นบรรทัดเดียวแล้วบอกว่า subgroup ไหนบ้าง
+  expect(screen.getByText(/2 ใน 3 จุดเกิน 2σ — subgroup 2, 3/)).toBeInTheDocument();
+});
+
+test('มีคำอธิบายเส้น แยก spec limit กับ control limit ออกจากกัน', () => {
+  // แยกสองเส้นนี้ไม่ออก = อ่านกราฟผิดทั้งใบ (ดู CLAUDE.md "spec limit ≠ control limit")
+  // ใช้ <Legend> ของ recharts ไม่ได้ เพราะมันรับ payload จาก Line เท่านั้น ReferenceLine ไม่ส่งเข้าไป
+  render(<ControlChart chart={{
+    checkpoint: checkpoint(), points: [point(0), point(1)],
+    limits: limits(), capability, violations: [], mode: 'xbar-r',
+  }} />);
+
+  expect(screen.getByText(/spec limit \(USL\/LSL\)/)).toBeInTheDocument();
+  expect(screen.getByText(/control limit \(UCL\/LCL\)/)).toBeInTheDocument();
+});

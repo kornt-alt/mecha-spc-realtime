@@ -11,10 +11,10 @@ const router = express.Router();
 // ชื่อตารางและชื่อคอลัมน์ต่อเข้า SQL ตรง ๆ (parameterize ชื่อคอลัมน์ไม่ได้) จึงต้อง whitelist ทั้งคู่
 // ⚠️ เพิ่มฟิลด์ใหม่ที่หน้า MasterSetup ต้องมาเพิ่มที่นี่ด้วยเสมอ ไม่งั้นถูกตอบ 400
 const ALLOWED_COLUMNS = {
-  divisions:   ['name'],
+  divisions:   ['name', 'ipbass_dept'],
   machines:    ['division_id', 'code', 'name', 'is_active'],
   inspectors:  ['emp_code', 'name', 'division_id', 'is_active'],
-  models:      ['division_id', 'model_code', 'model_name', 'drawing_no', 'drawing_rev', 'is_active'],
+  models:      ['division_id', 'item_no', 'item_name', 'drawing_no', 'drawing_rev', 'is_active'],
   checkpoints: [
     'model_id', 'seq_no', 'name', 'char_type', 'unit', 'gauge',
     'usl', 'lsl', 'target', 'sample_size', 'is_critical', 'is_active',
@@ -44,7 +44,8 @@ router.get('/lookups', wrap(async (req, res) => {
   const flag = activeOnly ? ' WHERE is_active = 1' : '';
 
   const [[divisions], [machines], [inspectors]] = await Promise.all([
-    query('SELECT id, name FROM divisions ORDER BY name'),
+    // ipbass_dept ต้องมาด้วย — ฝั่ง client ใช้เลือก dept ตอนยิง MOPLAN
+    query('SELECT id, name, ipbass_dept FROM divisions ORDER BY name'),
     query(`SELECT id, division_id, code, name, is_active FROM machines${flag} ORDER BY code`),
     query(`SELECT id, emp_code, name, division_id, is_active FROM inspectors${flag} ORDER BY name`),
   ]);
@@ -70,7 +71,7 @@ router.get('/models', wrap(async (req, res) => {
        FROM models m
        JOIN divisions d ON d.id = m.division_id
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY m.model_code`,
+      ORDER BY m.item_no`,
     params
   );
   res.json(rows);
@@ -86,7 +87,7 @@ router.get('/models/:id', wrap(async (req, res) => {
       WHERE m.id = ?`,
     [Number(req.params.id)]
   );
-  if (!model) throw new AppError('ไม่พบรุ่นนี้', 404);
+  if (!model) throw new AppError('ไม่พบ item นี้', 404);
 
   const checkpoints = await fetchModelCheckpoints(req.params.id, {
     activeOnly: req.query.all !== '1',

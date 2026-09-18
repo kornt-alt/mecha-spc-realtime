@@ -132,7 +132,7 @@ router.get('/model/:modelId/export', wrap(async (req, res) => {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('ผลตรวจ');
 
-  ws.addRow([`รายงานผลตรวจสอบ — ${model.model_code} ${model.model_name}`]);
+  ws.addRow([`รายงานผลตรวจสอบ — ${model.item_no} ${model.item_name}`]);
   ws.getRow(1).font = { bold: true, size: 14 };
   ws.addRow([
     `ช่วงวันที่: ${filter.from && filter.to ? `${filter.from} ถึง ${filter.to}` : 'ทั้งหมด'}`,
@@ -176,7 +176,12 @@ router.get('/model/:modelId/export', wrap(async (req, res) => {
   ws.views = [{ state: 'frozen', ySplit: head.number }];
 
   // ⚠️ ชื่อไฟล์เป็นภาษาไทยได้ ต้องมี filename*=UTF-8'' ไม่งั้นเบราว์เซอร์ได้ชื่อเพี้ยน
-  const fname = `QC-${model.model_code}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  //
+  // ⚠️ item_no ต้อง sanitize ก่อน — เลข item จริงมี '/' หรือเว้นวรรคได้ ซึ่งทำให้
+  //    ทั้งชื่อไฟล์และ header Content-Disposition เพี้ยน (ของเดิมเป็น model_code
+  //    ที่คนพิมพ์เองเลยไม่เคยเจอ) เก็บไว้เฉพาะ [A-Za-z0-9_.-] ที่เหลือยุบเป็น '_'
+  const safeItemNo = String(model.item_no || 'item').replace(/[^\w.-]+/g, '_');
+  const fname = `QC-${safeItemNo}-${new Date().toISOString().slice(0, 10)}.xlsx`;
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader(
     'Content-Disposition',

@@ -14,10 +14,10 @@ const env = require('../config/env');
 // คอลัมน์ที่ "โค้ดพึ่งพาจริง" เท่านั้น ไม่ต้องลิสต์ให้ครบทุกคอลัมน์
 // เอาไว้จับกรณีตารางชื่อตรงแต่เป็นรูปเก่า
 const REQUIRED = {
-  divisions: ['id', 'name'],
+  divisions: ['id', 'name', 'ipbass_dept'],
   machines: ['id', 'division_id', 'code', 'name', 'is_active'],
   inspectors: ['id', 'emp_code', 'name', 'is_active'],
-  models: ['id', 'division_id', 'model_code', 'model_name', 'is_active'],
+  models: ['id', 'division_id', 'item_no', 'item_name', 'is_active'],
   checkpoints: [
     'id', 'model_id', 'seq_no', 'name', 'char_type',
     'usl', 'lsl', 'target', 'sample_size', 'is_active',
@@ -26,6 +26,7 @@ const REQUIRED = {
   inspections: [
     'id', 'model_id', 'machine_id', 'inspector_id',
     'mo_no', 'shift', 'subgroup_no', 'inspected_at', 'overall_result',
+    'mo_item_no', 'mo_item_name', 'mo_draw', 'mo_model_group',
   ],
   inspection_results: [
     'id', 'inspection_id', 'checkpoint_id', 'piece_no',

@@ -53,17 +53,23 @@ CREATE TABLE IF NOT EXISTS inspectors (
     FOREIGN KEY (division_id) REFERENCES divisions(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- รุ่นสินค้า — ไม่ผูกกับเครื่องแล้ว (รุ่นเดียวรันได้หลายเครื่อง เครื่องไปอยู่ที่หัวใบตรวจ)
+-- "รุ่น" ของระบบนี้คือ item number ของ IPBASS — ไม่ผูกกับเครื่อง (item เดียวรันได้หลายเครื่อง
+-- เครื่องไปอยู่ที่หัวใบตรวจ) ตารางยังชื่อ models และคอลัมน์อ้างอิงยังชื่อ model_id ตามเดิม
+-- เพราะชื่อพวกนั้นลามไป FK / socket room / URL param โดยไม่ได้อะไรกลับมา
+--
+-- ⚠️ UNIQUE เป็น (division_id, item_no) ไม่ใช่ item_no เดี่ยว — item เลขเดียวกันผลิตได้ทั้ง
+--    Mecha 1 (T47563) และ Mecha 2 (T47183) และคนละ division ใช้ใบตรวจคนละใบ
 CREATE TABLE IF NOT EXISTS models (
   id           INT AUTO_INCREMENT PRIMARY KEY,
   division_id  INT NOT NULL,
-  model_code   VARCHAR(50)  NOT NULL,
-  model_name   VARCHAR(150) NOT NULL,
+  item_no      VARCHAR(50)  NOT NULL,
+  item_name    VARCHAR(150) NOT NULL,
   drawing_no   VARCHAR(100) NULL,
   drawing_rev  VARCHAR(20)  NULL,
   is_active    TINYINT(1)   NOT NULL DEFAULT 1,
   created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_models_code (model_code),
+  UNIQUE KEY uq_models_division_item (division_id, item_no),
+  KEY ix_models_item_no (item_no),
   KEY ix_models_division (division_id),
   CONSTRAINT fk_models_division
     FOREIGN KEY (division_id) REFERENCES divisions(id) ON DELETE RESTRICT
@@ -126,6 +132,14 @@ CREATE TABLE IF NOT EXISTS inspections (
   inspected_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   remark          VARCHAR(255) NULL,
   overall_result  ENUM('OK','NG') NOT NULL,
+  -- ⚠️ mo_* = สิ่งที่ IPBASS MOPLAN ตอบมาสำหรับ MO ใบนี้ ณ เวลาที่ตรวจ
+  --    ไม่ใช่ item ที่ผู้ตรวจเลือก (อันนั้นอยู่ที่ model_id → models.item_no)
+  --    เก็บไว้เป็น audit trail ล้วน ๆ ไม่มีตรรกะไหนอ่านไปตัดสินอะไร
+  --    ไม่ตรงกับ models.item_no เมื่อไหร่ = ติดใบตรวจผิด
+  mo_item_no      VARCHAR(50) NULL,
+  mo_item_name    VARCHAR(150) NULL,
+  mo_draw         VARCHAR(100) NULL,
+  mo_model_group  VARCHAR(50) NULL,
   created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_inspections_subgroup (model_id, mo_no, subgroup_no),
   KEY ix_inspections_model_time (model_id, inspected_at),
@@ -181,3 +195,15 @@ UPDATE machines SET code = CONCAT('MC-', LPAD(id, 2, '0')) WHERE code IS NULL OR
 ALTER TABLE machines ADD UNIQUE INDEX IF NOT EXISTS uq_machines_code (code);
 ALTER TABLE divisions ADD COLUMN IF NOT EXISTS created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE divisions ADD UNIQUE INDEX IF NOT EXISTS uq_divisions_name (name);
+
+-- ── IPBASS ────────────────────────────────────────────────────────────────
+--
+-- dept ของ IPBASS ต่อ division (T47563 = Mecha 1, T47183 = Mecha 2) เก็บใน DB
+-- ไม่ hardcode map จากชื่อ division ในโค้ด — เพิ่ม division ใหม่แล้วไม่ต้องแก้ JS
+-- ⚠️ ว่างได้ ฝั่ง client ต้องดักก่อนยิง ไม่งั้นจะรายงานว่า "ไม่พบ MO" ทั้งที่ยังไม่ได้ยิง
+ALTER TABLE divisions ADD COLUMN IF NOT EXISTS ipbass_dept VARCHAR(10) NULL;
+
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS mo_item_no     VARCHAR(50)  NULL;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS mo_item_name   VARCHAR(150) NULL;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS mo_draw        VARCHAR(100) NULL;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS mo_model_group VARCHAR(50)  NULL;
