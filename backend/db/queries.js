@@ -10,9 +10,17 @@ const { query } = require('./pool');
 //
 // ⚠️ วันที่กรองเมื่อได้รับครบทั้ง from และ to เท่านั้น ให้ตรงกับพฤติกรรมเดิมของระบบ
 //    ฝั่ง client ต้องใช้เงื่อนไขเดียวกันเป๊ะ ไม่งั้นกรอกวันเดียวแล้วผลไม่ตรงกับที่เห็น
-const buildInspectionFilter = (f = {}) => {
+//
+// ⚠️ ใบตรวจที่ถูกยกเลิกถูกตัดทิ้งเป็น default — ฟังก์ชันนี้เป็นคอขวดจุดเดียวที่
+//    กราฟ / สรุปรายงาน / Excel / baseline ใช้ร่วมกัน การตัดที่นี่จึงครอบคลุมทุกทางพร้อมกัน
+//    default เป็นแบบปลอดภัยโดยตั้งใจ: คนเขียนโค้ดใหม่ต้อง "ตั้งใจ" ส่ง includeVoided: true
+//    ถึงจะดึงใบที่ยกเลิกออกมา ไม่ใช่ "ลืม" แล้วมันหลุดเข้ากราฟไปเอง
+//    ที่เดียวที่ opt-out คือการดึงรายการมาโชว์ให้คนกดคืนค่า (routes/reports.js)
+const buildInspectionFilter = (f = {}, { includeVoided = false } = {}) => {
   const where = [];
   const params = [];
+
+  if (!includeVoided) where.push('i.voided_at IS NULL');
 
   if (f.from && f.to) {
     where.push('DATE(i.inspected_at) BETWEEN ? AND ?');
@@ -97,10 +105,43 @@ const fetchModelCheckpoints = async (modelId, { activeOnly = true } = {}) => {
   return rows;
 };
 
+// ── baseline ที่ freeze ไว้ (แยกรายเครื่อง) ────────────────────────────────
+//
+// ⚠️ machine_id = 0 คือชุด "รวมทุกเครื่อง" ไม่ใช่รหัสเครื่องจริง (ดูคอมเมนต์ใน schema.sql)
+//    การเลือกว่าจะใช้แถวไหนอยู่ที่ pickBaseline() ใน services/baseline.js ที่เดียว
+const fetchCheckpointBaselines = async (checkpointId) => {
+  const [rows] = await query(
+    'SELECT * FROM checkpoint_baselines WHERE checkpoint_id = ?',
+    [Number(checkpointId)]
+  );
+  return rows;
+};
+
+// ดึงทีเดียวสำหรับทุกจุดตรวจของรุ่น แล้วแยกเป็นราย checkpoint ในหน่วยความจำ
+// เหตุผลเดียวกับ fetchModelRows — หน้า report มีหลายจุดตรวจ ยิงทีละจุดจะกลายเป็น N query
+const fetchModelBaselines = async (modelId) => {
+  const [rows] = await query(
+    `SELECT b.*
+       FROM checkpoint_baselines b
+       JOIN checkpoints c ON c.id = b.checkpoint_id
+      WHERE c.model_id = ?`,
+    [Number(modelId)]
+  );
+
+  const byCheckpoint = new Map();
+  for (const row of rows) {
+    if (!byCheckpoint.has(row.checkpoint_id)) byCheckpoint.set(row.checkpoint_id, []);
+    byCheckpoint.get(row.checkpoint_id).push(row);
+  }
+  return byCheckpoint;
+};
+
 module.exports = {
   buildInspectionFilter,
   fetchCheckpointRows,
   fetchModelRows,
   fetchCheckpoint,
   fetchModelCheckpoints,
+  fetchCheckpointBaselines,
+  fetchModelBaselines,
 };

@@ -11,7 +11,13 @@
 //    ต้องผ่าน reconcile() เทียบกับรายการที่โหลดมาจริงก่อนใช้เสมอ ไม่งั้น <Form.Select>
 //    จะมี value ที่ไม่มี <option> รองรับ กลายเป็นช่องว่างที่กดบันทึกไม่ได้และไม่บอกว่าทำไม
 
+import { SHIFTS } from './config';
+
 const KEY = 'spc.station';
+
+// ⚠️ เทียบกับ SHIFTS ไม่ใช่ hardcode 'M'/'N' — ของเดิมเช็คสองค่านั้นตรง ๆ พอเพิ่มกะ
+//    A/B/C/D เข้ามา กะที่จำไว้จะถูกโยนทิ้งเงียบ ๆ ทุกครั้งที่เปิดหน้า
+const isShift = (v) => SHIFTS.some((s) => s.code === v);
 
 const EMPTY = { modelId: '', machineId: '', inspectorId: '', shift: '' };
 
@@ -27,7 +33,7 @@ export const readStation = () => {
       modelId: asId(parsed.modelId),
       machineId: asId(parsed.machineId),
       inspectorId: asId(parsed.inspectorId),
-      shift: parsed.shift === 'M' || parsed.shift === 'N' ? parsed.shift : '',
+      shift: isShift(parsed.shift) ? parsed.shift : '',
     };
   } catch {
     // JSON เสีย หรืออ่าน storage ไม่ได้ — เริ่มใหม่เงียบ ๆ

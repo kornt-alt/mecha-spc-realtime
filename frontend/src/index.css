@@ -270,6 +270,16 @@ code {
   background: var(--blue-tint);
 }
 
+/* ใบตรวจที่ถูกยกเลิก — ยังอยู่ในตารางเพื่อให้กดคืนค่าได้ แต่ต้องอ่านออกทันทีว่าไม่นับแล้ว
+   ขีดฆ่าเฉพาะข้อมูล ไม่ขีดคอลัมน์จัดการ ไม่งั้นปุ่มคืนค่าจะถูกขีดไปด้วย */
+.sheet tbody tr.row--voided td {
+  opacity: 0.55;
+}
+
+.sheet tbody tr.row--voided td:not(:last-child) {
+  text-decoration: line-through;
+}
+
 /* ── ช่องกรอกค่าวัด ───────────────────────────────────────────────────── */
 
 .cell {
@@ -431,6 +441,134 @@ code {
   color: var(--ink);
 }
 
+/* ── แถบบอกขอบเขตของกราฟ (กรองเครื่องอยู่) ───────────────────────────── */
+
+/* เหลือง = เรื่อง control limit ตามแกนสีของทั้งระบบ (ห้ามใช้แดง แดง = หลุดสเปก)
+ * ต้องเด่นเท่าคำเตือน provisional เพราะบอกเรื่องเดียวกัน: เส้นลิมิตที่เห็นอยู่ยังไม่ใช่ของชุดนี้ */
+.scope-note {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--amber-line);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--amber-tint);
+  color: var(--amber-text);
+  font-size: var(--fs-sm);
+}
+
+.scope-note b {
+  color: var(--ink);
+}
+
+/* ── รายการ baseline ที่ล็อกไว้ (ราย scope) ในตารางจุดตรวจ ────────────── */
+
+.baseline-scopes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.baseline-scopes li + li {
+  margin-top: 0.1rem;
+}
+
+/* ── แผงอ้างอิงสูตร/กฎ ───────────────────────────────────────────────── */
+
+.spc-ref__toggle {
+  padding: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.spc-ref__body {
+  font-size: var(--fs-sm);
+}
+
+.spc-ref__callout {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--blue);
+  background: var(--blue-tint);
+}
+
+/* auto-fit: จอหน้าไลน์กว้าง ๆ ได้ 2 คอลัมน์ แท็บเล็ตได้คอลัมน์เดียวโดยไม่ต้องเขียน media query */
+.spc-ref__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+}
+
+.spc-ref__h {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.spc-ref__p {
+  margin: var(--sp-2) 0 0;
+  color: var(--muted);
+}
+
+/* สูตร: ชื่อซ้าย สมการขวา — ชิดกันเป็นตารางโดยไม่ต้องใช้ <table> */
+.formula {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) 1fr;
+  gap: 0 var(--sp-2);
+  padding: 0.15rem 0;
+  border-bottom: 1px dotted var(--line);
+}
+
+.formula__name {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.formula__eq {
+  color: var(--blue);
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.formula__note {
+  grid-column: 2;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.spc-ref__rules {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+
+.spc-ref__rules th,
+.spc-ref__rules td {
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.spc-ref__rules th {
+  border-bottom-color: var(--line-strong);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* หมายเลขกฎใช้เหลือง = คอนโทรล ตรงกับสีของจุดที่ผิดกฎบนกราฟและกรอบรายการกฎใต้กราฟ */
+.spc-ref__rules td:first-child {
+  white-space: nowrap;
+  color: var(--amber-text);
+}
+
+.spc-ref__ruleshort {
+  color: var(--muted);
+}
+
 /* ── สถานะว่าง / โหลด ─────────────────────────────────────────────────── */
 
 .empty {
@@ -500,4 +638,73 @@ code {
   .station__row {
     gap: var(--sp-2);
   }
+}
+
+/* ── ช่องเลือกที่พิมพ์ค้นหาได้ (SearchSelect) ──────────────────────────────
+ * ลิสต์ลอยทับของข้างล่างด้วย position:absolute — การ์ดที่ครอบอยู่ต้องไม่ overflow:hidden
+ * ไม่งั้นลิสต์จะถูกตัดหายครึ่งตัว */
+
+.ss {
+  position: relative;
+}
+
+/* ลูกศรชี้ลงให้ดูออกว่าเป็นช่องเลือก ไม่ใช่ช่องพิมพ์ธรรมดา — วาดด้วย background
+ * ชุดเดียวกับที่ bootstrap ใช้กับ .form-select จะได้ไม่เพี้ยนจากช่องอื่นในฟอร์ม */
+.ss__input {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%235A6779' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 14px 10px;
+  padding-right: 2.25rem;
+}
+
+.ss__list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(var(--ink-rgb), 0.16);
+}
+
+.ss__opt {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  font-size: var(--fs-sm);
+}
+
+/* ไฮไลต์ตัวที่คีย์บอร์ดชี้อยู่ ต้องเป็นตัวเดียวกับที่เมาส์ hover
+ * (onMouseEnter ย้าย active ตาม) ไม่งั้นมีจุดสนใจสองที่พร้อมกัน */
+.ss__opt--active {
+  background: var(--blue-tint);
+}
+
+.ss__opt--add {
+  color: var(--blue);
+  font-weight: 600;
+  border-top: 1px solid var(--line);
+}
+
+.ss__hint {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ss__empty {
+  padding: 0.5rem 0.75rem;
+  font-size: var(--fs-sm);
+  color: var(--muted);
 }

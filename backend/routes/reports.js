@@ -6,10 +6,10 @@
 
 const express = require('express');
 const { query } = require('../db/pool');
-const { fetchModelRows, fetchModelCheckpoints } = require('../db/queries');
+const { fetchModelRows, fetchModelCheckpoints, fetchModelBaselines } = require('../db/queries');
 const { buildInspectionFilter } = require('../db/queries');
 const { analyze } = require('../services/spcStats');
-const { baselineOf } = require('../services/baseline');
+const { baselineOf, pickBaseline, scopeOf } = require('../services/baseline');
 const { AppError, wrap } = require('../middleware/errorHandler');
 const { filterFrom } = require('./charts');
 
@@ -30,10 +30,14 @@ router.get('/model/:modelId', wrap(async (req, res) => {
   if (!model) throw new AppError('ไม่พบรุ่นนี้', 404);
 
   const filter = filterFrom(req.query);
-  const [checkpoints, rowsByCheckpoint] = await Promise.all([
+  const [checkpoints, rowsByCheckpoint, baselinesByCheckpoint] = await Promise.all([
     fetchModelCheckpoints(modelId, { activeOnly: req.query.all !== '1' }),
     fetchModelRows(modelId, filter),
+    fetchModelBaselines(modelId),
   ]);
+  // ⚠️ baseline แยกรายเครื่อง — ขอบเขตต้องตรงกับตัวกรองที่ใช้ดึงค่าวัดข้างบนเสมอ
+  //    ไม่ตรงเมื่อไหร่คือเอาลิมิตของเครื่องหนึ่งไปวาดทับจุดของอีกเครื่อง
+  const scope = scopeOf(filter);
 
   // สรุปหัวรายงาน — นับจากตาราง inspections ตรง ๆ (1 แถว = 1 ใบตรวจ)
   const { where, params } = buildInspectionFilter(filter);
@@ -50,6 +54,28 @@ router.get('/model/:modelId', wrap(async (req, res) => {
   const total = Number(summary.total_inspections) || 0;
   const ng = Number(summary.ng_inspections) || 0;
 
+  // ── รายการใบตรวจ (โชว์ใบที่ยกเลิกด้วย) ────────────────────────────────
+  //
+  // ⚠️ handler นี้เรียก buildInspectionFilter สองครั้งด้วยคนละ option โดยตั้งใจ ห้ามยุบรวม
+  //    fetchModelRows ข้างบน (กราฟทุกจุดตรวจในหน้านี้) ต้อง **ไม่รวม** ใบที่ยกเลิก
+  //    ส่วนตารางข้างล่างต้อง **รวม** ไม่งั้นกดคืนค่าไม่ได้และคนจะนึกว่าลบจริงไปแล้ว
+  //    ยุบเป็นครั้งเดียวเมื่อไหร่ ใบที่ยกเลิกจะไหลกลับเข้ากราฟเงียบ ๆ
+  const { where: listWhere, params: listParams } = buildInspectionFilter(filter, { includeVoided: true });
+  const [inspections] = await query(
+    `SELECT i.id, i.mo_no, i.lot_no, i.shift, i.subgroup_no, i.inspected_at, i.overall_result,
+            i.voided_at, i.voided_reason,
+            mc.code AS machine_code, mc.name AS machine_name, ins.name AS inspector_name,
+            (SELECT COUNT(*) FROM inspection_results r
+              WHERE r.inspection_id = i.id AND r.judgment = 'NG') AS ng_count
+       FROM inspections i
+       JOIN machines mc    ON mc.id  = i.machine_id
+       JOIN inspectors ins ON ins.id = i.inspector_id
+      WHERE i.model_id = ?${listWhere.length ? ` AND ${listWhere.join(' AND ')}` : ''}
+      ORDER BY i.inspected_at DESC, i.id DESC
+      LIMIT 500`,
+    [Number(modelId), ...listParams]
+  );
+
   const charts = checkpoints.map((checkpoint) => {
     const rows = rowsByCheckpoint.get(checkpoint.id) ?? [];
 
@@ -65,16 +91,16 @@ router.get('/model/:modelId', wrap(async (req, res) => {
       };
     }
 
-    const result = analyze(rows, {
-      usl: checkpoint.usl,
-      lsl: checkpoint.lsl,
-      baseline: baselineOf(checkpoint),
-    });
+    const baselineRows = baselinesByCheckpoint.get(checkpoint.id) ?? [];
+    const baseline = baselineOf(pickBaseline(baselineRows, scope));
+
+    const result = analyze(rows, { usl: checkpoint.usl, lsl: checkpoint.lsl, baseline });
     const ngCount = rows.filter((r) => r.judgment === 'NG').length;
 
     return {
       checkpoint,
-      baseline: baselineOf(checkpoint),
+      baseline,
+      baselines: baselineRows.map(baselineOf),
       ngCount,
       ngRate: rows.length ? ngCount / rows.length : null,
       ...result,
@@ -93,8 +119,12 @@ router.get('/model/:modelId', wrap(async (req, res) => {
       lastAt: summary.last_at,
       // จุดที่ยัง out-of-control อยู่ — เป็นตัวเลขที่หัวหน้างานอยากเห็นก่อนอย่างอื่น
       outOfControlCheckpoints: charts.filter((c) => c.violations?.length > 0).length,
+      // ⚠️ summary กับ charts ข้างบนไม่นับใบที่ยกเลิก แต่ inspections ข้างล่างรวมไว้ด้วย
+      //    ตัวเลขนี้มีไว้ให้หน้าจออธิบายความต่างได้ ไม่งั้นคนนับแถวแล้วสงสัยว่าทำไมไม่ตรง
+      voidedInspections: inspections.filter((i) => i.voided_at).length,
     },
     charts,
+    inspections,
   });
 }));
 

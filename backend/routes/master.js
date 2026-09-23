@@ -3,7 +3,8 @@
 
 const express = require('express');
 const { query, execute, withTransaction } = require('../db/pool');
-const { fetchModelCheckpoints } = require('../db/queries');
+const { fetchModelCheckpoints, fetchModelBaselines } = require('../db/queries');
+const { baselineOf } = require('../services/baseline');
 const { AppError, wrap } = require('../middleware/errorHandler');
 
 const router = express.Router();
@@ -67,7 +68,10 @@ router.get('/models', wrap(async (req, res) => {
 
   const [rows] = await query(
     `SELECT m.*, d.name AS division_name,
-            (SELECT COUNT(*) FROM checkpoints c WHERE c.model_id = m.id AND c.is_active = 1) AS checkpoint_count
+            (SELECT COUNT(*) FROM checkpoints c WHERE c.model_id = m.id AND c.is_active = 1) AS checkpoint_count,
+            -- ใบตรวจที่ยกเลิกไปแล้วของ item นี้ — หน้า Master ใช้โชว์ปุ่ม "ล้างใบที่ยกเลิกแล้ว"
+            (SELECT COUNT(*) FROM inspections i
+              WHERE i.model_id = m.id AND i.voided_at IS NOT NULL) AS voided_count
        FROM models m
        JOIN divisions d ON d.id = m.division_id
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
@@ -89,10 +93,20 @@ router.get('/models/:id', wrap(async (req, res) => {
   );
   if (!model) throw new AppError('ไม่พบ item นี้', 404);
 
-  const checkpoints = await fetchModelCheckpoints(req.params.id, {
-    activeOnly: req.query.all !== '1',
+  // ⚠️ baseline ไม่ได้อยู่บนแถว checkpoint แล้ว (แยกรายเครื่องไปอยู่ checkpoint_baselines)
+  //    ต้องแนบมาด้วย ไม่งั้นหน้า Master Setup จะโชว์ว่า "ยังไม่ล็อก" ทุกจุดทั้งที่ล็อกไว้แล้ว
+  const [checkpoints, baselinesByCheckpoint] = await Promise.all([
+    fetchModelCheckpoints(req.params.id, { activeOnly: req.query.all !== '1' }),
+    fetchModelBaselines(req.params.id),
+  ]);
+
+  res.json({
+    model,
+    checkpoints: checkpoints.map((cp) => ({
+      ...cp,
+      baselines: (baselinesByCheckpoint.get(cp.id) ?? []).map(baselineOf),
+    })),
   });
-  res.json({ model, checkpoints });
 }));
 
 // ── เขียน (generic CRUD) ──────────────────────────────────────────────────
@@ -139,6 +153,42 @@ router.delete('/delete', wrap(async (req, res) => {
 
   // FK ของทุกเส้นที่ชี้จากใบตรวจมาหา master เป็น RESTRICT โดยตั้งใจ
   // ลบ master ที่มีใบตรวจอ้างอยู่จะถูก DB ปฏิเสธ แล้ว errorHandler แปลงเป็นข้อความบอกให้ปิดใช้งานแทน
+  //
+  // สองตารางข้างล่างนับก่อนแล้วบอกทางไปต่อเอง — ข้อความกลาง ๆ จาก errorHandler
+  // บอกแค่ว่า "ลบไม่ได้" ซึ่งเป็นทางตัน คนที่เจอไม่รู้ว่าติดกี่ใบและต้องทำอะไรต่อ
+  if (table === 'models') {
+    const [[counts]] = await query(
+      `SELECT COUNT(*) AS total, SUM(voided_at IS NOT NULL) AS voided
+         FROM inspections WHERE model_id = ?`,
+      [Number(id)]
+    );
+    const total = Number(counts.total) || 0;
+    if (total > 0) {
+      const voided = Number(counts.voided) || 0;
+      throw new AppError(
+        `ลบไม่ได้ — item นี้มีใบตรวจ ${total} ใบ (ยกเลิกไปแล้ว ${voided} ใบ) · ` +
+        `ยกเลิกใบที่ไม่ต้องการก่อนแล้วกด "ล้างใบที่ยกเลิกแล้ว" หรือปิดใช้งาน item นี้แทนการลบ`,
+        400
+      );
+    }
+  }
+  if (table === 'checkpoints') {
+    // ⚠️ จุดตรวจที่มีผลตรวจแล้วลบไม่ได้ตลอดกาล และตั้งใจให้เป็นแบบนั้น
+    //    ลบทิ้งแล้วใบตรวจเก่าที่เคยบันทึก 5 จุดจะเหลือ 4 กลายเป็นใบที่กรอกไม่ครบย้อนหลัง
+    //    ซึ่งคือสิ่งที่ validateSubmission ปฏิเสธไม่ให้เกิดตั้งแต่ตอนบันทึก
+    const [[used]] = await query(
+      'SELECT COUNT(*) AS n FROM inspection_results WHERE checkpoint_id = ?',
+      [Number(id)]
+    );
+    if (Number(used.n) > 0) {
+      throw new AppError(
+        `ลบไม่ได้ — จุดตรวจนี้มีผลวัดบันทึกไว้แล้ว ${used.n} ค่า ลบทิ้งจะทำให้ใบตรวจเก่ากลายเป็นใบที่กรอกไม่ครบ · ` +
+        'ให้เอาเครื่องหมาย "ใช้งาน" ออกแทน จุดนี้จะไม่โผล่ในใบตรวจใบใหม่แต่ของเก่ายังอ่านได้',
+        400
+      );
+    }
+  }
+
   await execute(`DELETE FROM ${table} WHERE id = ?`, [Number(id)]);
 
   notifyMasterChanged(req);

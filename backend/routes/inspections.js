@@ -2,9 +2,9 @@
 'use strict';
 
 const express = require('express');
-const { query, withTransaction } = require('../db/pool');
+const { query, execute, withTransaction } = require('../db/pool');
 const { fetchModelCheckpoints } = require('../db/queries');
-const { evaluateCheckpoint, summarize, validateSubmission, shiftFromDate } = require('../services/judgment');
+const { evaluateCheckpoint, summarize, validateSubmission, isShift } = require('../services/judgment');
 const { AppError, wrap } = require('../middleware/errorHandler');
 
 const router = express.Router();
@@ -35,7 +35,13 @@ router.post('/', wrap(async (req, res) => {
   const moNo = String(b.mo_no ?? '').trim();
   if (!moNo) throw new AppError('ยังไม่ได้กรอก MO No.', 400);
 
-  const shift = b.shift === 'M' || b.shift === 'N' ? b.shift : shiftFromDate();
+  // ⚠️ ไม่เดากะให้เมื่อ client ไม่ส่งมาอีกแล้ว — มี 6 กะ เดาจากนาฬิกาไม่ได้
+  //    กะที่เดาผิดคือหลักฐานการตรวจที่ผิดโดยไม่มีอะไรทัก จึงปฏิเสธเหมือนช่องบังคับอื่น
+  //    แยกสองข้อความ: ว่าง = ยังไม่ได้เลือก · มีค่าแต่ไม่ผ่าน = ลิสต์ฝั่ง client หลุดจาก ENUM
+  //    (บอกค่าที่ส่งมาไปด้วย ไม่งั้นไล่หาว่าใครหลุดไม่เจอ)
+  if (!b.shift) throw new AppError('ยังไม่ได้เลือกกะ', 400);
+  if (!isShift(b.shift)) throw new AppError(`กะ "${b.shift}" ไม่ใช่กะที่ระบบรับ`, 400);
+  const shift = b.shift;
 
   // ⚠️ mo_* = สิ่งที่ IPBASS MOPLAN ตอบมาสำหรับ MO ใบนี้ เก็บเป็น snapshot เฉย ๆ
   //    ไม่ validate ไม่เอาไปตัดสินอะไร และ "ไม่มี" เป็นเรื่องปกติ (IPBASS ล่ม/ยังไม่ได้ตั้ง dept)
@@ -137,6 +143,10 @@ router.post('/', wrap(async (req, res) => {
   req.app.get('io')?.to(`model:${Number(b.model_id)}`).emit('inspection_saved', {
     inspectionId: saved.inspectionId,
     modelId: Number(b.model_id),
+    // ⚠️ Dashboard กรองตามเครื่องได้ (?machine=) — ไม่มี machineId มาด้วยจะแยกไม่ออกว่าใบนี้
+    //    เป็นของเครื่องที่กำลังดูอยู่ไหม แล้วต้องโหลดกราฟใหม่ทุกครั้งที่เครื่องไหนก็ได้บันทึก
+    //    ส่งแค่ id ไม่ส่งชื่อ — client มีลิสต์เครื่องจาก /master/lookups อยู่แล้ว
+    machineId: Number(b.machine_id),
     subgroupNo: saved.subgroupNo,
     moNo,
     shift,
@@ -162,9 +172,125 @@ router.post('/', wrap(async (req, res) => {
   });
 }));
 
+// ── ยกเลิก / คืนค่า ───────────────────────────────────────────────────────
+//
+// ⚠️ ใบตรวจ "ยกเลิก" ไม่ใช่ "ลบ" — แถวอยู่ต่อใน DB แต่ถูกตัดออกจากกราฟ/รายงาน/
+//    Excel/Cp-Cpk/baseline ที่ buildInspectionFilter() จุดเดียว
+//    หลักฐานการตรวจต้องไม่หายไปเฉย ๆ เพราะมีคนกดปุ่ม และต้องคืนค่าได้
+//
+// ⚠️ ห้ามแตะการแจก subgroup_no — MAX+1 ยังต้องนับรวมใบที่ยกเลิกเหมือนเดิม
+//    ไม่งั้นเลขถูกใช้ซ้ำแล้วชน UNIQUE(model_id, mo_no, subgroup_no) กับใบที่ยกเลิกไว้
+//    ผลคือเลข subgroup มีช่องว่างได้หลังยกเลิก ซึ่งถูกต้อง — หายไปหนึ่งใบคือหายไปหนึ่งจุด
+
+// จุดตรวจที่ baseline ถูกล็อกไว้ "คร่อม" ใบที่เพิ่งยกเลิก
+//
+// ⚠️ xbarbar / rbar / subgroups ใน checkpoint_baselines เป็นตัวเลขที่ freeze ไว้
+//    ไม่มีอะไรคำนวณใหม่ให้ ยกเลิกใบที่อยู่ในช่วงนั้นแล้วเส้น control limit จะยังมาจาก
+//    ข้อมูลที่ระบบเพิ่งบอกว่าไม่นับ — ต้องบอกให้คนไป re-baseline
+//    **ห้ามล้าง baseline ให้เอง** เส้นลิมิตเปลี่ยนได้เมื่อคนสั่งเท่านั้น
+//
+// ⚠️ ใบเดียวกระทบได้ถึงสองชุด: ชุดของเครื่องที่ตรวจใบนั้น และชุด "รวมทุกเครื่อง" (machine_id = 0)
+//    ซึ่งคิดจากข้อมูลของทุกเครื่องรวมกัน — เช็คแค่ชุดเดียวคือปล่อยอีกชุดค้างไว้เงียบ ๆ
+//    ชื่อที่คืนไปจึงติดขอบเขตไว้ด้วย ไม่งั้นคนเห็นชื่อจุดตรวจแล้วไม่รู้ว่าต้อง re-baseline ของใคร
+const staleBaselineCheckpoints = async (inspectionId) => {
+  const [rows] = await query(
+    `SELECT DISTINCT c.name, b.machine_id, mc.code AS machine_code
+       FROM inspection_results r
+       JOIN checkpoints          c  ON c.id = r.checkpoint_id
+       JOIN inspections          i  ON i.id = r.inspection_id
+       JOIN checkpoint_baselines b  ON b.checkpoint_id = c.id
+                                   AND b.machine_id IN (0, i.machine_id)
+       LEFT JOIN machines        mc ON mc.id = b.machine_id
+      WHERE r.inspection_id = ?
+        AND i.inspected_at BETWEEN b.baseline_from AND b.baseline_to`,
+    [inspectionId]
+  );
+  return rows.map((r) => (
+    Number(r.machine_id) === 0
+      ? `${r.name} (รวมทุกเครื่อง)`
+      : `${r.name} (${r.machine_code ?? `เครื่อง #${r.machine_id}`})`
+  ));
+};
+
+router.put('/:id/void', wrap(async (req, res) => {
+  if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const id = Number(req.params.id);
+  const voided = req.body?.voided !== false;
+  const reason = String(req.body?.reason ?? '').trim();
+
+  // ไม่มี auth ในระบบนี้ เหตุผลจึงเป็นความรับผิดชอบชิ้นเดียวที่เหลืออยู่ — บังคับกรอก
+  if (voided && !reason) throw new AppError('ต้องระบุเหตุผลที่ยกเลิก', 400);
+
+  const [[inspection]] = await query(
+    'SELECT id, model_id, machine_id, mo_no, subgroup_no, voided_at FROM inspections WHERE id = ?',
+    [id]
+  );
+  // ใบนี้อาจถูกล้างทิ้งจริงไปแล้วโดยคนอื่น (ชั้น 2) ขณะที่หน้าจอเรายังค้างปุ่มคืนค่าอยู่
+  if (!inspection) throw new AppError('ไม่พบใบตรวจนี้ — อาจถูกล้างทิ้งไปแล้ว กดรีเฟรชเพื่อดูรายการล่าสุด', 404);
+
+  // เช็คก่อนอัปเดต เพราะต้องรู้ว่าใบนี้อยู่ในช่วง baseline ไหนบ้าง (ทั้งตอนยกเลิกและตอนคืนค่า)
+  const staleBaselines = await staleBaselineCheckpoints(id);
+
+  await execute(
+    voided
+      ? 'UPDATE inspections SET voided_at = NOW(), voided_reason = ? WHERE id = ?'
+      : 'UPDATE inspections SET voided_at = NULL, voided_reason = NULL WHERE id = ?',
+    voided ? [reason, id] : [id]
+  );
+
+  const [checkpointRows] = await query(
+    'SELECT DISTINCT checkpoint_id FROM inspection_results WHERE inspection_id = ?',
+    [id]
+  );
+
+  // Dashboard ที่เปิดค้างอยู่ต้องขยับเอง ไม่งั้นจะยังวาดจุดที่ยกเลิกไปแล้ว
+  // ใช้ event เดิม ความหมายตรงอยู่แล้ว: "ข้อมูลของรุ่นนี้เปลี่ยน โหลดกราฟที่กระทบใหม่"
+  req.app.get('io')?.to(`model:${inspection.model_id}`).emit('inspection_saved', {
+    inspectionId: id,
+    modelId: inspection.model_id,
+    machineId: inspection.machine_id,
+    subgroupNo: inspection.subgroup_no,
+    moNo: inspection.mo_no,
+    voided,
+    checkpointIds: checkpointRows.map((r) => r.checkpoint_id),
+    ngCheckpointIds: [],
+  });
+
+  res.json({ success: true, voided, staleBaselines });
+}));
+
+// ชั้น 2 — ล้างใบที่ "ยกเลิกไปแล้ว" ออกจาก DB จริง
+//
+// มีไว้เพื่อให้ลบ item ที่ติด FK RESTRICT ได้ โดยไม่ต้อง force delete ทับหลักฐานจริง
+// ลบได้เฉพาะใบที่ถูกประกาศไปแล้วว่าไม่นับเท่านั้น · inspection_results หายตาม CASCADE
+// รับ model_id ใน body ให้เข้ารูปเดียวกับ DELETE /master/delete
+router.delete('/voided', wrap(async (req, res) => {
+  const { model_id: modelId } = req.body;
+  if (!isIntLike(modelId)) throw new AppError('model_id ไม่ถูกต้อง', 400);
+
+  const [result] = await execute(
+    'DELETE FROM inspections WHERE model_id = ? AND voided_at IS NOT NULL',
+    [Number(modelId)]
+  );
+
+  // ⚠️ machineId = null โดยตั้งใจ — การล้างใบที่ยกเลิกกวาดทุกเครื่องของรุ่นนี้
+  //    ฝั่ง client ต้องอ่าน null ว่า "โหลดใหม่เสมอ" ไม่ใช่ "ไม่ตรงกับเครื่องที่ดูอยู่"
+  req.app.get('io')?.to(`model:${Number(modelId)}`).emit('inspection_saved', {
+    modelId: Number(modelId),
+    machineId: null,
+    purged: result.affectedRows,
+    checkpointIds: [],
+    ngCheckpointIds: [],
+  });
+
+  res.json({ success: true, deleted: result.affectedRows });
+}));
+
 // ── อ่าน ──────────────────────────────────────────────────────────────────
 
 // รายการใบตรวจล่าสุด — ตาราง log ใต้ใบตรวจใช้เส้นนี้
+// ⚠️ เส้นนี้ **โชว์ใบที่ยกเลิกด้วย** โดยตั้งใจ — ไม่งั้นกดคืนค่าไม่ได้ และคนจะนึกว่าลบจริงไปแล้ว
+//    (ต่างจาก charts/reports ที่ตัดทิ้งผ่าน buildInspectionFilter)
 router.get('/', wrap(async (req, res) => {
   const { model_id: modelId, mo_no: moNo, from, to } = req.query;
   const limit = Math.min(Number(req.query.limit) || 50, 200);

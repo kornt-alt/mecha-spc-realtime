@@ -7,6 +7,7 @@
 //   node db/migrate.js schema.sql        สร้างตารางใหม่ (รันซ้ำได้ ปลอดภัย)
 //   node db/migrate.js seed.sql          ใส่ master data ตัวอย่างไว้เทส
 //   node db/migrate.js drop-legacy.sql   ⚠️ ลบตารางเดิมถาวร ต้องยืนยันก่อน
+//   node db/migrate.js purge-inspections.sql  ⚠️ ล้างผลตรวจทั้งระบบ + baseline ต้องยืนยันก่อน
 'use strict';
 
 const fs = require('fs');
@@ -16,7 +17,7 @@ const mysql = require('mysql2/promise');
 const env = require('../config/env');
 
 // ไฟล์ที่ลบข้อมูล ต้องให้คนยืนยันด้วยมือก่อนเสมอ
-const DESTRUCTIVE = new Set(['drop-legacy.sql']);
+const DESTRUCTIVE = new Set(['drop-legacy.sql', 'purge-inspections.sql']);
 
 const confirm = (question) =>
   new Promise((resolve) => {
@@ -31,7 +32,7 @@ const main = async () => {
   const fileArg = process.argv[2];
   if (!fileArg) {
     console.error('ใช้: node db/migrate.js <ไฟล์.sql>');
-    console.error('มีให้เลือก: schema.sql | seed.sql | drop-legacy.sql');
+    console.error('มีให้เลือก: schema.sql | seed.sql | drop-legacy.sql | purge-inspections.sql');
     process.exit(1);
   }
 

@@ -7,8 +7,10 @@ import { Container, Row, Col, Card, Form, Button, Alert, Spinner } from 'react-b
 import { apiCall, apiDownload } from '../utils/api';
 import { normalizeRows, normalizeChart } from '../utils/normalize';
 import { SHIFTS } from '../utils/config';
+import SearchSelect from './SearchSelect';
 import { useModelParam } from '../utils/useModelParam';
 import ControlChart from './ControlChart';
+import InspectionList from './InspectionList';
 import SpecValue from './SpecValue';
 
 // เกณฑ์ที่ฟอร์มของลูกค้าเขียนไว้ตรง ๆ: "CTF, min Cpk > 1.33"
@@ -53,7 +55,8 @@ const ReportPage = () => {
     setLoading(true);
     try {
       const data = await apiCall(`/reports/model/${id}${toQuery(f)}`);
-      setReport({ ...data, charts: data.charts.map(normalizeChart) });
+      // inspections ?? [] — กัน backend รุ่นเก่าที่ยังไม่ส่ง field นี้มา หน้าจะได้ไม่ขาว
+      setReport({ ...data, charts: data.charts.map(normalizeChart), inspections: data.inspections ?? [] });
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -81,6 +84,13 @@ const ReportPage = () => {
     onChange: (e) => setFilter((f) => ({ ...f, [key]: e.target.value })),
   });
 
+  // SearchSelect ส่งค่ามาตรง ๆ ไม่ใช่ event
+  const pick = (key) => (value) => setFilter((f) => ({ ...f, [key]: value }));
+
+  // ⚠️ ตัวกรองต้องมีทางกลับไป "ทั้งหมด" — ตัวเลือกว่างจึงเป็นแถวจริงในลิสต์
+  //    ไม่ใช่แค่ placeholder (placeholder เลือกกลับไม่ได้เมื่อเลือกอะไรไปแล้ว)
+  const ALL = { value: '', label: 'ทั้งหมด' };
+
   const dateIncomplete = Boolean(filter.from) !== Boolean(filter.to);
   const s = report?.summary;
 
@@ -97,13 +107,19 @@ const ReportPage = () => {
         <Card.Body className="pb-2">
           <Row className="g-2 align-items-end">
             <Col md={3}>
-              <Form.Label className="small mb-1">model</Form.Label>
-              <Form.Select value={modelId} onChange={(e) => setModelId(e.target.value)}>
-                <option value="">— เลือก model —</option>
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>{m.item_no} — {m.item_name} ({m.division_name})</option>
-                ))}
-              </Form.Select>
+              <Form.Label htmlFor="report-model" className="small mb-1">model</Form.Label>
+              <SearchSelect
+                id="report-model"
+                value={modelId}
+                onChange={setModelId}
+                placeholder="— เลือก model —"
+                emptyText="ไม่พบ item ที่ค้นหา"
+                options={models.map((m) => ({
+                  value: String(m.id),
+                  label: `${m.item_no} — ${m.item_name}`,
+                  hint: m.division_name ?? '',
+                }))}
+              />
             </Col>
             <Col md={2}>
               <Form.Label className="small mb-1">ตั้งแต่วันที่</Form.Label>
@@ -125,20 +141,32 @@ const ReportPage = () => {
               </Form.Select>
             </Col>
             <Col md={2}>
-              <Form.Label className="small mb-1">ผู้ตรวจ</Form.Label>
-              <Form.Select {...field('inspector_id')}>
-                <option value="">ทั้งหมด</option>
-                {lookups.inspectors.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-              </Form.Select>
+              <Form.Label htmlFor="report-inspector" className="small mb-1">ผู้ตรวจ</Form.Label>
+              <SearchSelect
+                id="report-inspector"
+                value={filter.inspector_id}
+                onChange={pick('inspector_id')}
+                placeholder="ทั้งหมด"
+                emptyText="ไม่พบผู้ตรวจที่ค้นหา"
+                options={[ALL, ...lookups.inspectors.map((i) => ({
+                  value: String(i.id), label: i.name, hint: i.emp_code ?? '',
+                }))]}
+              />
             </Col>
           </Row>
           <Row className="g-2 align-items-end mt-1">
             <Col md={3}>
-              <Form.Label className="small mb-1">เครื่อง</Form.Label>
-              <Form.Select {...field('machine_id')}>
-                <option value="">ทั้งหมด</option>
-                {lookups.machines.map((m) => <option key={m.id} value={m.id}>{m.code} — {m.name}</option>)}
-              </Form.Select>
+              <Form.Label htmlFor="report-machine" className="small mb-1">เครื่อง</Form.Label>
+              <SearchSelect
+                id="report-machine"
+                value={filter.machine_id}
+                onChange={pick('machine_id')}
+                placeholder="ทั้งหมด"
+                emptyText="ไม่พบเครื่องที่ค้นหา"
+                options={[ALL, ...lookups.machines.map((m) => ({
+                  value: String(m.id), label: m.code, hint: m.name ?? '',
+                }))]}
+              />
             </Col>
             <Col md="auto">
               <Button onClick={() => setApplied(filter)} disabled={!modelId}>ค้นหา</Button>
@@ -214,7 +242,7 @@ const ReportPage = () => {
                   <tr>
                     <th scope="col" className="sheet__seq">#</th>
                     <th scope="col" className="sheet__name">จุดตรวจ</th>
-                    <th scope="col" className="sheet__spec">สเปก</th>
+                    <th scope="col" className="sheet__spec">Spec</th>
                     <th scope="col" className="text-end">n</th>
                     <th scope="col" className="text-end">Cp</th>
                     <th scope="col" className="text-end">Cpk</th>
@@ -281,6 +309,28 @@ const ReportPage = () => {
               </Col>
             ))}
           </Row>
+
+          {/* หน้านี้กรองวัน/MO/กะ/เครื่อง/ผู้ตรวจได้ จึงเป็นทางเดียวที่ไล่เก็บใบเก่าที่กรอกผิดได้
+              (ตารางใต้ใบตรวจโชว์แค่ 10 ใบล่าสุดของ item ที่เลือกอยู่) */}
+          <Card className="mt-3">
+            <Card.Header className="d-flex align-items-center gap-2 flex-wrap">
+              <span>ใบตรวจตามตัวกรองนี้</span>
+              <span className="text-muted small">
+                {report.inspections.length} ใบ
+                {/* ⚠️ ตัวเลขสรุปข้างบนกับกราฟไม่นับใบที่ยกเลิก แต่ตารางนี้โชว์ครบ
+                    ไม่บอกไว้คนจะนับแถวแล้วสงสัยว่าทำไมไม่ตรงกับหัวรายงาน */}
+                {report.summary.voidedInspections > 0 &&
+                  ` (ยกเลิกแล้ว ${report.summary.voidedInspections} ใบ — ไม่ถูกนับในสรุป กราฟ และไฟล์ Excel ข้างบน)`}
+              </span>
+            </Card.Header>
+            <Card.Body>
+              <InspectionList
+                rows={report.inspections}
+                onChanged={() => load(modelId, applied)}
+                emptyText="ไม่มีใบตรวจที่ตรงกับตัวกรองนี้"
+              />
+            </Card.Body>
+          </Card>
         </>
       )}
     </Container>

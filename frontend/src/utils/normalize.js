@@ -36,8 +36,26 @@ const normalizeRow = (row) => {
 
 export const normalizeRows = (rows) => (Array.isArray(rows) ? rows.map(normalizeRow) : []);
 
-export const normalizeCheckpoint = normalizeRow;
-export const normalizeCheckpoints = normalizeRows;
+// baseline ที่ freeze ไว้ — มาจาก checkpoint_baselines ผ่าน baselineOf() ฝั่ง server
+// ⚠️ xbarbar/rbar เป็นคอลัมน์ decimal มาเป็น string เหมือนทุกที่ ต้องผ่าน toNum ด้วย
+//    machineId = 0 คือชุด "รวมทุกเครื่อง" ไม่ใช่รหัสเครื่องจริง
+const normalizeBaseline = (b) => (b ? {
+  ...b,
+  xbarbar: toNum(b.xbarbar),
+  rbar: toNum(b.rbar),
+  n: toNum(b.n),
+  subgroups: toNum(b.subgroups),
+  machineId: toNum(b.machineId) ?? 0,
+} : b);
+
+export const normalizeCheckpoint = (row) => {
+  const out = normalizeRow(row);
+  if (Array.isArray(out?.baselines)) out.baselines = out.baselines.map(normalizeBaseline);
+  return out;
+};
+
+export const normalizeCheckpoints = (rows) =>
+  (Array.isArray(rows) ? rows.map(normalizeCheckpoint) : []);
 
 // ผลจาก /api/charts/:id — จุดบนกราฟกับลิมิตคำนวณมาจาก server แล้ว เป็น number อยู่แล้ว
 // เหลือแค่ checkpoint กับ baseline ที่มาจากตารางตรง ๆ จึงยังเป็น string
@@ -46,9 +64,8 @@ export const normalizeChart = (chart) => {
   return {
     ...chart,
     checkpoint: chart.checkpoint ? normalizeRow(chart.checkpoint) : null,
-    baseline: chart.baseline
-      ? { ...chart.baseline, xbarbar: toNum(chart.baseline.xbarbar), rbar: toNum(chart.baseline.rbar), n: toNum(chart.baseline.n) }
-      : null,
+    baseline: normalizeBaseline(chart.baseline) ?? null,
+    baselines: Array.isArray(chart.baselines) ? chart.baselines.map(normalizeBaseline) : undefined,
   };
 };
 

@@ -17,6 +17,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
 } from 'recharts';
 import { Card, Badge, Alert } from 'react-bootstrap';
+import { RULE_TEXT } from '../utils/spcRules';
 
 // ⚠️ ต้องตรงกับ token ใน src/styles/tokens.css — recharts รับเป็นสตริงสีเท่านั้น
 //    ใส่ var(--x) ตรง ๆ ไม่ได้เพราะค่าถูกเขียนลง attribute ของ SVG
@@ -59,18 +60,6 @@ const cpkClass = (v) => {
   if (v >= CPK_TARGET) return '';           // ถึงเกณฑ์ = ปกติ ไม่ต้องมีสี
   if (v >= 1.0) return 'text-warning';      // ต่ำกว่าเกณฑ์แต่ยังไม่วิกฤต
   return 'text-danger';
-};
-
-// คำอธิบายกฎ Nelson แบบสั้น — ตัวเลขเปล่า ๆ ไม่มีใครจำได้ว่าข้อไหนคืออะไร
-const RULE_TEXT = {
-  1: 'หลุด 3σ',
-  2: '9 จุดอยู่ข้างเดียว',
-  3: '6 จุดไต่ทางเดียว',
-  4: '14 จุดสลับขึ้นลง',
-  5: '2 ใน 3 จุดเกิน 2σ',
-  6: '4 ใน 5 จุดเกิน 1σ',
-  7: '15 จุดชิดเส้นกลาง',
-  8: '8 จุดห่างเส้นกลาง',
 };
 
 const ChartTooltip = ({ active, payload, unit }) => {

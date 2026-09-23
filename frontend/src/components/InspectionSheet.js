@@ -17,10 +17,10 @@ import { Container, Row, Col, Form, Button, Alert, Spinner } from 'react-bootstr
 import { apiCall } from '../utils/api';
 import { on } from '../utils/socket';
 import { normalizeRows, normalizeCheckpoints, normalizeChart, judgeLocal, toNum } from '../utils/normalize';
-import { currentShift } from '../utils/config';
 import { readStation, writeStation, reconcileStation, isStationReady } from '../utils/station';
 import { masterHref } from '../utils/useModelParam';
 import MoLookupBar from './MoLookupBar';
+import InspectionList from './InspectionList';
 import SpecValue from './SpecValue';
 import StationBar from './StationBar';
 import ControlChart from './ControlChart';
@@ -39,10 +39,7 @@ const InspectionSheet = () => {
   const [lookups, setLookups] = useState({ divisions: [], machines: [], inspectors: [] });
   const [models, setModels] = useState([]);
   const [checkpoints, setCheckpoints] = useState([]);
-  const [station, setStation] = useState(() => {
-    const s = readStation();
-    return { ...s, shift: s.shift || currentShift() };
-  });
+  const [station, setStation] = useState(readStation);
   const [entry, setEntry] = useState({ mo_no: '', lot_no: '', remark: '' });
   // สิ่งที่ IPBASS ตอบมาสำหรับ MO ปัจจุบัน (null = ยังไม่ได้ค้น / ค้นแล้วไม่เจอ / ค้นไม่ได้)
   // ส่งไปกับ payload เป็น snapshot เฉย ๆ ไม่มีผลต่อการตัดสิน OK/NG
@@ -72,18 +69,37 @@ const InspectionSheet = () => {
       // ⚠️ สถานีที่จำไว้อาจชี้ไป master ที่ถูกปิดใช้งาน/ลบไปแล้ว ต้องกรองก่อนใช้
       //    ไม่งั้น <Form.Select> มี value ที่ไม่มี <option> รองรับ = ช่องว่างที่อธิบายตัวเองไม่ได้
       setStation((prev) => {
-        const fixed = reconcileStation(prev, {
+        return reconcileStation(prev, {
           models: modelRows,
           machines: lk.machines ?? [],
           inspectors: lk.inspectors ?? [],
         });
-        return { ...fixed, shift: fixed.shift || currentShift() };
       });
       masterLoaded.current = true;
     } catch (e) {
       setMsg({ variant: 'danger', text: `โหลดข้อมูลตั้งต้นไม่สำเร็จ: ${e.message}` });
     }
   }, []);
+
+  // เพิ่มผู้ตรวจใหม่จากแถบสถานี — คนที่ยังไม่มีในระบบคือทางตันของคนที่กำลังจะกรอกใบตรวจ
+  // ⚠️ ต้องโหลด master ใหม่ก่อนคืน id ไม่งั้น StationBar เลือก id ที่ยังไม่มีในลิสต์ของตัวเอง
+  //    แล้วช่องจะว่างทั้งที่เพิ่มสำเร็จ (กับดักเดียวกับ <Form.Select> ที่ value ไม่มี option รองรับ)
+  const addInspector = useCallback(async (data) => {
+    const res = await apiCall('/master/add', {
+      method: 'POST',
+      body: {
+        table: 'inspectors',
+        data: {
+          emp_code: data.emp_code,
+          name: data.name,
+          division_id: data.division_id || null,
+          is_active: 1,
+        },
+      },
+    });
+    await loadMaster();
+    return res.id;
+  }, [loadMaster]);
 
   useEffect(() => { loadMaster(); }, [loadMaster]);
   useEffect(() => on('master_updated', loadMaster), [loadMaster]);
@@ -338,7 +354,9 @@ const InspectionSheet = () => {
         models={models}
         machines={lookups.machines ?? []}
         inspectors={lookups.inspectors ?? []}
+        divisions={lookups.divisions ?? []}
         onChange={setStation}
+        onAddInspector={addInspector}
         ready={ready}
       />
 
@@ -532,46 +550,15 @@ const InspectionSheet = () => {
           <div className="page-head">
             <h2>ข้อมูลล่าสุดของ model นี้</h2>
           </div>
-          <div className="sheet-wrap" style={{ maxHeight: 'none' }}>
-            <table className="sheet">
-              <thead>
-                <tr>
-                  <th scope="col">เวลา</th>
-                  <th scope="col">MO</th>
-                  <th scope="col">Lot</th>
-                  <th scope="col">Subgroup</th>
-                  <th scope="col">Shift</th>
-                  <th scope="col">M/C</th>
-                  <th scope="col">ผู้ตรวจสอบ</th>
-                  <th scope="col">จุด NG</th>
-                  <th scope="col">ผล</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((h) => (
-                  <tr key={h.id}>
-                    <td className="num">
-                      {h.inspected_at
-                        ? new Date(h.inspected_at).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })
-                        : '—'}
-                    </td>
-                    <td>{h.mo_no ?? '—'}</td>
-                    <td>{h.lot_no ?? '—'}</td>
-                    <td className="num">#{h.subgroup_no}</td>
-                    <td>{h.shift}</td>
-                    <td>{h.machine_name ?? '—'}</td>
-                    <td>{h.inspector_name ?? '—'}</td>
-                    <td className="num">{h.ng_count ?? 0}</td>
-                    <td>
-                      <span className={`verdict ${h.overall_result === 'NG' ? 'verdict--ng' : 'verdict--ok'}`}>
-                        {h.overall_result}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {/* กรอกผิดแล้วกดยกเลิกได้จากตรงนี้เลย — แถวไม่หาย แค่ถูกตัดออกจากกราฟ
+              โหลดทั้งประวัติและกราฟใหม่หลังยกเลิก เพราะทั้งคู่เปลี่ยนพร้อมกัน */}
+          <InspectionList
+            rows={history}
+            onChanged={async () => {
+              await loadHistory(station.modelId);
+              await loadCharts(station.modelId);
+            }}
+          />
         </section>
       )}
     </Container>

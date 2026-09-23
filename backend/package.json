@@ -9,6 +9,7 @@
     "db:apply": "node db/migrate.js schema.sql",
     "db:seed": "node db/migrate.js seed.sql",
     "db:drop-legacy": "node db/migrate.js drop-legacy.sql",
+    "db:purge-inspections": "node db/migrate.js purge-inspections.sql",
     "test": "node --test"
   },
   "dependencies": {

@@ -3,6 +3,7 @@
 // สองเรื่องที่ต้องไม่พัง เพราะพังแล้วใบตรวจเปิดไม่ได้เลย:
 //   1. อ่าน localStorage ไม่ได้ / ข้อมูลเสีย ต้องคืนค่าว่าง ไม่ใช่ throw
 //   2. id ที่จำไว้ชี้ไป master ที่ถูกปิดใช้งานไปแล้ว ต้องถูกตัดทิ้ง
+import { SHIFTS } from './config';
 import { readStation, writeStation, clearStation, reconcileStation, isStationReady } from './station';
 
 beforeEach(() => localStorage.clear());
@@ -42,6 +43,14 @@ test('เขียนไม่ได้ (โควตาเต็ม) → กล
 test('กะที่ไม่ใช่ M หรือ N ถือว่าไม่มีค่า', () => {
   localStorage.setItem('spc.station', JSON.stringify({ modelId: '1', shift: 'X' }));
   expect(readStation().shift).toBe('');
+});
+
+// ของเดิมเช็ค 'M'/'N' ตรง ๆ พอเพิ่มกะ A/B/C/D เข้ามา กะที่จำไว้จะถูกโยนทิ้งเงียบ ๆ ทุกครั้งที่เปิดหน้า
+test('จำกะได้ทุกรหัสที่อยู่ใน SHIFTS ไม่ใช่แค่ M/N', () => {
+  for (const code of SHIFTS.map((s) => s.code)) {
+    localStorage.setItem('spc.station', JSON.stringify({ modelId: '1', shift: code }));
+    expect(readStation().shift).toBe(code);
+  }
 });
 
 test('reconcile ตัด id ที่ไม่มีอยู่ในรายการจริงทิ้ง แต่เก็บกะไว้', () => {

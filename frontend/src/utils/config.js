@@ -7,13 +7,19 @@ export const API_ORIGIN = process.env.REACT_APP_API_ORIGIN || '';
 // prefix ที่แอปถูก mount ไว้ ต้องตรงกับ backend, homepage และ Router basename
 export const APP_BASE = '/Mecha-Spc-Realtime';
 
-// กะการทำงาน — ต้องตรงกับ ENUM('M','N') ของคอลัมน์ inspections.shift ฝั่ง DB
-// M = 07:00-18:59, N = 19:00-06:59 (ใช้ให้ตรงกับที่ QC_MECHA2 ใช้อยู่)
+// กะการทำงาน — ⚠️ ต้องตรงกับ ENUM ของคอลัมน์ inspections.shift ใน schema.sql
+// และกับ SHIFT_CODES ใน backend/services/judgment.js · แก้ที่ไหนต้องแก้ครบทั้งสามที่
+// ไม่งั้นเลือกได้บนหน้าจอแต่กดบันทึกแล้ว server ปฏิเสธ
 export const SHIFTS = [
-  { code: 'M', label: 'กะเช้า (M)' },
-  { code: 'N', label: 'กะดึก (N)' },
+  { code: 'M', label: 'M' },
+  { code: 'N', label: 'N' },
+  { code: 'A', label: 'A' },
+  { code: 'B', label: 'B' },
+  { code: 'C', label: 'C' },
+  { code: 'D', label: 'D' },
 ];
 
-// เดากะจากเวลาปัจจุบัน — ต้องให้ผลตรงกับ shiftFromDate() ใน backend/services/judgment.js
-// (ฝั่ง server เป็นตัวตัดสินจริงถ้า client ไม่ส่งมา ตรงนี้แค่เลือกค่าเริ่มต้นให้ในฟอร์ม)
-export const currentShift = (d = new Date()) => (d.getHours() >= 7 && d.getHours() < 19 ? 'M' : 'N');
+// ⚠️ เคยมี currentShift() เดากะจากนาฬิกามาเติมให้ในฟอร์ม ถอดออกแล้วโดยตั้งใจ —
+//    พอมี 6 กะการเดาจากเวลาเป็นไปไม่ได้ (10 โมงเป็นได้ทั้ง M และ A) และกะที่เดาผิด
+//    คือหลักฐานการตรวจที่ผิดโดยไม่มีอะไรทัก · ให้คนเลือกเอง แล้ว utils/station.js
+//    จำไว้ในเครื่อง จึงไม่ได้เพิ่มคลิกทุกใบ · ฝั่ง server ก็ไม่เดาให้เหมือนกัน (ปฏิเสธไปเลย)

@@ -6,6 +6,9 @@
 import React, { useState } from 'react';
 import { Row, Col, Form, Button } from 'react-bootstrap';
 import { SHIFTS } from '../utils/config';
+import { useDialog } from '../utils/useDialog';
+import SearchSelect from './SearchSelect';
+import AppDialog from './AppDialog';
 
 const shiftLabel = (code) => SHIFTS.find((s) => s.code === code)?.label ?? '—';
 
@@ -18,8 +21,11 @@ const scopeToDivision = (list, divisionId) => {
   return scoped.length > 0 ? scoped : list;
 };
 
-const StationBar = ({ station, models, machines, inspectors, onChange, ready }) => {
+const StationBar = ({
+  station, models, machines, inspectors, divisions = [], onChange, onAddInspector, ready,
+}) => {
   const [editing, setEditing] = useState(false);
+  const { dialog, showAlert, showForm, closeDialog } = useDialog();
 
   const model = models.find((m) => String(m.id) === station.modelId);
   const machine = machines.find((m) => String(m.id) === station.machineId);
@@ -32,11 +38,12 @@ const StationBar = ({ station, models, machines, inspectors, onChange, ready }) 
   // ยังตั้งไม่ครบ = กางแผงค้างไว้ ไม่ต้องให้กดหา
   const open = editing || !ready;
 
-  const set = (key) => (e) => onChange({ ...station, [key]: e.target.value });
+  // ⚠️ SearchSelect ส่งค่ามาเป็นสตริงตรง ๆ ไม่ใช่ event ต่างจาก <Form.Select> ของกะ
+  const setVal = (key) => (value) => onChange({ ...station, [key]: value });
+  const setShift = (e) => onChange({ ...station, shift: e.target.value });
 
   // เปลี่ยนรุ่นแล้วเครื่อง/ผู้ตรวจของ division เดิมอาจใช้ไม่ได้ ล้างทิ้งให้เลือกใหม่
-  const setModel = (e) => {
-    const modelId = e.target.value;
+  const setModel = (modelId) => {
     const nextDivision = models.find((m) => String(m.id) === modelId)?.division_id;
     const stillValid = (list, id) =>
       id && list.some((r) => String(r.id) === id && String(r.division_id) === String(nextDivision));
@@ -47,6 +54,56 @@ const StationBar = ({ station, models, machines, inspectors, onChange, ready }) 
       inspectorId: stillValid(inspectors, station.inspectorId) ? station.inspectorId : '',
     });
   };
+
+  // ⚠️ hint ไม่ใช่ของประดับ — ชื่อผู้ตรวจซ้ำกันได้และ item เลขเดียวกันมีได้ทั้งสอง division
+  //    ข้อความตรงนี้คือสิ่งเดียวที่แยกสองแถวที่หน้าตาเหมือนกันออกจากกัน (และค้นหาได้ด้วย)
+  const modelOpts = models.map((m) => ({
+    value: String(m.id),
+    label: `${m.item_no} — ${m.item_name}`,
+    hint: m.division_name ?? '',
+  }));
+  const machineOpts = machineOptions.map((m) => ({
+    value: String(m.id),
+    label: m.code,
+    hint: m.name ?? '',
+  }));
+  const inspectorOpts = inspectorOptions.map((i) => ({
+    value: String(i.id),
+    label: i.name,
+    hint: i.emp_code ?? '',
+  }));
+
+  // ผู้ตรวจที่ยังไม่มีในระบบคือทางตันของคนที่กำลังจะกรอกใบตรวจ — ให้เพิ่มตรงนี้ได้เลย
+  // ⚠️ emp_code เป็น NOT NULL + UNIQUE ใน DB จึงต้องถามด้วย ใส่แต่ชื่อบันทึกไม่ผ่าน
+  const askAddInspector = () => showForm({
+    title: 'เพิ่มผู้ตรวจใหม่',
+    body: 'เพิ่มแล้วจะถูกเลือกให้ทันที และใช้ได้กับทุกเครื่องที่เปิดระบบนี้',
+    confirmLabel: 'เพิ่ม',
+    fields: [
+      {
+        name: 'emp_code',
+        label: 'รหัสพนักงาน',
+        required: true,
+        hint: 'ห้ามซ้ำกับคนที่มีอยู่แล้ว',
+      },
+      { name: 'name', label: 'ชื่อ', required: true },
+      {
+        name: 'division_id',
+        label: 'Division',
+        placeholder: '— ไม่ระบุ —',
+        defaultValue: divisionId ? String(divisionId) : '',
+        options: divisions.map((d) => ({ value: String(d.id), label: d.name })),
+      },
+    ],
+    onConfirm: async (data) => {
+      try {
+        const id = await onAddInspector(data);
+        onChange({ ...station, inspectorId: String(id) });
+      } catch (e) {
+        showAlert({ title: 'เพิ่มผู้ตรวจไม่สำเร็จ', body: e.message });
+      }
+    },
+  });
 
   return (
     <div className="station">
@@ -83,45 +140,60 @@ const StationBar = ({ station, models, machines, inspectors, onChange, ready }) 
       {open && (
         <Row className="g-2 mt-1">
           <Col md={4}>
-            <Form.Label className="small mb-1 text-muted">Item No.</Form.Label>
-            <Form.Select value={station.modelId} onChange={setModel}>
-              <option value="">— เลือก item —</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>{m.item_no} — {m.item_name} ({m.division_name})</option>
-              ))}
-            </Form.Select>
+            <Form.Label htmlFor="station-model" className="small mb-1 text-muted">Item No.</Form.Label>
+            <SearchSelect
+              id="station-model"
+              value={station.modelId}
+              options={modelOpts}
+              onChange={setModel}
+              placeholder="— เลือก item —"
+              emptyText="ไม่พบ item ที่ค้นหา"
+            />
           </Col>
           <Col md={3}>
-            <Form.Label className="small mb-1 text-muted">เครื่อง</Form.Label>
-            <Form.Select value={station.machineId} onChange={set('machineId')}>
-              <option value="">— เลือกเครื่อง —</option>
-              {machineOptions.map((m) => (
-                <option key={m.id} value={m.id}>{m.code} {m.name ? `(${m.name})` : ''}</option>
-              ))}
-            </Form.Select>
+            <Form.Label htmlFor="station-machine" className="small mb-1 text-muted">เครื่อง</Form.Label>
+            <SearchSelect
+              id="station-machine"
+              value={station.machineId}
+              options={machineOpts}
+              onChange={setVal('machineId')}
+              placeholder="— เลือกเครื่อง —"
+              emptyText="ไม่พบเครื่องที่ค้นหา"
+            />
           </Col>
           <Col md={2}>
-            <Form.Label className="small mb-1 text-muted">กะ</Form.Label>
-            <Form.Select value={station.shift} onChange={set('shift')}>
+            <Form.Label htmlFor="station-shift" className="small mb-1 text-muted">กะ</Form.Label>
+            {/* ⚠️ ต้องมี <option value=""> — ไม่เดากะให้แล้ว station.shift จึงเริ่มเป็นค่าว่าง
+                ถ้าไม่มี option รองรับ <Form.Select> จะโชว์กะแรกของลิสต์ทั้งที่ state ยังว่าง
+                · กะมี 6 ตัวจบ ยังเป็น <Form.Select> อยู่ พิมพ์ค้นหาแล้วไม่ได้เร็วขึ้น */}
+            <Form.Select id="station-shift" value={station.shift} onChange={setShift}>
+              <option value="">— เลือกกะ —</option>
               {SHIFTS.map((s) => <option key={s.code} value={s.code}>{s.label}</option>)}
             </Form.Select>
           </Col>
           <Col md={3}>
-            <Form.Label className="small mb-1 text-muted">ผู้ตรวจ</Form.Label>
-            <Form.Select value={station.inspectorId} onChange={set('inspectorId')}>
-              <option value="">— เลือกผู้ตรวจ —</option>
-              {inspectorOptions.map((i) => (
-                <option key={i.id} value={i.id}>{i.name}</option>
-              ))}
-            </Form.Select>
+            <Form.Label htmlFor="station-inspector" className="small mb-1 text-muted">ผู้ตรวจ</Form.Label>
+            <SearchSelect
+              id="station-inspector"
+              value={station.inspectorId}
+              options={inspectorOpts}
+              onChange={setVal('inspectorId')}
+              placeholder="— เลือกผู้ตรวจ —"
+              emptyText="ไม่พบผู้ตรวจที่ค้นหา"
+              onAddNew={onAddInspector ? askAddInspector : null}
+              addNewLabel="เพิ่มผู้ตรวจใหม่"
+            />
           </Col>
           <Col xs={12}>
             <div className="small text-muted">
-              ค่าที่เลือกไว้จะถูกจำไว้ในเครื่องนี้ เปิดหน้าครั้งหน้าไม่ต้องเลือกใหม่
+              ค่าที่เลือกไว้จะถูกจำไว้ในเครื่องนี้ เปิดหน้าครั้งหน้าไม่ต้องเลือกใหม่ ·
+              ช่อง item / เครื่อง / ผู้ตรวจ พิมพ์เพื่อค้นหาได้
             </div>
           </Col>
         </Row>
       )}
+
+      <AppDialog dialog={dialog} onHide={closeDialog} />
     </div>
   );
 };

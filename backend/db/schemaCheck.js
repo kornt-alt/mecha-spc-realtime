@@ -21,12 +21,17 @@ const REQUIRED = {
   checkpoints: [
     'id', 'model_id', 'seq_no', 'name', 'char_type',
     'usl', 'lsl', 'target', 'sample_size', 'is_active',
-    'baseline_xbarbar', 'baseline_rbar', 'baseline_n', 'baseline_locked_at',
+    // ⚠️ ไม่มี baseline_* ตรงนี้แล้ว ย้ายไปตาราง checkpoint_baselines (แยกรายเครื่อง)
+    //    คอลัมน์เก่ายังค้างอยู่ใน DB จนกว่าจะรัน drop-legacy.sql แต่ไม่มีโค้ดไหนอ่านแล้ว
+  ],
+  checkpoint_baselines: [
+    'id', 'checkpoint_id', 'machine_id', 'xbarbar', 'rbar', 'n', 'locked_at',
   ],
   inspections: [
     'id', 'model_id', 'machine_id', 'inspector_id',
     'mo_no', 'shift', 'subgroup_no', 'inspected_at', 'overall_result',
     'mo_item_no', 'mo_item_name', 'mo_draw', 'mo_model_group',
+    'voided_at', 'voided_reason',
   ],
   inspection_results: [
     'id', 'inspection_id', 'checkpoint_id', 'piece_no',

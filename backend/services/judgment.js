@@ -108,10 +108,14 @@ const validateSubmission = (checkpoint, submitted) => {
   return null;
 };
 
-// กะจากเวลา — M = 07:00-18:59, N = 19:00-06:59 (ใช้ให้ตรงกับ QC_MECHA2)
-const shiftFromDate = (date = new Date()) => {
-  const h = date.getHours();
-  return h >= 7 && h < 19 ? 'M' : 'N';
-};
+// รหัสกะที่ระบบรับ — ⚠️ ต้องตรงกับ ENUM ของ inspections.shift ใน schema.sql
+// และกับ SHIFTS ใน frontend/src/utils/config.js · แก้ที่ไหนต้องแก้ครบทั้งสามที่
+//
+// ⚠️ เดิมมีแค่ M/N แล้วมี shiftFromDate() เดากะจากนาฬิกาให้เมื่อ client ไม่ส่งมา
+//    ถอดออกแล้วโดยตั้งใจ — พอมี 6 กะ การเดาจากเวลาเป็นไปไม่ได้อีกต่อไป (10 โมงเป็นได้ทั้ง
+//    M และ A) เดาต่อไปคือแปะกะผิดลงหลักฐานการตรวจเงียบ ๆ · ไม่ส่งกะมา = ปฏิเสธไปเลย
+const SHIFT_CODES = ['M', 'N', 'A', 'B', 'C', 'D'];
 
-module.exports = { judge, evaluateCheckpoint, summarize, validateSubmission, shiftFromDate };
+const isShift = (v) => SHIFT_CODES.includes(v);
+
+module.exports = { judge, evaluateCheckpoint, summarize, validateSubmission, SHIFT_CODES, isShift };

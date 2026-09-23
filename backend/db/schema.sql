@@ -113,13 +113,48 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   CONSTRAINT ck_checkpoints_sample_size CHECK (sample_size BETWEEN 1 AND 10)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── baseline ของ control limit ────────────────────────────────────────────
+--
+-- ⚠️ baseline แยกตาม "จุดตรวจ × เครื่อง" ไม่ใช่ต่อจุดตรวจเฉย ๆ อย่างเดิม
+--    หลายเครื่องผลิต item เดียวกันได้ และแต่ละเครื่องคือคนละ process — เอาข้อมูลมารวมกัน
+--    แล้วคิดเส้นกลางชุดเดียว จะได้ X̿ ที่ไม่ใช่ของเครื่องไหนเลย เครื่องที่ค่ากลางเบี่ยงจาก
+--    กลุ่มจะติดกฎ Nelson ข้อ 2 ค้างตลอดโดยไม่มีอะไรผิดจริง แล้วคนจะเลิกเชื่อคำเตือนทั้งหมด
+--
+-- ⚠️ machine_id = 0 คือชุด "รวมทุกเครื่อง" ไม่ใช่รหัสเครื่องจริง (machines.id เป็น
+--    AUTO_INCREMENT จึงเริ่มที่ 1 เสมอ เลข 0 ว่างอยู่) — ที่ไม่ใช้ NULL เพราะ MySQL/MariaDB
+--    ถือว่า NULL แต่ละตัวไม่ซ้ำกัน UNIQUE จึงกันชุดรวมซ้ำไม่ได้
+--
+-- ⚠️ ไม่มี FK ไป machines โดยตั้งใจ — baseline เป็นข้อมูลที่คำนวณใหม่ได้ ไม่ใช่หลักฐานการตรวจ
+--    ลบเครื่องทิ้งแล้วแถวนี้ค้างอยู่ไม่ทำให้อะไรพัง และไม่ควรไปขวางการลบเครื่องด้วย
+--    (ต่างจาก inspections.machine_id ที่เป็น RESTRICT เพราะใบตรวจคือหลักฐาน)
+--
+-- n = ขนาด subgroup ตอนที่ล็อก · sample_size ถูกแก้ทีหลังจนไม่ตรงกับค่านี้เมื่อไหร่
+--     แปลว่าค่า A2/D3/D4 คนละตัว ต้อง re-baseline ก่อนถึงจะอ่านกราฟได้
+CREATE TABLE IF NOT EXISTS checkpoint_baselines (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  checkpoint_id INT NOT NULL,
+  machine_id    INT NOT NULL DEFAULT 0,
+  xbarbar       DECIMAL(14,6) NOT NULL,
+  rbar          DECIMAL(14,6) NOT NULL,
+  n             TINYINT UNSIGNED NOT NULL,
+  subgroups     INT NULL,
+  baseline_from DATETIME NULL,
+  baseline_to   DATETIME NULL,
+  locked_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_cpbl_checkpoint_machine (checkpoint_id, machine_id),
+  CONSTRAINT fk_cpbl_checkpoint
+    FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ── ใบตรวจ ────────────────────────────────────────────────────────────────
 
 -- 1 แถว = การสุ่มตรวจ 1 ครั้ง = 1 subgroup บนกราฟ
 --
 -- subgroup_no ให้ server แจกเองใน transaction (MAX+1 ต่อ model+mo) ห้ามรับจาก client
 -- uq_inspections_subgroup คือตาข่ายกันสองคนตรวจ MO เดียวกันพร้อมกันแล้วเลขชน
--- shift: M = 07:00-18:59, N = 19:00-06:59 (ตามที่ QC_MECHA2 ใช้อยู่)
+-- shift: รหัสกะที่โรงงานใช้จริง (M/N ของเดิม + A/B/C/D)
+-- ⚠️ ENUM นี้ต้องตรงกับ SHIFT_CODES ใน backend/services/judgment.js และ SHIFTS ใน
+--    frontend/src/utils/config.js · เพิ่มกะใหม่ต้องแก้ครบทั้งสามที่ ไม่งั้นเลือกได้แต่บันทึกไม่ได้
 CREATE TABLE IF NOT EXISTS inspections (
   id              INT AUTO_INCREMENT PRIMARY KEY,
   model_id        INT NOT NULL,
@@ -127,7 +162,7 @@ CREATE TABLE IF NOT EXISTS inspections (
   inspector_id    INT NOT NULL,
   mo_no           VARCHAR(50) NOT NULL,
   lot_no          VARCHAR(50) NULL,
-  shift           ENUM('M','N') NOT NULL,
+  shift           ENUM('M','N','A','B','C','D') NOT NULL,
   subgroup_no     INT NOT NULL,
   inspected_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   remark          VARCHAR(255) NULL,
@@ -140,7 +175,15 @@ CREATE TABLE IF NOT EXISTS inspections (
   mo_item_name    VARCHAR(150) NULL,
   mo_draw         VARCHAR(100) NULL,
   mo_model_group  VARCHAR(50) NULL,
+  -- ⚠️ ยกเลิกใบตรวจ = voided_at ไม่ใช่ DELETE — แถวต้องอยู่ต่อเพราะเป็นหลักฐานการตรวจ
+  --    NULL = ใช้งานอยู่ · ใบที่ยกเลิกถูกตัดออกจากกราฟ/รายงาน/Excel/Cp-Cpk/baseline
+  --    ที่ buildInspectionFilter() ใน db/queries.js จุดเดียว
+  --    ไม่มี voided_by เพราะระบบนี้ไม่มี auth — voided_reason จึงเป็นสิ่งที่ต้องกรอก
+  voided_at       DATETIME NULL,
+  voided_reason   VARCHAR(255) NULL,
   created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- ⚠️ subgroup_no ถูกแจกด้วย MAX+1 ที่นับรวมใบที่ยกเลิกด้วย เลขจึงมีช่องว่างได้
+  --    ห้ามแก้ให้ใช้เลขซ้ำ ไม่งั้นชน UNIQUE นี้กับใบที่ยกเลิกไว้
   UNIQUE KEY uq_inspections_subgroup (model_id, mo_no, subgroup_no),
   KEY ix_inspections_model_time (model_id, inspected_at),
   KEY ix_inspections_mo (mo_no),
@@ -207,3 +250,58 @@ ALTER TABLE inspections ADD COLUMN IF NOT EXISTS mo_item_no     VARCHAR(50)  NUL
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS mo_item_name   VARCHAR(150) NULL;
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS mo_draw        VARCHAR(100) NULL;
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS mo_model_group VARCHAR(50)  NULL;
+
+-- ── ยกเลิกใบตรวจ ──────────────────────────────────────────────────────────
+--
+-- ไม่เพิ่ม index ให้ voided_at โดยตั้งใจ — คอลัมน์นี้เป็น NULL แทบทุกแถว index เดี่ยว
+-- บนมันจะไม่ถูกเลือกใช้ · query จริงถูกขับด้วย ix_inspections_model_time กับ
+-- ix_results_checkpoint อยู่แล้ว voided_at เป็นแค่เงื่อนไขกรองหลัง join
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS voided_at     DATETIME     NULL;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS voided_reason VARCHAR(255) NULL;
+
+-- ── กะ A/B/C/D ────────────────────────────────────────────────────────────
+--
+-- ของเดิมเป็น ENUM('M','N') · MODIFY COLUMN ไม่มี IF NOT EXISTS แต่รันซ้ำได้อยู่แล้ว
+-- (เขียนทับด้วยนิยามเดิม) และเป็นการ "เพิ่ม" ค่าใน ENUM ล้วน ๆ แถวเก่าที่เป็น M/N
+-- จึงไม่ถูกแตะ · ⚠️ ห้ามลบค่าออกจาก ENUM นี้ แถวที่ใช้ค่านั้นอยู่จะกลายเป็น '' เงียบ ๆ
+ALTER TABLE inspections MODIFY COLUMN shift ENUM('M','N','A','B','C','D') NOT NULL;
+
+-- ── ย้าย baseline เดิมมาไว้ที่ checkpoint_baselines ────────────────────────
+--
+-- ของเดิม baseline ถูกเก็บเป็นคอลัมน์ baseline_* บน checkpoints = 1 ชุดต่อจุดตรวจ
+-- ตอนนี้แยกรายเครื่องแล้ว ค่าเดิมที่มีอยู่คือค่าที่คิดจากข้อมูลทุกเครื่องรวมกัน
+-- จึงย้ายไปเป็นชุด "รวมทุกเครื่อง" (machine_id = 0)
+--
+-- ⚠️ สองคำสั่งนี้ต้องอยู่คู่กันเสมอ ห้ามลบ UPDATE ทิ้ง — ถ้าปล่อยค่าเดิมค้างไว้ในคอลัมน์เก่า
+--    พอมีคนล้าง baseline ชุดรวมทิ้ง แล้ววันหลังรัน db:apply อีกรอบ ค่าที่ล้างไปแล้วจะ
+--    ถูก INSERT กลับเข้ามาเงียบ ๆ · ล้างคอลัมน์เก่าทิ้งแล้วสคริปต์นี้จึงรันซ้ำได้จริง
+--    (ตัวคอลัมน์ยังอยู่จนกว่าจะรัน drop-legacy.sql — เผื่อต้องย้อนกลับ)
+--
+-- ⚠️ ทั้งสองคำสั่งห่อ guard ที่อ่าน information_schema ก่อน (ไวยากรณ์เดียวกับ rename-model-code.sql)
+--    เพราะ drop-legacy.sql ลบคอลัมน์ baseline_* ทิ้งได้ แล้วไฟล์นี้จะอ้างคอลัมน์ที่ไม่มีอยู่
+--    → error ทันที และ `npm run db:apply` จะใช้ไม่ได้อีกเลย · ซึ่งเป็นลำดับที่เอกสารสั่งไว้เองด้วย
+--    ("หลังรัน drop-legacy ให้รัน schema.sql ต่อทันที") · UPDATE/SELECT ไม่มี IF EXISTS ให้ใช้
+SET @sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'checkpoints' AND COLUMN_NAME = 'baseline_xbarbar') > 0,
+  'INSERT IGNORE INTO checkpoint_baselines
+     (checkpoint_id, machine_id, xbarbar, rbar, n, subgroups, baseline_from, baseline_to, locked_at)
+   SELECT id, 0, baseline_xbarbar, baseline_rbar, COALESCE(baseline_n, sample_size),
+          baseline_subgroups, baseline_from, baseline_to, COALESCE(baseline_locked_at, NOW())
+     FROM checkpoints
+    WHERE baseline_xbarbar IS NOT NULL AND baseline_rbar IS NOT NULL',
+  'DO 0');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = IF(
+  (SELECT COUNT(*) FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'checkpoints' AND COLUMN_NAME = 'baseline_xbarbar') > 0,
+  'UPDATE checkpoints
+      SET baseline_xbarbar = NULL, baseline_rbar = NULL, baseline_n = NULL,
+          baseline_subgroups = NULL, baseline_from = NULL, baseline_to = NULL,
+          baseline_locked_at = NULL
+    WHERE baseline_xbarbar IS NOT NULL OR baseline_locked_at IS NOT NULL',
+  'DO 0');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

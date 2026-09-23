@@ -6,6 +6,14 @@
 //
 // ขั้นตอนที่ถูก: เก็บข้อมูลช่วงที่ process นิ่ง 20-25 subgroup → กด Set baseline → ลิมิตถูกล็อก
 // → หลังจากนั้นกราฟอ่านจากค่าที่ล็อกไว้ ไม่คำนวณสดอีก
+//
+// ⚠️ baseline แยก "รายเครื่อง" ตั้งแต่เวอร์ชันนี้ — เก็บที่ตาราง checkpoint_baselines
+//    (เดิมเป็นคอลัมน์ baseline_* บน checkpoints = 1 ชุดต่อจุดตรวจ) เหตุผลอยู่ใน schema.sql
+//    แต่ละเครื่องคือคนละ process เส้นลิมิตของเครื่อง A ใช้ตัดสินเครื่อง B ไม่ได้
+//
+// ⚠️ ขอบเขตของ baseline กับตัวกรองข้อมูลเป็นค่าเดียวกันเสมอ (filter.machine_id) — ล็อก
+//    baseline ของ MC-01 คือคำนวณจากใบตรวจของ MC-01 เท่านั้น แยกสองค่านี้ออกจากกันเมื่อไหร่
+//    จะเปิดทางให้ล็อกลิมิตของเครื่องหนึ่งด้วยข้อมูลของอีกเครื่อง
 'use strict';
 
 const { execute } = require('../db/pool');
@@ -49,6 +57,8 @@ const computeBaseline = async (checkpointId, filter = {}) => {
 
   return {
     checkpoint,
+    // ขอบเขตที่คำนวณมา — 0 = รวมทุกเครื่อง · หน้าจอต้องบอกให้ชัดว่ากำลังจะล็อกของใคร
+    machineId: scopeOf(filter),
     n,
     subgroupCount: subgroups.length,
     // ไม่บล็อกถ้าน้อยกว่า 20 แต่บอกให้รู้ตัว — หน้างานบางทีต้องเริ่มใช้ก่อนเก็บครบจริง ๆ
@@ -70,55 +80,87 @@ const toMysqlDateTime = (d) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 };
 
-// setBaseline — คำนวณแล้วเขียนลง checkpoints.baseline_* พร้อมประทับเวลาที่ล็อก
+// scopeOf(filter) — แปลงตัวกรองเป็นรหัสขอบเขตของ baseline
+//
+// ⚠️ 0 คือชุด "รวมทุกเครื่อง" ไม่ใช่รหัสเครื่องจริง (machines.id เริ่มที่ 1 เสมอ)
+//    ที่ไม่ใช้ NULL เพราะ MySQL/MariaDB ถือว่า NULL แต่ละตัวไม่ซ้ำกัน UNIQUE จึงกัน
+//    ชุดรวมซ้ำไม่ได้ — ดูคอมเมนต์เต็มที่ schema.sql
+const AGGREGATE = 0;
+const scopeOf = (filter = {}) => Number(filter.machine_id) || AGGREGATE;
+
+// setBaseline — คำนวณแล้ว upsert ลง checkpoint_baselines ตามขอบเขตที่กรองมา
 const setBaseline = async (checkpointId, filter = {}) => {
   const result = await computeBaseline(checkpointId, filter);
 
+  // ล็อกซ้ำที่ขอบเขตเดิม = เขียนทับค่าเดิม ไม่ใช่เพิ่มแถวใหม่ (UNIQUE checkpoint_id + machine_id)
   await execute(
-    `UPDATE checkpoints
-        SET baseline_xbarbar = ?, baseline_rbar = ?, baseline_n = ?,
-            baseline_subgroups = ?, baseline_from = ?, baseline_to = ?,
-            baseline_locked_at = NOW()
-      WHERE id = ?`,
+    `INSERT INTO checkpoint_baselines
+       (checkpoint_id, machine_id, xbarbar, rbar, n, subgroups, baseline_from, baseline_to, locked_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+     ON DUPLICATE KEY UPDATE
+       xbarbar = VALUES(xbarbar), rbar = VALUES(rbar), n = VALUES(n),
+       subgroups = VALUES(subgroups), baseline_from = VALUES(baseline_from),
+       baseline_to = VALUES(baseline_to), locked_at = NOW()`,
     [
+      Number(checkpointId),
+      result.machineId,
       result.xbarbar,
       result.rbar,
       result.n,
       result.subgroupCount,
       toMysqlDateTime(result.from),
       toMysqlDateTime(result.to),
-      Number(checkpointId),
     ]
   );
 
   return result;
 };
 
-// clearBaseline — กลับไปเป็น provisional (กราฟจะคำนวณสดอีกครั้ง)
-// ใช้เมื่อเปลี่ยนเครื่อง เปลี่ยนแบบ หรือแก้ sample_size แล้ว baseline เดิมใช้ไม่ได้
-const clearBaseline = async (checkpointId) => {
+// clearBaseline — ลบชุดของขอบเขตนั้นทิ้ง กลับไปคำนวณสด (provisional)
+//
+// ⚠️ ลบเฉพาะขอบเขตที่สั่งเท่านั้น ล้างของ MC-01 ต้องไม่ไปแตะชุดรวมหรือชุดของ MC-02
+//    ลบแถวทิ้งได้เพราะ baseline คำนวณใหม่ได้เสมอ ไม่ใช่หลักฐานการตรวจ (ต่างจาก inspections
+//    ที่ใช้ voided_at แทน DELETE)
+const clearBaseline = async (checkpointId, machineId = AGGREGATE) => {
   await execute(
-    `UPDATE checkpoints
-        SET baseline_xbarbar = NULL, baseline_rbar = NULL, baseline_n = NULL,
-            baseline_subgroups = NULL, baseline_from = NULL, baseline_to = NULL,
-            baseline_locked_at = NULL
-      WHERE id = ?`,
-    [Number(checkpointId)]
+    'DELETE FROM checkpoint_baselines WHERE checkpoint_id = ? AND machine_id = ?',
+    [Number(checkpointId), Number(machineId) || AGGREGATE]
   );
 };
 
-// baselineOf(checkpointRow) — ดึง baseline ออกมาในรูปที่ spcStats.computeLimits รับ
-const baselineOf = (checkpoint) =>
-  checkpoint?.baseline_xbarbar === null || checkpoint?.baseline_xbarbar === undefined
+// pickBaseline(rows, machineId) — เลือกชุดที่ตรงกับเครื่องที่กำลังดูอยู่
+//
+// ⚠️ ไม่มี fallback โดยตั้งใจ — เครื่องที่ยังไม่ได้ล็อก baseline ของตัวเอง ต้องได้เส้น
+//    provisional ที่คำนวณสดจากข้อมูลของเครื่องนั้น ไม่ใช่ยืมลิมิตของชุดรวมมาใช้
+//    ยืมเมื่อไหร่ เครื่องที่ค่ากลางเบี่ยงจากกลุ่มจะติดกฎ Nelson ข้อ 2 ค้างตลอดโดยไม่มีอะไร
+//    ผิดจริง แล้วคนจะเลิกเชื่อคำเตือนทั้งหมด (เส้น provisional อย่างน้อยก็บอกตัวเองว่ายังไม่ล็อก)
+const pickBaseline = (rows = [], machineId = AGGREGATE) => {
+  const want = Number(machineId) || AGGREGATE;
+  return rows.find((r) => Number(r.machine_id) === want) ?? null;
+};
+
+// baselineOf(row) — แปลงแถวจาก checkpoint_baselines เป็นรูปที่ spcStats.computeLimits รับ
+const baselineOf = (row) =>
+  (row === null || row === undefined
     ? null
     : {
-        xbarbar: checkpoint.baseline_xbarbar,
-        rbar: checkpoint.baseline_rbar,
-        n: checkpoint.baseline_n,
-        lockedAt: checkpoint.baseline_locked_at,
-        subgroups: checkpoint.baseline_subgroups,
-        from: checkpoint.baseline_from,
-        to: checkpoint.baseline_to,
-      };
+        xbarbar: row.xbarbar,
+        rbar: row.rbar,
+        n: row.n,
+        machineId: Number(row.machine_id) || AGGREGATE,
+        lockedAt: row.locked_at,
+        subgroups: row.subgroups,
+        from: row.baseline_from,
+        to: row.baseline_to,
+      });
 
-module.exports = { computeBaseline, setBaseline, clearBaseline, baselineOf, toMysqlDateTime };
+module.exports = {
+  AGGREGATE,
+  scopeOf,
+  computeBaseline,
+  setBaseline,
+  clearBaseline,
+  pickBaseline,
+  baselineOf,
+  toMysqlDateTime,
+};

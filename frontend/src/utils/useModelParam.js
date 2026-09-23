@@ -46,33 +46,48 @@ export const masterHref = ({ modelId = '', item = null, divisionId = null } = {}
 export const PREFILL_KEYS = ['item_no', 'item_name', 'drawing_no', 'division_id'];
 
 /**
- * @param {boolean} fallbackToStation ถ้า URL ไม่มี ?model= ให้ใช้รุ่นของสถานีที่จำไว้
- * @returns {[string, (id: string) => void]}
+ * เก็บค่าหนึ่งค่าไว้ใน query string — ตัวเดียวกับที่ ?model= ใช้
+ *
+ * แยกออกมาเพราะ Dashboard เก็บ "เครื่องที่กำลังดู" ไว้ที่ URL ด้วย (?machine=) ด้วยเหตุผล
+ * เดียวกันเป๊ะ: จอหน้าไลน์บุ๊กมาร์กเครื่องของตัวเองไว้ได้ และรีเฟรชแล้วไม่หลุดกลับไปกราฟรวม
+ *
+ * @param {string} name ชื่อ param
+ * @returns {[string, (value: string) => void]}
  */
-export const useModelParam = (fallbackToStation = true) => {
+export const useUrlParam = (name) => {
   const [params, setParams] = useSearchParams();
+  const value = params.get(name) ?? '';
 
-  const fromUrl = params.get('model') ?? '';
-  const modelId = fromUrl || (fallbackToStation ? readStation().modelId : '');
-
-  const setModelId = useCallback(
-    (id) => {
+  const setValue = useCallback(
+    (next) => {
       // ⚠️ ต้องใช้ updater แบบฟังก์ชัน — setSearchParams ถูกสร้างใหม่ทุกครั้งที่ location.search
       //    เปลี่ยน ถ้าปิด searchParams ตัวเก่าไว้ใน closure จะเขียนทับ param ตัวอื่นที่เพิ่งตั้ง
+      //    (เคสจริงของกฎข้อนี้คือ Dashboard ที่มีทั้ง ?model= และ ?machine= อยู่พร้อมกัน)
       setParams(
         (prev) => {
-          const next = new URLSearchParams(prev);
-          if (id) next.set('model', String(id));
-          else next.delete('model');
-          return next;
+          const q = new URLSearchParams(prev);
+          if (next) q.set(name, String(next));
+          else q.delete(name);
+          return q;
         },
         // replace: ไม่งั้นเปลี่ยนรุ่นทีเป็น history entry ที ปุ่ม Back เดินถอยทีละรุ่น
         // preventScrollReset: Dashboard เป็นกริดกราฟยาว ๆ ไม่งั้นเด้งขึ้นหัวทุกครั้ง
         { replace: true, preventScrollReset: true }
       );
     },
-    [setParams]
+    [setParams, name]
   );
+
+  return [value, setValue];
+};
+
+/**
+ * @param {boolean} fallbackToStation ถ้า URL ไม่มี ?model= ให้ใช้รุ่นของสถานีที่จำไว้
+ * @returns {[string, (id: string) => void]}
+ */
+export const useModelParam = (fallbackToStation = true) => {
+  const [fromUrl, setModelId] = useUrlParam('model');
+  const modelId = fromUrl || (fallbackToStation ? readStation().modelId : '');
 
   return [modelId, setModelId];
 };

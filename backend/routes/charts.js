@@ -6,9 +6,11 @@
 'use strict';
 
 const express = require('express');
-const { fetchCheckpointRows, fetchCheckpoint } = require('../db/queries');
+const { fetchCheckpointRows, fetchCheckpoint, fetchCheckpointBaselines } = require('../db/queries');
 const { analyze } = require('../services/spcStats');
-const { computeBaseline, setBaseline, clearBaseline, baselineOf } = require('../services/baseline');
+const {
+  computeBaseline, setBaseline, clearBaseline, baselineOf, pickBaseline, scopeOf,
+} = require('../services/baseline');
 const { AppError, wrap } = require('../middleware/errorHandler');
 
 const router = express.Router();
@@ -51,14 +53,26 @@ router.get('/:checkpointId', wrap(async (req, res) => {
     });
   }
 
-  const rows = await fetchCheckpointRows(checkpointId, filterFrom(req.query));
-  const result = analyze(rows, {
-    usl: checkpoint.usl,
-    lsl: checkpoint.lsl,
-    baseline: baselineOf(checkpoint),
-  });
+  // ⚠️ baseline แยกรายเครื่อง — ต้องเลือกชุดให้ตรงกับเครื่องที่กำลังกรองดูอยู่
+  //    ไม่ตรงเมื่อไหร่คือเอาลิมิตของเครื่องหนึ่งไปตัดสินอีกเครื่อง · ยังไม่ได้ล็อกของเครื่องนั้น
+  //    ก็ได้ null แล้วกราฟจะคำนวณสดเป็น provisional ให้ (ไม่ยืมของชุดรวมมาใช้ ดู pickBaseline)
+  const filter = filterFrom(req.query);
+  const [rows, baselineRows] = await Promise.all([
+    fetchCheckpointRows(checkpointId, filter),
+    fetchCheckpointBaselines(checkpointId),
+  ]);
+  const baseline = baselineOf(pickBaseline(baselineRows, scopeOf(filter)));
 
-  res.json({ checkpoint, baseline: baselineOf(checkpoint), ...result });
+  const result = analyze(rows, { usl: checkpoint.usl, lsl: checkpoint.lsl, baseline });
+
+  // baselines = ทุกชุดที่ล็อกไว้ของจุดนี้ (หน้า Master Setup เอาไปโชว์ว่าเครื่องไหนล็อกแล้วบ้าง)
+  res.json({
+    checkpoint,
+    baseline,
+    baselines: baselineRows.map(baselineOf),
+    baselineScope: scopeOf(filter),
+    ...result,
+  });
 }));
 
 // GET /api/charts/:checkpointId/baseline/preview — ลองดูว่าจะได้ baseline เท่าไร ยังไม่บันทึก
@@ -66,6 +80,7 @@ router.get('/:checkpointId/baseline/preview', wrap(async (req, res) => {
   if (!isIntLike(req.params.checkpointId)) throw new AppError('checkpoint id ไม่ถูกต้อง', 400);
   const r = await computeBaseline(req.params.checkpointId, filterFrom(req.query));
   res.json({
+    machineId: r.machineId,
     n: r.n,
     subgroupCount: r.subgroupCount,
     enoughSubgroups: r.enoughSubgroups,
@@ -83,13 +98,17 @@ router.post('/:checkpointId/baseline', wrap(async (req, res) => {
   if (!isIntLike(req.params.checkpointId)) throw new AppError('checkpoint id ไม่ถูกต้อง', 400);
 
   const r = await setBaseline(req.params.checkpointId, filterFrom(req.body ?? {}));
+  // machineId ไปกับ event ด้วย — Dashboard ที่กรองอยู่คนละเครื่องจะได้ไม่ต้องโหลดกราฟใหม่เปล่า ๆ
+  // (0 = ชุดรวม กระทบเฉพาะจอที่ดู "ทุกเครื่อง" อยู่)
   req.app.get('io')?.to(`model:${r.checkpoint.model_id}`).emit('baseline_updated', {
     checkpointId: Number(req.params.checkpointId),
     modelId: r.checkpoint.model_id,
+    machineId: r.machineId,
   });
 
   res.json({
     success: true,
+    machineId: r.machineId,
     n: r.n,
     subgroupCount: r.subgroupCount,
     enoughSubgroups: r.enoughSubgroups,
@@ -106,13 +125,17 @@ router.delete('/:checkpointId/baseline', wrap(async (req, res) => {
   const checkpoint = await fetchCheckpoint(req.params.checkpointId);
   if (!checkpoint) throw new AppError('ไม่พบจุดตรวจนี้', 404);
 
-  await clearBaseline(req.params.checkpointId);
+  // ⚠️ ล้างเฉพาะขอบเขตที่สั่ง — ไม่ส่ง machine_id มา = ล้างชุดรวม ไม่ใช่ล้างทุกชุด
+  //    ล้างทุกชุดให้เองเมื่อไหร่คือลบ baseline ของเครื่องอื่นที่คนไม่ได้สั่ง
+  const machineId = scopeOf({ machine_id: req.query.machine_id });
+  await clearBaseline(req.params.checkpointId, machineId);
   req.app.get('io')?.to(`model:${checkpoint.model_id}`).emit('baseline_updated', {
     checkpointId: Number(req.params.checkpointId),
     modelId: checkpoint.model_id,
+    machineId,
   });
 
-  res.json({ success: true });
+  res.json({ success: true, machineId });
 }));
 
 module.exports = router;

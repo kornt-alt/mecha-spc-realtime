@@ -9,15 +9,44 @@ import { apiCall } from '../utils/api';
 import { PREFILL_KEYS } from '../utils/useModelParam';
 import { on } from '../utils/socket';
 import { normalizeRows, normalizeCheckpoints, numOrNull, toNum } from '../utils/normalize';
+import {
+  UNIT_OPTIONS, mergeOptions, specIssues, readCpMemory, rememberCp,
+  limitsFromTolerance, toleranceFromLimits,
+} from '../utils/checkpointForm';
+import SpecValue from './SpecValue';
+import AppDialog from './AppDialog';
+import SearchSelect from './SearchSelect';
+import { useDialog } from '../utils/useDialog';
 
 const CHAR_TYPES = [
   { value: 'variable', label: 'วัดค่า (variable)' },
   { value: 'attribute', label: 'ตรวจด้วยตา (attribute)' },
 ];
 
-const blankCheckpoint = () => ({
-  name: '', char_type: 'variable', unit: '', gauge: '',
-  usl: '', lsl: '', target: '', sample_size: 1, is_critical: false, is_active: true,
+// ⚠️ ช่องที่เป็น "วิธีวัด" (หน่วย / เครื่องมือวัด / ชิ้นต่อครั้ง) ถูกเติมจากที่จำไว้ ไม่ใช่ค่าว่าง
+//    จุดตรวจในแบบเดียวกันใช้เครื่องมือตัวเดิมกันแทบทั้งใบ พิมพ์ใหม่ทุกแถวนอกจากเสียเวลา
+//    ยังทำให้สะกดไม่ตรงกันจนกลายเป็นคนละเครื่องมือในสายตาระบบ
+//
+// ⚠️ char_type **ไม่** sticky กลับเป็น 'variable' เสมอ — 'attribute' ที่ค้างมาจากจุดก่อนหน้า
+//    จะ disable ช่องตัวเลขครึ่งฟอร์มของจุดถัดไปโดยที่คนกรอกไม่ได้สั่ง
+// รูปแบบการกรอกสเปก — แบบ (drawing) ส่วนใหญ่เขียนเป็นค่ากลาง + พิกัด ไม่ใช่เลขสัมบูรณ์
+// สิ่งที่บันทึกลง DB ยังเป็น LSL/Target/USL ชุดเดิมเสมอ พิกัดเป็นแค่วิธีพิมพ์
+const SPEC_MODES = [
+  { value: 'limits', label: 'LSL / Target / USL' },
+  { value: 'tol', label: 'ค่ากลาง + พิกัดจากแบบ' },
+];
+
+const EMPTY_TOL = { nominal: '', tolUpper: '', tolLower: '' };
+
+const blankCheckpoint = (memory = null) => ({
+  name: '',
+  char_type: 'variable',
+  unit: memory?.unit ?? '',
+  gauge: memory?.gauge ?? '',
+  usl: '', lsl: '', target: '',
+  sample_size: memory?.sampleSize ?? 1,
+  is_critical: false,
+  is_active: true,
 });
 
 // ไอคอนลูกศรย้ายลำดับ — เดิมเป็นอักขระ ▲▼ ซึ่งขนาดและตำแหน่งเพี้ยนตามฟอนต์ที่เครื่องมี
@@ -57,6 +86,22 @@ const MasterSetup = () => {
   //    จะกลับมาเจอฟอร์มว่างแล้วต้องพิมพ์ใหม่ทั้งหมด ซึ่งคือสิ่งที่ฟีเจอร์นี้ตั้งใจกำจัด
   const [modelForm, setModelForm] = useState(() => ({ ...blankModel(), ...(prefill ?? {}) }));
   const [editingModel, setEditingModel] = useState(null);
+
+  // ⚠️ ฟอร์มจุดตรวจต้องอยู่ที่นี่ด้วยเหตุผลเดียวกับ modelForm ข้างบน — <ModelsTab> unmount
+  //    ทุกครั้งที่สลับแท็บ กรอกจุดตรวจค้างไว้แล้วแวะไปแท็บอื่นจะหายเกลี้ยง
+  const [cpForm, setCpForm] = useState(() => blankCheckpoint(readCpMemory()));
+  const [editingCp, setEditingCp] = useState(null);
+  // เครื่องมือวัดที่เคยใช้ เอาไว้เป็นตัวเลือกใน <datalist> — อ่านจาก localStorage ครั้งเดียว
+  // แล้วอัปเดตเองทุกครั้งที่บันทึกจุดตรวจสำเร็จ
+  const [gaugeMemory, setGaugeMemory] = useState(() => readCpMemory().gauges);
+  // ⚠️ โหมดกรอกสเปกไม่ sticky ลง localStorage ด้วยเหตุผลเดียวกับที่ char_type ไม่ sticky —
+  //    โหมดที่ค้างมาจากเมื่อวานเปลี่ยนความหมายของช่องครึ่งฟอร์มโดยที่คนกรอกไม่ได้สั่ง
+  //    แต่คงไว้ระหว่างเซสชัน เพราะแบบใบเดียวมีจุดตรวจที่เขียนรูปเดียวกันหมดสิบกว่าจุด
+  // กล่องยืนยัน/แจ้งเตือนของทั้งหน้า — ตัวเดียว ไม่ซ้อนกัน (ดู utils/useDialog.js)
+  const { dialog, showAlert, showConfirm, closeDialog } = useDialog();
+
+  const [specMode, setSpecMode] = useState('limits');
+  const [tolForm, setTolForm] = useState(EMPTY_TOL);
 
   const [tab, setTab] = useState('models');
   const [lookups, setLookups] = useState({ divisions: [], machines: [], inspectors: [] });
@@ -110,6 +155,26 @@ const MasterSetup = () => {
   useEffect(() => on('master_updated', loadAll), [loadAll]);
   useEffect(() => { loadCheckpoints(selectedModel); }, [selectedModel, loadCheckpoints]);
 
+  // ── ฟอร์มจุดตรวจ ──────────────────────────────────────────────────────
+  //
+  // ล้างเฉพาะช่องที่เป็นของจุดนั้น ๆ แล้วเติมช่องวิธีวัดจากที่จำไว้ (ดู blankCheckpoint)
+  const resetCp = useCallback(() => {
+    setCpForm(blankCheckpoint(readCpMemory()));
+    setEditingCp(null);
+    // ล้างช่องพิกัดด้วย แต่คงโหมดไว้ — จุดถัดไปในแบบใบเดียวกันเขียนรูปเดียวกัน
+    setTolForm(EMPTY_TOL);
+  }, []);
+
+  const rememberMeasurement = useCallback((data) => {
+    rememberCp(data);
+    setGaugeMemory(readCpMemory().gauges);
+  }, []);
+
+  // ⚠️ editingCp ชี้ไปจุดตรวจของ item ที่เลือกอยู่ตอนกด "แก้" — สลับ item แล้วปล่อยค้างไว้
+  //    จะกลายเป็นหัวการ์ดบอก item ใหม่แต่กดบันทึกไปแก้จุดของ item เก่า และตอนนี้ฟอร์ม
+  //    ไม่ได้ unmount ตามแท็บอีกแล้ว สเตตที่ค้างจึงอยู่ได้นานกว่าเดิมมาก
+  useEffect(() => { resetCp(); }, [selectedModel, resetCp]);
+
   // ── CRUD กลาง ─────────────────────────────────────────────────────────
   const save = async (table, data, id) => {
     try {
@@ -127,15 +192,40 @@ const MasterSetup = () => {
     } catch (e) { fail(e); return false; }
   };
 
-  const remove = async (table, id, label) => {
-    if (!window.confirm(`ลบ "${label}" ?\n\nถ้ามีใบตรวจอ้างอิงอยู่ ระบบจะไม่ยอมลบ — ให้ปิดใช้งานแทน`)) return;
-    try {
-      await apiCall('/master/delete', { method: 'DELETE', body: { table, id } });
-      say('success', 'ลบแล้ว');
-      await loadAll();
-      if (table === 'checkpoints') await loadCheckpoints(selectedModel);
-    } catch (e) { fail(e); }
-  };
+  const remove = (table, id, label) => showConfirm({
+    title: `ลบ "${label}" ?`,
+    body: 'ถ้ามีใบตรวจอ้างอิงอยู่ ระบบจะไม่ยอมลบ — ให้ปิดใช้งานแทน',
+    confirmLabel: 'ลบ',
+    onConfirm: async () => {
+      try {
+        await apiCall('/master/delete', { method: 'DELETE', body: { table, id } });
+        say('success', 'ลบแล้ว');
+        await loadAll();
+        if (table === 'checkpoints') await loadCheckpoints(selectedModel);
+      } catch (e) { fail(e); }
+    },
+  });
+
+  // ชั้น 2 ของการลบ — ล้างใบที่ "ยกเลิกไปแล้ว" ออกจาก DB จริง
+  //
+  // มีไว้เพื่อให้ลบ item ที่ติด FK RESTRICT ได้ โดยไม่ต้อง force delete ทับหลักฐานจริง
+  // ยกเลิกก่อน (ที่หน้าใบตรวจหรือหน้า Report) แล้วค่อยมากดล้างที่นี่
+  const purgeVoided = (model) => showConfirm({
+    title: `ล้างใบตรวจที่ยกเลิกแล้วของ ${model.item_no}`,
+    body:
+      `จำนวน ${model.voided_count} ใบ\n\n` +
+      'อันนี้ลบออกจากฐานข้อมูลจริง กู้คืนไม่ได้',
+    confirmLabel: 'ล้างทิ้งถาวร',
+    onConfirm: async () => {
+      try {
+        const res = await apiCall('/inspections/voided', {
+          method: 'DELETE', body: { model_id: model.id },
+        });
+        say('success', `ล้างไปแล้ว ${res.deleted} ใบ`);
+        await loadAll();
+      } catch (e) { fail(e); }
+    },
+  });
 
   const moveCheckpoint = async (id, direction) => {
     try {
@@ -144,30 +234,73 @@ const MasterSetup = () => {
     } catch (e) { fail(e); }
   };
 
-  // ── baseline ──────────────────────────────────────────────────────────
-  const previewBaseline = async (cp) => {
+  // ── baseline (แยกรายเครื่อง) ──────────────────────────────────────────
+  //
+  // ⚠️ ขอบเขตต้องเลือก "ก่อน" พรีวิว — ตัวเลขที่พรีวิวคือค่าที่คำนวณจากใบตรวจของขอบเขตนั้น
+  //    เลือกทีหลังเมื่อไหร่ คนจะเห็นเลขของชุดรวมแล้วกดล็อกให้เครื่องเดียว
+  //
+  // ⚠️ เครื่องที่ลิสต์ได้ต้องเป็นเครื่องใน division ของ item นี้เท่านั้น — ใบตรวจข้าม division
+  //    ไม่มีอยู่จริง ลิสต์เครื่องของอีก division ให้เลือกคือชวนให้ล็อก baseline ที่ไม่มีข้อมูล
+  const baselineMachines = useMemo(() => {
+    const model = models.find((m) => String(m.id) === String(selectedModel));
+    if (!model) return [];
+    return (lookups.machines ?? []).filter((mc) => mc.division_id === model.division_id);
+  }, [models, selectedModel, lookups.machines]);
+
+  // ชื่อขอบเขตที่คนอ่านรู้เรื่อง — 0 = ชุดรวม ไม่ใช่รหัสเครื่องจริง
+  const scopeName = useCallback((machineId) => {
+    if (!machineId) return 'รวมทุกเครื่อง';
+    const mc = (lookups.machines ?? []).find((m) => String(m.id) === String(machineId));
+    return mc ? `${mc.code} — ${mc.name}` : `เครื่อง #${machineId}`;
+  }, [lookups.machines]);
+
+  // พรีวิวล้มเหลวต้องไม่ปิดกล่อง — ขอบเขตที่เพิ่งเลือกอาจยังไม่มีใบตรวจเลย ซึ่งเป็นเรื่องปกติ
+  // คนต้องเลือกขอบเขตอื่นต่อได้ทันที ไม่ใช่โดนเด้งออกไปอ่าน error ที่หัวหน้า
+  const loadBaselinePreview = useCallback(async (cp, machineId) => {
+    setBaselineInfo({ checkpoint: cp, machineId, loading: true, preview: null, error: null });
     try {
-      setBaselineInfo({ checkpoint: cp, ...(await apiCall(`/charts/${cp.id}/baseline/preview`)) });
-    } catch (e) { fail(e); }
-  };
+      const q = machineId ? `?machine_id=${encodeURIComponent(machineId)}` : '';
+      const preview = await apiCall(`/charts/${cp.id}/baseline/preview${q}`);
+      setBaselineInfo((prev) => (prev && prev.checkpoint.id === cp.id && prev.machineId === machineId
+        ? { ...prev, loading: false, preview } : prev));
+    } catch (e) {
+      setBaselineInfo((prev) => (prev && prev.checkpoint.id === cp.id && prev.machineId === machineId
+        ? { ...prev, loading: false, error: e.message } : prev));
+    }
+  }, []);
+
+  const previewBaseline = (cp) => loadBaselinePreview(cp, '');
 
   const confirmBaseline = async () => {
+    const { checkpoint: cp, machineId } = baselineInfo;
     try {
-      await apiCall(`/charts/${baselineInfo.checkpoint.id}/baseline`, { method: 'POST', body: {} });
+      await apiCall(`/charts/${cp.id}/baseline`, {
+        method: 'POST',
+        body: machineId ? { machine_id: machineId } : {},
+      });
       setBaselineInfo(null);
-      say('success', 'ล็อก control limit แล้ว');
+      say('success', `ล็อก control limit ของ "${scopeName(machineId)}" แล้ว`);
       await loadCheckpoints(selectedModel);
     } catch (e) { fail(e); }
   };
 
-  const clearBaseline = async (cp) => {
-    if (!window.confirm(`ล้าง baseline ของ "${cp.name}" ?\n\nกราฟจะกลับไปคำนวณลิมิตสด (provisional)`)) return;
-    try {
-      await apiCall(`/charts/${cp.id}/baseline`, { method: 'DELETE' });
-      say('success', 'ล้าง baseline แล้ว');
-      await loadCheckpoints(selectedModel);
-    } catch (e) { fail(e); }
-  };
+  // ⚠️ ปุ่มยืนยันเป็นสีเหลือง ไม่ใช่แดง — แดงสงวนไว้ให้แกนสเปก/ของที่กู้ไม่ได้
+  //    ส่วน baseline คือ control limit (แกนเหลือง) และกดตั้งใหม่ได้เสมอ
+  // ⚠️ ล้างทีละขอบเขต ไม่ใช่ล้างทั้งจุดตรวจ — ล้างของ MC-01 ต้องไม่ไปแตะชุดรวมหรือ MC-02
+  const clearBaseline = (cp, machineId = 0) => showConfirm({
+    title: `ล้าง baseline ของ "${cp.name}" (${scopeName(machineId)}) ?`,
+    body: 'กราฟของขอบเขตนี้จะกลับไปคำนวณลิมิตสด (provisional) ขอบเขตอื่นไม่ถูกแตะ',
+    variant: 'warning',
+    confirmLabel: 'ล้าง baseline',
+    onConfirm: async () => {
+      try {
+        const q = machineId ? `?machine_id=${encodeURIComponent(machineId)}` : '';
+        await apiCall(`/charts/${cp.id}/baseline${q}`, { method: 'DELETE' });
+        say('success', 'ล้าง baseline แล้ว');
+        await loadCheckpoints(selectedModel);
+      } catch (e) { fail(e); }
+    },
+  });
 
   return (
     <Container fluid className="page">
@@ -188,11 +321,17 @@ const MasterSetup = () => {
           fromMo={Boolean(prefill)}
           modelForm={modelForm} setModelForm={setModelForm}
           editingModel={editingModel} setEditingModel={setEditingModel}
+          cpForm={cpForm} setCpForm={setCpForm}
+          editingCp={editingCp} setEditingCp={setEditingCp}
+          resetCp={resetCp} onRemember={rememberMeasurement} gaugeMemory={gaugeMemory}
+          specMode={specMode} setSpecMode={setSpecMode} tolForm={tolForm} setTolForm={setTolForm}
           models={models} divisions={lookups.divisions}
           selectedModel={selectedModel} setSelectedModel={setSelectedModel}
           checkpoints={checkpoints}
-          onSave={save} onRemove={remove} onMove={moveCheckpoint}
+          onSave={save} onRemove={remove} onMove={moveCheckpoint} onPurgeVoided={purgeVoided}
           onPreviewBaseline={previewBaseline} onClearBaseline={clearBaseline}
+          scopeName={scopeName}
+          onAlert={showAlert}
         />
       )}
       {tab === 'divisions' && (
@@ -203,7 +342,7 @@ const MasterSetup = () => {
             // dept ของ IPBASS — ว่างไว้ได้ แต่การยิง MO หา item จะใช้ไม่ได้จนกว่าจะตั้ง
             { key: 'ipbass_dept', label: 'IPBASS dept (เช่น T47183)' },
           ]}
-          onSave={save} onRemove={remove} labelOf={(r) => r.name}
+          onSave={save} onRemove={remove} onAlert={showAlert} labelOf={(r) => r.name}
         />
       )}
       {tab === 'machines' && (
@@ -215,7 +354,7 @@ const MasterSetup = () => {
             { key: 'division_id', label: 'Division', type: 'select', options: lookups.divisions, required: true },
             { key: 'is_active', label: 'ใช้งาน', type: 'check' },
           ]}
-          onSave={save} onRemove={remove} labelOf={(r) => `${r.code} — ${r.name}`}
+          onSave={save} onRemove={remove} onAlert={showAlert} labelOf={(r) => `${r.code} — ${r.name}`}
         />
       )}
       {tab === 'inspectors' && (
@@ -227,11 +366,21 @@ const MasterSetup = () => {
             { key: 'division_id', label: 'Division', type: 'select', options: lookups.divisions },
             { key: 'is_active', label: 'ใช้งาน', type: 'check' },
           ]}
-          onSave={save} onRemove={remove} labelOf={(r) => r.name}
+          onSave={save} onRemove={remove} onAlert={showAlert} labelOf={(r) => r.name}
         />
       )}
 
-      <BaselineModal info={baselineInfo} onClose={() => setBaselineInfo(null)} onConfirm={confirmBaseline} />
+      <BaselineModal
+        info={baselineInfo}
+        machines={baselineMachines}
+        scopeName={scopeName}
+        onScopeChange={(machineId) => loadBaselinePreview(baselineInfo.checkpoint, machineId)}
+        onClose={() => setBaselineInfo(null)}
+        onConfirm={confirmBaseline}
+      />
+      {/* ⚠️ กล่องที่ปิดอยู่ต้องไม่ทิ้ง node ไว้เลย — มีเทสยืนยันทั้งหน้าว่าสเปกด้านเดียว
+          ต้องไม่มี role="alert" สักตัว (MasterSetup.test.js 'สเปกด้านเดียวต้องไม่มีคำเตือน') */}
+      <AppDialog dialog={dialog} onHide={closeDialog} />
     </Container>
   );
 };
@@ -240,7 +389,7 @@ const MasterSetup = () => {
 //
 // ตารางเดียวใช้ได้ทั้งสามชั้น เพราะ backend เป็น generic CRUD อยู่แล้ว
 // ⚠️ key ของ columns ต้องตรงชื่อคอลัมน์ใน DB เป๊ะ — ไม่อยู่ใน ALLOWED_COLUMNS จะถูกตอบ 400
-const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, labelOf }) => {
+const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, onAlert, labelOf }) => {
   const blank = () => Object.fromEntries(columns.map((c) => [c.key, c.type === 'check' ? true : '']));
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);
@@ -250,7 +399,9 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, labelOf }) =
   const submit = async (e) => {
     e.preventDefault();
     for (const c of columns) {
-      if (c.required && form[c.key] === '') return window.alert(`กรอก "${c.label}" ก่อน`);
+      if (c.required && form[c.key] === '') {
+        return onAlert({ title: 'กรอกข้อมูลไม่ครบ', body: `กรอก "${c.label}" ก่อน` });
+      }
     }
     const data = Object.fromEntries(columns.map((c) => [
       c.key,
@@ -281,13 +432,13 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, labelOf }) =
                     onChange={(e) => setForm((f) => ({ ...f, [c.key]: e.target.checked }))}
                   />
                 ) : c.type === 'select' ? (
-                  <Form.Select
+                  <SearchSelect
+                    id={`simple-${table}-${c.key}`}
                     value={form[c.key] ?? ''}
-                    onChange={(e) => setForm((f) => ({ ...f, [c.key]: e.target.value }))}
-                  >
-                    <option value="">--</option>
-                    {(c.options ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                  </Form.Select>
+                    onChange={(value) => setForm((f) => ({ ...f, [c.key]: value }))}
+                    placeholder="--"
+                    options={(c.options ?? []).map((o) => ({ value: String(o.id), label: o.name }))}
+                  />
                 ) : (
                   <Form.Control
                     value={form[c.key] ?? ''}
@@ -340,39 +491,63 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, labelOf }) =
 //
 // "รุ่น" ของระบบนี้คือ item number ของ IPBASS — ตาราง/ตัวแปรยังชื่อ model/modelId ตามเดิม
 // เปลี่ยนแค่คอลัมน์ item_no/item_name กับข้อความบนหน้าจอ
-// ⚠️ modelForm / editingModel ถูกยกไปไว้ที่ <MasterSetup> เพราะแท็บทำให้ component นี้
-//    unmount (ดูคอมเมนต์ที่นั่น) · cpForm ยังอยู่ที่นี่ตามเดิม สลับแท็บแล้วยังหายอยู่
-//    แต่เป็นพฤติกรรมเดิมและไม่อยู่บนเส้นทางที่มาจาก MO
+// ⚠️ ฟอร์มทั้งสองชุด (modelForm/editingModel และ cpForm/editingCp) ถูกยกไปไว้ที่
+//    <MasterSetup> เพราะแท็บทำให้ component นี้ unmount — ดูคอมเมนต์ที่นั่น อย่าย้ายกลับลงมา
 const ModelsTab = ({
   fromMo, modelForm, setModelForm, editingModel, setEditingModel,
+  cpForm, setCpForm, editingCp, setEditingCp, resetCp, onRemember, gaugeMemory,
+  specMode, setSpecMode, tolForm, setTolForm,
   models, divisions, selectedModel, setSelectedModel, checkpoints,
-  onSave, onRemove, onMove, onPreviewBaseline, onClearBaseline,
+  onSave, onRemove, onMove, onPurgeVoided, onPreviewBaseline, onClearBaseline,
+  scopeName,
+  onAlert,
 }) => {
-  const [cpForm, setCpForm] = useState(blankCheckpoint);
-  const [editingCp, setEditingCp] = useState(null);
-
   const resetModel = () => { setModelForm(blankModel()); setEditingModel(null); };
-  const resetCp = () => { setCpForm(blankCheckpoint()); setEditingCp(null); };
+
+  // ค้นหา item ในตารางข้างล่าง — เป็นสเตตชั่วคราวของการมอง ไม่ใช่ของที่กรอกค้างไว้
+  // จึงปล่อยให้หายตอนสลับแท็บได้ ต่างจาก modelForm/cpForm ที่ถูกยกขึ้นไปไว้ที่ <MasterSetup>
+  const [modelQuery, setModelQuery] = useState('');
+
+  // ตัวเลือกใน <datalist> ทั้งสองช่องงอกเองจากของที่ใช้อยู่จริง ไม่ต้องมี endpoint ใหม่
+  // ⚠️ ครึ่งที่มาจาก DB เห็นแค่ item ที่เลือกอยู่ (loadCheckpoints ดึงทีละ model)
+  //    เครื่องที่เพิ่งเปิดใหม่จึงเห็นแค่ UNIT_OPTIONS และลิสต์เครื่องมือวัดว่าง — ตั้งใจ ไม่ใช่พัง
+  const unitOptions = useMemo(
+    () => mergeOptions(UNIT_OPTIONS, checkpoints.map((c) => c.unit)),
+    [checkpoints]
+  );
+  const gaugeOptions = useMemo(
+    () => mergeOptions(gaugeMemory, checkpoints.map((c) => c.gauge)),
+    [gaugeMemory, checkpoints]
+  );
+
+  // ตรวจสดขณะพิมพ์ ไม่ใช่รอกดบันทึก — สเปกกลับหัวที่หลุดไปแล้วแก้ย้อนหลังไม่ได้
+  // เพราะ judgment ถูก snapshot ลงใบตรวจไปแล้ว
+  const issues = useMemo(() => specIssues(cpForm), [cpForm]);
+
+  const editingCpRow = checkpoints.find((c) => c.id === editingCp) ?? null;
 
   const submitModel = async (e) => {
     e.preventDefault();
     if (!modelForm.division_id || !modelForm.item_no || !modelForm.item_name) {
-      return window.alert('กรอก Division / Item No. / ชื่อ item ให้ครบ');
+      return onAlert({ title: 'กรอกข้อมูลไม่ครบ', body: 'กรอก Division / Item No. / ชื่อ item ให้ครบ' });
     }
     if (await onSave('models', modelForm, editingModel)) resetModel();
   };
 
   const submitCp = async (e) => {
     e.preventDefault();
-    if (!selectedModel) return window.alert('เลือก item ก่อน');
-    if (!cpForm.name) return window.alert('กรอกชื่อจุดตรวจ');
+    if (!selectedModel) return onAlert({ title: 'ยังไม่ได้เลือก item', body: 'เลือก item ก่อน' });
+    if (!cpForm.name) return onAlert({ title: 'กรอกข้อมูลไม่ครบ', body: 'กรอกชื่อจุดตรวจ' });
+    // สเปกกลับหัวบันทึกไปแล้วทุกชิ้นที่วัดจะเป็น NG และ judgment ถูก snapshot ไปแล้ว
+    if (issues.blocking) return onAlert({ title: 'สเปกไม่ถูกต้อง', body: issues.blocking });
 
     const isAttr = cpForm.char_type === 'attribute';
     const data = {
       model_id: selectedModel,
       name: cpForm.name,
       char_type: cpForm.char_type,
-      unit: cpForm.unit || null,
+      // จุด attribute ไม่มีค่าตัวเลข หน่วยจึงไม่มีความหมาย ต้องล้างเหมือน usl/lsl/target
+      unit: isAttr ? null : (cpForm.unit || null),
       gauge: cpForm.gauge || null,
       // จุด attribute ไม่มีค่าตัวเลข ส่ง null ทั้งหมดและบังคับ n = 1
       usl: isAttr ? null : numOrNull(cpForm.usl),
@@ -385,11 +560,18 @@ const ModelsTab = ({
     // seq_no ต่อท้ายอัตโนมัติตอนเพิ่มใหม่ — ลำดับปรับด้วยปุ่มลูกศรทีหลัง
     if (!editingCp) data.seq_no = (checkpoints.reduce((m, c) => Math.max(m, c.seq_no), 0) || 0) + 1;
 
-    if (await onSave('checkpoints', data, editingCp)) resetCp();
+    if (await onSave('checkpoints', data, editingCp)) {
+      // ⚠️ ต้องจำก่อน resetCp เพราะ resetCp เติมฟอร์มจากสิ่งที่จำไว้
+      onRemember(data);
+      resetCp();
+    }
   };
 
   const startEditCp = (cp) => {
     setEditingCp(cp.id);
+    // แก้ของเก่าต้องเห็นเลขที่เก็บอยู่จริงก่อนเสมอ — สลับไปโหมดพิกัดเองได้ทีหลัง
+    setSpecMode('limits');
+    setTolForm(EMPTY_TOL);
     // ⚠️ toNum คืน null ได้ ต้อง ?? '' ก่อนใส่ input
     setCpForm({
       name: cp.name ?? '', char_type: cp.char_type, unit: cp.unit ?? '', gauge: cp.gauge ?? '',
@@ -402,7 +584,47 @@ const ModelsTab = ({
     value: cpForm[key] ?? '',
     onChange: (e) => setCpForm((f) => ({ ...f, [key]: e.target.value })),
   });
+
+  // ⚠️ ช่องพิกัดเป็นแค่ "วิธีพิมพ์" — cpForm.lsl/target/usl ยังเป็นแหล่งความจริงเดียวเสมอ
+  //     ทุกคีย์ที่เคาะแปลงแล้วเขียนกลับลง cpForm ทันที specIssues กับ submitCp จึงไม่ต้องรู้
+  //     ด้วยซ้ำว่ามีโหมด และไม่มีทางที่ "สิ่งที่เห็นบน preview" กับ "สิ่งที่บันทึก" จะหลุดจากกัน
+  const tolField = (key) => ({
+    value: tolForm[key] ?? '',
+    onChange: (e) => {
+      const next = { ...tolForm, [key]: e.target.value };
+      setTolForm(next);
+      setCpForm((f) => ({ ...f, ...limitsFromTolerance(next) }));
+    },
+  });
+
+  // เข้าโหมดพิกัดแล้วค่าที่กรอกไว้ต้องไม่หาย — แปลงขึ้นมาให้ (ไม่มีค่าพื้นให้คิดก็คืนว่างตามกฎ)
+  // ออกจากโหมดพิกัดไม่ต้องทำอะไร ค่าอยู่ใน cpForm ครบแล้ว สลับไปกลับจึงไม่มีทางทำให้เลขขยับ
+  const switchSpecMode = (mode) => {
+    if (mode === 'tol') setTolForm(toleranceFromLimits(cpForm));
+    setSpecMode(mode);
+  };
+
   const isAttr = cpForm.char_type === 'attribute';
+  const tolMode = specMode === 'tol' && !isAttr;
+
+  // ⚠️ กรองเฉพาะ "ตารางที่แสดง" ไม่ได้กรอง models ที่ส่งเข้ามา — seq_no ของจุดตรวจและ
+  //    การเลือก item ยังอ้าง models ตัวเต็มอยู่ กรองผิดที่แล้ว item ที่เลือกค้างไว้จะหายไปจากจอ
+  const visibleModels = models.filter((m) => {
+    const q = modelQuery.trim().toLowerCase();
+    if (!q) return true;
+    return `${m.item_no} ${m.item_name} ${m.division_name ?? ''}`.toLowerCase().includes(q);
+  });
+
+  // preview ใช้ <SpecValue> ตัวเดียวกับที่ operator เห็นบนใบตรวจจริง จะได้ไม่มีรูปที่สองให้เพี้ยน
+  // ⚠️ numOrNull คืน NaN ได้ตอนพิมพ์ค้าง ซึ่ง SpecValue กรองด้วย isFinite อยู่แล้ว
+  //     ห้ามส่ง cpForm เข้าไปตรง ๆ มันเป็นสตริง SpecValue เช็ค typeof === 'number'
+  const specPreview = {
+    char_type: 'variable',
+    unit: cpForm.unit,
+    usl: numOrNull(cpForm.usl),
+    lsl: numOrNull(cpForm.lsl),
+    target: numOrNull(cpForm.target),
+  };
 
   return (
     <Row>
@@ -418,13 +640,16 @@ const ModelsTab = ({
               </Alert>
             )}
             <Form onSubmit={submitModel}>
-              <Form.Select
-                className="mb-2" value={modelForm.division_id}
-                onChange={(e) => setModelForm((f) => ({ ...f, division_id: e.target.value }))}
-              >
-                <option value="">-- Division --</option>
-                {divisions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </Form.Select>
+              <div className="mb-2">
+                <SearchSelect
+                  id="model-division"
+                  aria-label="Division ของ item"
+                  value={modelForm.division_id}
+                  onChange={(value) => setModelForm((f) => ({ ...f, division_id: value }))}
+                  placeholder="-- Division --"
+                  options={divisions.map((d) => ({ value: String(d.id), label: d.name }))}
+                />
+              </div>
               <Form.Control className="mb-2" placeholder="Item No. เช่น AAB-1001-01"
                 value={modelForm.item_no} onChange={(e) => setModelForm((f) => ({ ...f, item_no: e.target.value }))} />
               <Form.Control className="mb-2" placeholder="ชื่อ item"
@@ -442,9 +667,19 @@ const ModelsTab = ({
             </Form>
 
             <hr />
+            {/* ลิสต์ item ยาวเป็นร้อยแถว เลื่อนหาช้ากว่าพิมพ์ — ค้นได้ทั้งเลข item ชื่อ และ division */}
+            <Form.Control
+              className="mb-2"
+              placeholder="ค้นหา item — เลข / ชื่อ / division"
+              value={modelQuery}
+              onChange={(e) => setModelQuery(e.target.value)}
+            />
+            {visibleModels.length === 0 && (
+              <div className="small text-muted mb-2">ไม่พบ item ที่ค้นหา</div>
+            )}
             <Table size="sm" hover className="mb-0">
               <tbody>
-                {models.map((m) => (
+                {visibleModels.map((m) => (
                   <tr key={m.id} className={selectedModel === String(m.id) ? 'table-primary' : ''}>
                     <td role="button" onClick={() => setSelectedModel(String(m.id))}>
                       <div className="fw-bold">{m.item_no}</div>
@@ -452,6 +687,13 @@ const ModelsTab = ({
                         {m.item_name} · {m.division_name} · {toNum(m.checkpoint_count) || 0} จุด
                         {!m.is_active && <Badge bg="secondary" className="ms-1">ปิดใช้งาน</Badge>}
                       </div>
+                      {/* ใบที่ยกเลิกแล้วยังกิน FK อยู่ ทำให้ลบ item ไม่ได้ — ปุ่มนี้คือทางออก */}
+                      {toNum(m.voided_count) > 0 && (
+                        <Button size="sm" variant="link" className="p-0 small"
+                          onClick={(e) => { e.stopPropagation(); onPurgeVoided(m); }}>
+                          ล้างใบที่ยกเลิกแล้ว ({toNum(m.voided_count)})
+                        </Button>
+                      )}
                     </td>
                     <td style={{ width: 96 }} className="text-end align-middle">
                       <Button size="sm" variant="outline-primary" className="me-1"
@@ -473,30 +715,115 @@ const ModelsTab = ({
       {/* จุดตรวจ */}
       <Col lg={8}>
         <Card style={{ opacity: selectedModel ? 1 : 0.6 }}>
+          {/* ตอนแก้ ฟอร์มอยู่บนสุดแต่แถวอยู่ในตารางข้างล่าง ถ้าหัวการ์ดไม่บอกว่ากำลังแก้จุดไหน
+              สัญญาณเดียวที่มีคือปุ่มเปลี่ยนเป็นสีเหลือง ซึ่งมองข้ามง่ายมาก */}
           <Card.Header>
-            จุดตรวจ {selectedModel && `— ${models.find((m) => String(m.id) === selectedModel)?.item_no ?? ''}`}
+            {editingCpRow
+              ? <>กำลังแก้จุดที่ <b>{editingCpRow.seq_no}</b> — {editingCpRow.name}</>
+              : <>จุดตรวจ {selectedModel && `— ${models.find((m) => String(m.id) === selectedModel)?.item_no ?? ''}`}</>}
           </Card.Header>
           <Card.Body>
             <Form onSubmit={submitCp}>
-              <Row className="g-2 mb-2">
-                <Col md={4}><Form.Control placeholder="ชื่อจุดตรวจ" {...cpField('name')} disabled={!selectedModel} /></Col>
-                <Col md={3}>
+              <Row className="g-2 mb-2 align-items-end">
+                <Form.Group as={Col} md={4} controlId="cp-name">
+                  <Form.Label className="small mb-1">ชื่อจุดตรวจ</Form.Label>
+                  <Form.Control placeholder="เช่น OD ด้านหน้า" {...cpField('name')} disabled={!selectedModel} />
+                </Form.Group>
+                <Form.Group as={Col} md={3} controlId="cp-char-type">
+                  <Form.Label className="small mb-1">ชนิด</Form.Label>
                   <Form.Select {...cpField('char_type')} disabled={!selectedModel}>
                     {CHAR_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </Form.Select>
-                </Col>
-                <Col md={2}><Form.Control placeholder="หน่วย" {...cpField('unit')} disabled={!selectedModel || isAttr} /></Col>
-                <Col md={3}><Form.Control placeholder="เครื่องมือวัด" {...cpField('gauge')} disabled={!selectedModel} /></Col>
+                </Form.Group>
+                {/* ⚠️ หน่วยกับเครื่องมือวัดเป็น <input list> โดยตั้งใจ ไม่ใช่ <Form.Select>
+                    ทั้งสองคอลัมน์เป็น free text มาแต่ไหนแต่ไร บังคับเลือกเมื่อไหร่ ค่าเก่าที่
+                    ไม่ตรงลิสต์จะแสดงเป็นช่องว่างแล้วถูกเขียนทับตอนกดบันทึกแก้อย่างอื่น */}
+                <Form.Group as={Col} md={2} controlId="cp-unit">
+                  <Form.Label className="small mb-1">หน่วย</Form.Label>
+                  <Form.Control list="cp-unit-options" placeholder="mm"
+                    {...cpField('unit')} disabled={!selectedModel || isAttr} />
+                </Form.Group>
+                <Form.Group as={Col} md={3} controlId="cp-gauge">
+                  <Form.Label className="small mb-1">เครื่องมือวัด</Form.Label>
+                  <Form.Control list="cp-gauge-options" placeholder="เช่น Micrometer"
+                    {...cpField('gauge')} disabled={!selectedModel} />
+                </Form.Group>
               </Row>
-              <Row className="g-2 mb-2">
-                <Col md={2}><Form.Control type="number" step="0.0001" placeholder="LSL" {...cpField('lsl')} disabled={!selectedModel || isAttr} /></Col>
-                <Col md={2}><Form.Control type="number" step="0.0001" placeholder="Target" {...cpField('target')} disabled={!selectedModel || isAttr} /></Col>
-                <Col md={2}><Form.Control type="number" step="0.0001" placeholder="USL" {...cpField('usl')} disabled={!selectedModel || isAttr} /></Col>
-                <Col md={2}>
+
+              <datalist id="cp-unit-options">
+                {unitOptions.map((u) => <option key={u} value={u} />)}
+              </datalist>
+              <datalist id="cp-gauge-options">
+                {gaugeOptions.map((g) => <option key={g} value={g} />)}
+              </datalist>
+
+              {/* แบบส่วนใหญ่เขียนเป็นค่ากลาง + พิกัด (1.23 +0.5 -0.6) ไม่ใช่เลขสัมบูรณ์
+                  ให้บวกลบในหัวก่อนพิมพ์คือเปิดช่องให้บวกผิด ซึ่ง judgment ถูก snapshot
+                  ลงใบตรวจไปแล้วตอนตรวจ แก้ย้อนหลังไม่ได้ */}
+              {!isAttr && (
+                <div className="d-flex flex-wrap gap-3 mb-2" role="radiogroup" aria-label="รูปแบบการกรอกสเปก">
+                  {SPEC_MODES.map((m) => (
+                    <Form.Check
+                      key={m.value}
+                      type="radio"
+                      id={`cp-spec-mode-${m.value}`}
+                      name="cp-spec-mode"
+                      className="small"
+                      label={m.label}
+                      checked={specMode === m.value}
+                      disabled={!selectedModel}
+                      onChange={() => switchSpecMode(m.value)}
+                    />
+                  ))}
+                </div>
+              )}
+
+              <Row className="g-2 mb-2 align-items-end">
+                {tolMode ? (
+                  <>
+                    <Form.Group as={Col} md={2} controlId="cp-nominal">
+                      <Form.Label className="small mb-1">ค่ากลาง</Form.Label>
+                      <Form.Control type="number" step="0.0001" placeholder="1.23"
+                        {...tolField('nominal')} disabled={!selectedModel} />
+                    </Form.Group>
+                    {/* ⚠️ สองช่องนี้ต้องเป็น type="text" ห้ามเป็น type="number" —
+                        input type=number ถือว่า "+0.5" เป็นค่าไม่ถูกต้องตามสเปก HTML
+                        (อนุญาตแค่เครื่องหมายลบ) แล้วคืนค่าว่างเงียบ ๆ พิกัดบวกทั้งคู่
+                        (งานรู เช่น 10 +0.015 +0.005) จะกรอกไม่ได้เลย
+                        เหตุผลเดียวกับช่องกรอกค่าวัดใน InspectionSheet.js */}
+                    <Form.Group as={Col} md={2} controlId="cp-tol-upper">
+                      <Form.Label className="small mb-1">พิกัดบน</Form.Label>
+                      <Form.Control type="text" inputMode="decimal" placeholder="+0.5"
+                        {...tolField('tolUpper')} disabled={!selectedModel} />
+                    </Form.Group>
+                    <Form.Group as={Col} md={2} controlId="cp-tol-lower">
+                      <Form.Label className="small mb-1">พิกัดล่าง</Form.Label>
+                      <Form.Control type="text" inputMode="decimal" placeholder="-0.6"
+                        {...tolField('tolLower')} disabled={!selectedModel} />
+                    </Form.Group>
+                  </>
+                ) : (
+                  <>
+                    <Form.Group as={Col} md={2} controlId="cp-lsl">
+                      <Form.Label className="small mb-1">LSL</Form.Label>
+                      <Form.Control type="number" step="0.0001" {...cpField('lsl')} disabled={!selectedModel || isAttr} />
+                    </Form.Group>
+                    <Form.Group as={Col} md={2} controlId="cp-target">
+                      <Form.Label className="small mb-1">Target</Form.Label>
+                      <Form.Control type="number" step="0.0001" {...cpField('target')} disabled={!selectedModel || isAttr} />
+                    </Form.Group>
+                    <Form.Group as={Col} md={2} controlId="cp-usl">
+                      <Form.Label className="small mb-1">USL</Form.Label>
+                      <Form.Control type="number" step="0.0001" {...cpField('usl')} disabled={!selectedModel || isAttr} />
+                    </Form.Group>
+                  </>
+                )}
+                <Form.Group as={Col} md={2} controlId="cp-sample-size">
                   {/* n = 1 → กราฟ I-MR · n >= 2 → กราฟ X-bar R (ตาราง A2/D3/D4 มีถึง 10) */}
-                  <Form.Control type="number" min="1" max="10" placeholder="ชิ้น/ครั้ง"
+                  <Form.Label className="small mb-1">ชิ้น/ครั้ง</Form.Label>
+                  <Form.Control type="number" min="1" max="10"
                     {...cpField('sample_size')} disabled={!selectedModel || isAttr} />
-                </Col>
+                </Form.Group>
                 <Col md="auto" className="d-flex align-items-center gap-3">
                   <Form.Check label="จุดวิกฤต" checked={cpForm.is_critical} disabled={!selectedModel}
                     onChange={(e) => setCpForm((f) => ({ ...f, is_critical: e.target.checked }))} />
@@ -510,6 +837,29 @@ const ModelsTab = ({
                   {editingCp && <Button variant="link" onClick={resetCp}>ยกเลิก</Button>}
                 </Col>
               </Row>
+
+              {/* ⚠️ ห้ามเป็น <Alert> — ของ react-bootstrap มี role="alert" ติดมา แล้วจะกลายเป็น
+                  "คำเตือน" ทั้งที่เป็นแค่ผลลัพธ์ที่คำนวณได้ (มีเทสล็อกไว้ว่าสเปกด้านเดียว
+                  ต้องไม่มี alert สักตัว) */}
+              {tolMode && (
+                <div className="small text-muted mb-2 d-flex align-items-center gap-2">
+                  <span>จะบันทึกเป็น</span>
+                  <SpecValue checkpoint={specPreview} />
+                </div>
+              )}
+
+              {!isAttr && (
+                <div className="small text-muted mb-2">
+                  ชิ้น/ครั้ง 1 = กราฟ I-MR · ตั้งแต่ 2 = กราฟ X̄-R · เว้น LSL หรือ USL ว่างได้ถ้าแบบคุมด้านเดียว
+                  {tolMode && ' · ไม่ใส่เครื่องหมาย = พิกัดบนขึ้น พิกัดล่างลง · ใส่ + หรือ - เองได้ถ้าแบบเขียนไว้แบบนั้น (เช่น 10 -0.005 -0.015)'}
+                </div>
+              )}
+              {issues.blocking && (
+                <Alert variant="danger" className="py-2 px-3 mb-2 small">{issues.blocking}</Alert>
+              )}
+              {issues.warnings.map((w) => (
+                <Alert key={w} variant="warning" className="py-2 px-3 mb-2 small">{w}</Alert>
+              ))}
             </Form>
 
             <Table striped bordered hover responsive size="sm" className="mb-0">
@@ -523,7 +873,13 @@ const ModelsTab = ({
                 {checkpoints.length === 0
                   ? <tr><td colSpan="7" className="text-center text-muted">ยังไม่มีจุดตรวจ</td></tr>
                   : checkpoints.map((cp, i) => (
-                    <tr key={cp.id} className={!cp.is_active ? 'text-muted' : ''}>
+                    <tr
+                      key={cp.id}
+                      className={[
+                        editingCp === cp.id ? 'table-warning' : '',
+                        !cp.is_active ? 'text-muted' : '',
+                      ].filter(Boolean).join(' ')}
+                    >
                       <td>
                         {cp.seq_no}
                         <Button size="sm" variant="link" className="p-0 ms-1" disabled={i === 0}
@@ -549,23 +905,33 @@ const ModelsTab = ({
                           /* ⚠️ ของเดิมสลับกันอยู่: ล็อกแล้ว = เขียวเด่น · provisional = เทาจาง
                              ทั้งที่ provisional คือสถานะที่ต้องไปทำอะไรสักอย่าง (เส้นลิมิตยังขยับ
                              ตามข้อมูล จับความผิดปกติไม่ได้) ส่วนล็อกแล้วคือปกติ
-                             ตามหลักของทั้งระบบ: เงียบเมื่อปกติ มีสีเมื่อต้องดู */
-                          : cp.baseline_locked_at
+                             ตามหลักของทั้งระบบ: เงียบเมื่อปกติ มีสีเมื่อต้องดู
+                             ⚠️ ตอนนี้มีได้หลายชุด (รวมทุกเครื่อง + รายเครื่อง) ต้องลิสต์ให้ครบ
+                                โชว์แค่ "ล็อกแล้ว" เฉย ๆ = ไม่รู้ว่าเครื่องไหนยังไม่ได้ล็อก */
+                          : cp.baselines?.length > 0
                             ? (
-                              <span className="text-muted num">
-                                ล็อกแล้ว (n={cp.baseline_n}, {cp.baseline_subgroups} subgroup)
-                              </span>
+                              <ul className="baseline-scopes num">
+                                {cp.baselines.map((b) => (
+                                  <li key={b.machineId}>
+                                    {scopeName(b.machineId)} — n={b.n}, {b.subgroups} subgroup
+                                    <Button
+                                      size="sm" variant="link" className="p-0 ms-1"
+                                      onClick={() => onClearBaseline(cp, b.machineId)}
+                                    >ล้าง</Button>
+                                  </li>
+                                ))}
+                              </ul>
                             )
                             : <Badge bg="warning">provisional</Badge>}
                       </td>
                       <td>
                         <Button size="sm" variant="primary" className="me-1" onClick={() => startEditCp(cp)}>แก้</Button>
+                        {/* ⚠️ ปุ่มเดียวเสมอ ไม่สลับเป็น "ล้าง" อีกแล้ว — จุดหนึ่งมี baseline ได้
+                            หลายชุด กล่องที่เปิดขึ้นมาเป็นที่เลือกเองว่าจะล็อกของขอบเขตไหน
+                            (ปุ่มล้างของแต่ละชุดอยู่ในช่อง Control limit) */}
                         {cp.char_type !== 'attribute' && (
-                          cp.baseline_locked_at
-                            ? <Button size="sm" variant="outline-warning" className="me-1"
-                                onClick={() => onClearBaseline(cp)}>ล้าง</Button>
-                            : <Button size="sm" variant="outline-primary" className="me-1"
-                                onClick={() => onPreviewBaseline(cp)}>Baseline</Button>
+                          <Button size="sm" variant="outline-primary" className="me-1"
+                            onClick={() => onPreviewBaseline(cp)}>Baseline</Button>
                         )}
                         <Button size="sm" variant="danger" onClick={() => onRemove('checkpoints', cp.id, cp.name)}>ลบ</Button>
                       </td>
@@ -581,37 +947,86 @@ const ModelsTab = ({
 };
 
 // ── ยืนยันก่อน freeze control limit ────────────────────────────────────────
-const BaselineModal = ({ info, onClose, onConfirm }) => (
-  <Modal show={Boolean(info)} onHide={onClose}>
-    <Modal.Header closeButton><Modal.Title>ล็อก Control Limit</Modal.Title></Modal.Header>
-    {info && (
-      <Modal.Body>
-        <p className="mb-2">จุดตรวจ: <strong>{info.checkpoint.name}</strong></p>
-        <Table size="sm" bordered>
-          <tbody>
-            <tr><td>ขนาด subgroup (n)</td><td>{info.n}</td></tr>
-            <tr><td>จำนวน subgroup</td><td>{info.subgroupCount}</td></tr>
-            <tr><td>X̿ (ค่ากลาง)</td><td>{info.xbarbar?.toFixed(4)}</td></tr>
-            <tr><td>R̄</td><td>{info.rbar?.toFixed(4)}</td></tr>
-            <tr>
-              <td>UCL / LCL ที่จะได้</td>
-              <td>{info.limits?.ucl?.toFixed(4)} / {info.limits?.lcl?.toFixed(4)}</td>
-            </tr>
-          </tbody>
-        </Table>
-        {!info.enoughSubgroups && (
-          <Alert variant="warning" className="mb-0 small">
-            มีแค่ {info.subgroupCount} subgroup — มาตรฐานแนะนำอย่างน้อย {info.minSubgroups} subgroup
-            ที่กระบวนการนิ่งแล้ว ล็อกตอนนี้ได้แต่ลิมิตจะยังไม่น่าเชื่อถือ กด Re-baseline ใหม่ได้ทีหลัง
-          </Alert>
-        )}
-      </Modal.Body>
-    )}
-    <Modal.Footer>
-      <Button variant="secondary" onClick={onClose}>ยกเลิก</Button>
-      <Button variant="primary" onClick={onConfirm}>ยืนยันล็อก</Button>
-    </Modal.Footer>
-  </Modal>
-);
+//
+// ⚠️ ขอบเขตเลือกในกล่องนี้ แล้วตัวเลขพรีวิวโหลดใหม่ตามทุกครั้ง — ตัวเลขที่เห็นต้องเป็นของ
+//    ขอบเขตที่กำลังจะล็อกเสมอ ไม่งั้นคนอ่านเลขของชุดรวมแล้วกดล็อกให้เครื่องเดียว
+//
+// ⚠️ ชุด "รวมทุกเครื่อง" คิดจากใบตรวจของทุกเครื่องปนกัน ซึ่งแต่ละเครื่องคือคนละ process
+//    ต้องเขียนบอกไว้ตรง ๆ ไม่ใช่ให้ไปรู้ทีหลังจากกราฟที่ไม่เคยเตือนอะไรเลย
+const BaselineModal = ({ info, machines = [], scopeName, onScopeChange, onClose, onConfirm }) => {
+  const p = info?.preview;
+
+  return (
+    <Modal show={Boolean(info)} onHide={onClose}>
+      <Modal.Header closeButton><Modal.Title>ล็อก Control Limit</Modal.Title></Modal.Header>
+      {info && (
+        <Modal.Body>
+          <p className="mb-2">จุดตรวจ: <strong>{info.checkpoint.name}</strong></p>
+
+          <Form.Group className="mb-3">
+            <Form.Label className="small mb-1" htmlFor="baseline-scope">ล็อกให้ขอบเขตไหน</Form.Label>
+            <Form.Select
+              id="baseline-scope"
+              size="sm"
+              value={info.machineId}
+              onChange={(e) => onScopeChange(e.target.value)}
+            >
+              <option value="">รวมทุกเครื่อง</option>
+              {machines.map((mc) => (
+                <option key={mc.id} value={String(mc.id)}>{mc.code} — {mc.name}</option>
+              ))}
+            </Form.Select>
+            {/* ⚠️ ห้ามเป็น <Alert> — role="alert" ติดมาด้วย และมีเทสยืนยันว่าหน้านี้ต้องไม่มี
+                alert เกินที่ตั้งใจ · ใช้ <Form.Text> ตามกฎของ AppDialog */}
+            <Form.Text muted>
+              {info.machineId
+                ? 'คิดจากใบตรวจของเครื่องนี้เท่านั้น — เป็นลิมิตของเครื่องนี้จริง ๆ'
+                : 'คิดจากใบตรวจของทุกเครื่องปนกัน — ใช้เป็นเส้นอ้างอิงของกระบวนการรวม ไม่ใช่ลิมิตของเครื่องใดเครื่องหนึ่ง'}
+            </Form.Text>
+          </Form.Group>
+
+          {info.loading && <div className="text-muted small">กำลังคำนวณ…</div>}
+
+          {info.error && (
+            <div className="small" style={{ color: 'var(--amber-text)' }}>
+              {info.error} — เลือกขอบเขตอื่น หรือเก็บข้อมูลของ {scopeName(info.machineId)} ก่อน
+            </div>
+          )}
+
+          {p && !info.loading && (
+            <>
+              <Table size="sm" bordered>
+                <tbody>
+                  <tr><td>ขอบเขต</td><td>{scopeName(info.machineId)}</td></tr>
+                  <tr><td>ขนาด subgroup (n)</td><td>{p.n}</td></tr>
+                  <tr><td>จำนวน subgroup</td><td>{p.subgroupCount}</td></tr>
+                  <tr><td>X̿ (ค่ากลาง)</td><td>{p.xbarbar?.toFixed(4)}</td></tr>
+                  <tr><td>R̄</td><td>{p.rbar?.toFixed(4)}</td></tr>
+                  <tr>
+                    <td>UCL / LCL ที่จะได้</td>
+                    <td>{p.limits?.ucl?.toFixed(4)} / {p.limits?.lcl?.toFixed(4)}</td>
+                  </tr>
+                </tbody>
+              </Table>
+              {!p.enoughSubgroups && (
+                <Alert variant="warning" className="mb-0 small">
+                  มีแค่ {p.subgroupCount} subgroup — มาตรฐานแนะนำอย่างน้อย {p.minSubgroups} subgroup
+                  ที่กระบวนการนิ่งแล้ว ล็อกตอนนี้ได้แต่ลิมิตจะยังไม่น่าเชื่อถือ กด Re-baseline ใหม่ได้ทีหลัง
+                </Alert>
+              )}
+            </>
+          )}
+        </Modal.Body>
+      )}
+      <Modal.Footer>
+        <Button variant="secondary" onClick={onClose}>ยกเลิก</Button>
+        {/* ยังไม่มีตัวเลขให้ดู = ยังไม่มีอะไรให้ยืนยัน */}
+        <Button variant="primary" onClick={onConfirm} disabled={!p || info?.loading}>
+          ยืนยันล็อก
+        </Button>
+      </Modal.Footer>
+    </Modal>
+  );
+};
 
 export default MasterSetup;
