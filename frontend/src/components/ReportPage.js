@@ -13,6 +13,7 @@ import { useModelParam, useUrlParam, scHref } from '../utils/useModelParam';
 import ControlChart from './ControlChart';
 import InputGrid from './InputGrid';
 import InspectionList from './InspectionList';
+import EditInspectionModal from './EditInspectionModal';
 import SpecValue from './SpecValue';
 import { capTone } from '../utils/capability';
 
@@ -57,6 +58,9 @@ const ReportPage = () => {
   // มุมมองผลลัพธ์อยู่ใน URL (?view=input) — ลิงก์/รีเฟรชแล้วกลับมาที่เดิม ตามหลักเดียวกับ ?model=
   const [view, setView] = useUrlParam('view');
   const [gridKey, setGridKey] = useState(0);
+  // ใบที่เปิดกล่อง "แก้ค่าในใบเดิม" อยู่ (ต้อง login — กล่องจัดการเอง) · null = ปิด
+  const [editingId, setEditingId] = useState(null);
+  const [editMsg, setEditMsg] = useState(null);
 
   useEffect(() => {
     Promise.all([apiCall('/master/models?all=1'), apiCall('/master/lookups?all=1')])
@@ -371,15 +375,33 @@ const ReportPage = () => {
               </span>
             </Card.Header>
             <Card.Body>
+              {editMsg && (
+                <Alert variant={editMsg.variant} dismissible onClose={() => setEditMsg(null)}>{editMsg.text}</Alert>
+              )}
               <InspectionList
                 rows={report.inspections}
                 onChanged={() => { load(modelId, applied); setGridKey((k) => k + 1); }}
+                onEdit={(row) => { setEditMsg(null); setEditingId(row.id); }}
                 emptyText="ไม่มีใบตรวจที่ตรงกับตัวกรองนี้"
               />
             </Card.Body>
           </Card>
         </>
       )}
+
+      <EditInspectionModal
+        inspectionId={editingId}
+        onHide={() => setEditingId(null)}
+        onSaved={(res) => {
+          setEditingId(null);
+          // ⚠️ baseline freeze ไว้ — แก้ค่าในช่วงที่ล็อกแล้ว เส้น control limit ยังมาจากค่าเดิม
+          setEditMsg(res.staleBaselines?.length
+            ? { variant: 'warning', text: `แก้แล้ว ${res.changed} ค่า · ใบนี้อยู่ในช่วง baseline ที่ล็อกไว้ ต้อง Re-baseline ที่หน้า Master: ${res.staleBaselines.join(', ')}` }
+            : { variant: 'success', text: `แก้แล้ว ${res.changed} ค่า · ผลรวมใบนี้ ${res.overall_result}` });
+          load(modelId, applied);
+          setGridKey((k) => k + 1);
+        }}
+      />
     </Container>
   );
 };

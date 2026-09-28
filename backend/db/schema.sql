@@ -310,6 +310,29 @@ CREATE TABLE IF NOT EXISTS ocs_events (
     FOREIGN KEY (inspection_id) REFERENCES inspections(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── ประวัติการแก้ค่าในใบตรวจเดิม (PUT /inspections/:id/results · ต้อง login) ──────────
+--
+-- 1 แถว = ค่า 1 ชิ้นของ 1 จุดตรวจที่ถูกแก้ 1 ครั้ง · เก็บค่าเดิมกับค่าใหม่คู่กัน
+-- ⚠️ ห้ามลบ/แก้แถวในตารางนี้ — มันคือเหตุผลเดียวที่ใบตรวจที่ถูกแก้ยังใช้เป็นหลักฐานได้
+-- ⚠️ edited_by ไม่มี FK ไป users โดยตั้งใจ (users ไม่มีการลบอยู่แล้ว) · edited_by_name เป็น snapshot
+CREATE TABLE IF NOT EXISTS inspection_result_edits (
+  id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+  inspection_id  INT NOT NULL,
+  checkpoint_id  INT NOT NULL,
+  piece_no       TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  old_value      DECIMAL(12,4) NULL,
+  new_value      DECIMAL(12,4) NULL,
+  old_judgment   ENUM('OK','NG','NA') NOT NULL,
+  new_judgment   ENUM('OK','NG','NA') NOT NULL,
+  reason         VARCHAR(255) NOT NULL,
+  edited_by      INT NULL,
+  edited_by_name VARCHAR(100) NULL,
+  edited_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_result_edits_inspection (inspection_id),
+  CONSTRAINT fk_result_edits_inspection
+    FOREIGN KEY (inspection_id) REFERENCES inspections(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ── อัปเกรดตารางเดิมให้เข้ารูปใหม่ ─────────────────────────────────────────
 --
 -- ส่วนนี้มีไว้เฉพาะ DB ที่เคยรันระบบเดิมมาก่อน (machines เดิมมีแค่ id/division_id/name)

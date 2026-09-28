@@ -6,6 +6,10 @@
 //
 // ⚠️ ตารางนี้ **โชว์ใบที่ยกเลิกแล้วด้วย** ต่างจากกราฟ/รายงานที่ตัดทิ้ง
 //    ซ่อนไปเลยแปลว่ากดคืนค่าไม่ได้ และคนจะเข้าใจว่าลบจริงไปแล้วทั้งที่แถวยังอยู่
+//
+// ปุ่มแก้มีสองแบบ ขึ้นตาม prop ที่หน้านั้นส่งมา (ไม่ส่ง = ไม่มีปุ่ม):
+//   onReplace(row) — "แก้เป็นใบใหม่" หน้าใบตรวจ ไม่ต้อง login
+//   onEdit(row)    — "แก้ค่าในใบเดิม" หน้ารายงาน ต้อง login (ตัวกล่องจัดการ login เอง)
 import React, { useState } from 'react';
 import { apiCall } from '../utils/api';
 import { useDialog } from '../utils/useDialog';
@@ -14,7 +18,7 @@ import AppDialog from './AppDialog';
 const fmtTime = (v) =>
   (v ? new Date(v).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }) : '—');
 
-const InspectionList = ({ rows, onChanged, emptyText = 'ยังไม่มีใบตรวจ' }) => {
+const InspectionList = ({ rows, onChanged, onReplace, onEdit, emptyText = 'ยังไม่มีใบตรวจ' }) => {
   const [busyId, setBusyId] = useState(null);
   const { dialog, showAlert, showConfirm, showPrompt, closeDialog } = useDialog();
 
@@ -115,7 +119,14 @@ const InspectionList = ({ rows, onChanged, emptyText = 'ยังไม่มี
                 <td className="num">{fmtTime(h.inspected_at)}</td>
                 <td>{h.mo_no ?? '—'}</td>
                 <td>{h.lot_no ?? '—'}</td>
-                <td className="num">#{h.subgroup_no}</td>
+                <td className="num">
+                  #{h.subgroup_no}
+                  {Number(h.edit_count) > 0 && (
+                    <span className="badge bg-light text-dark ms-1" title="ค่าในใบนี้ถูกแก้หลังบันทึก — ดูประวัติที่ปุ่มแก้ค่า">
+                      แก้ไข {h.edit_count}
+                    </span>
+                  )}
+                </td>
                 <td>{h.shift}</td>
                 <td>{h.machine_name ?? '—'}</td>
                 <td>{h.inspector_name ?? '—'}</td>
@@ -138,6 +149,20 @@ const InspectionList = ({ rows, onChanged, emptyText = 'ยังไม่มี
                   >
                     {voided ? 'คืนค่า' : 'ยกเลิก'}
                   </button>
+                  {!voided && onReplace && (
+                    <button type="button" className="btn btn-sm btn-outline-secondary ms-1"
+                      disabled={busyId === h.id} onClick={() => onReplace(h)}
+                      title="เปิดค่าเดิมในใบตรวจ แก้แล้วบันทึกเป็นใบใหม่ ใบเดิมถูกยกเลิกให้">
+                      แก้
+                    </button>
+                  )}
+                  {!voided && onEdit && (
+                    <button type="button" className="btn btn-sm btn-outline-secondary ms-1"
+                      disabled={busyId === h.id} onClick={() => onEdit(h)}
+                      title="แก้ค่าในใบเดิม (ต้อง login) — จุดบนกราฟอยู่ที่เดิม เก็บประวัติการแก้">
+                      แก้ค่า
+                    </button>
+                  )}
                   {voided && h.voided_reason && (
                     <div className="small text-muted mt-1">{h.voided_reason}</div>
                   )}

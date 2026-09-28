@@ -107,6 +107,11 @@ const cellText = (cp, cell) => {
   return fmtNum(cell.value, Math.max(cpDecimals(cp), decimalsOf(cell.value)));
 };
 
+// cell.original = ค่าแรกสุดก่อนถูกแก้ในใบเดิม (ตัวเลข หรือ 'OK'/'NG' ของจุด attribute)
+const originalText = (cp, original) => (typeof original === 'number'
+  ? cellText(cp, { value: original, judgment: null })
+  : cellText(cp, { value: null, judgment: original }));
+
 /**
  * ตารางประวัติแบบชีต Input (อ่านอย่างเดียว) — โหลดข้อมูลเอง
  * @param query      query string ตัวกรองชุดเดียวกับหน้ารายงาน เช่น '?from=…&to=…'
@@ -197,8 +202,11 @@ const InputGrid = ({ modelId, query = '', limit, reloadKey = 0, showStats = true
                   </td>
                   {checkpoints.map((cp) => {
                     const cell = r.cells[cp.id];
+                    const edited = cell && cell.original !== undefined;
                     return (
-                      <td key={cp.id} className={`igrid__val${cell?.judgment === 'NG' ? ' igrid__ng' : ''}`}>
+                      <td key={cp.id}
+                        className={`igrid__val${cell?.judgment === 'NG' ? ' igrid__ng' : ''}${edited ? ' igrid__edited' : ''}`}
+                        title={edited ? `แก้ไขหลังบันทึก — ค่าเดิม ${originalText(cp, cell.original)}` : undefined}>
                         {cellText(cp, cell)}
                       </td>
                     );

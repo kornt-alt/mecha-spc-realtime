@@ -73,7 +73,9 @@ router.get('/model/:modelId', wrap(async (req, res) => {
             i.voided_at, i.voided_reason,
             mc.code AS machine_code, mc.name AS machine_name, ins.name AS inspector_name,
             (SELECT COUNT(*) FROM inspection_results r
-              WHERE r.inspection_id = i.id AND r.judgment = 'NG') AS ng_count
+              WHERE r.inspection_id = i.id AND r.judgment = 'NG') AS ng_count,
+            (SELECT COUNT(*) FROM inspection_result_edits e
+              WHERE e.inspection_id = i.id) AS edit_count
        FROM inspections i
        JOIN machines mc    ON mc.id  = i.machine_id
        JOIN inspectors ins ON ins.id = i.inspector_id
@@ -170,13 +172,30 @@ router.get('/model/:modelId/grid', wrap(async (req, res) => {
   ]);
   inspections.reverse();
 
-  const [results] = inspections.length
-    ? await query(
-      `SELECT inspection_id, checkpoint_id, piece_no, value, judgment
-         FROM inspection_results WHERE inspection_id IN (?)`,
-      [inspections.map((i) => i.id)]
-    )
-    : [[]];
+  const ids = inspections.map((i) => i.id);
+  const [[results], [edits]] = ids.length
+    ? await Promise.all([
+      query(
+        `SELECT inspection_id, checkpoint_id, piece_no, value, judgment
+           FROM inspection_results WHERE inspection_id IN (?)`,
+        [ids]
+      ),
+      // ค่าที่ถูกแก้ในใบเดิม (PUT /inspections/:id/results) — เซลล์ขึ้นเครื่องหมาย + ค่าแรกสุดก่อนแก้
+      query(
+        `SELECT inspection_id, checkpoint_id, piece_no, old_value, old_judgment
+           FROM inspection_result_edits WHERE inspection_id IN (?)
+          ORDER BY id ASC`,
+        [ids]
+      ),
+    ])
+    : [[[]], [[]]];
+  const originals = new Map();
+  for (const e of edits) {
+    const key = `${e.inspection_id}:${e.checkpoint_id}:${e.piece_no}`;
+    if (!originals.has(key)) {
+      originals.set(key, e.old_value === null ? e.old_judgment : Number(e.old_value));
+    }
+  }
 
   const byInspection = new Map();
   for (const r of results) {
@@ -195,7 +214,10 @@ router.get('/model/:modelId/grid', wrap(async (req, res) => {
       for (const l of lines) {
         if (l.piece_no !== p) continue;
         const value = l.value === null ? null : Number(l.value);
-        cells[l.checkpoint_id] = { value, judgment: l.judgment };
+        const key = `${ins.id}:${l.checkpoint_id}:${p}`;
+        cells[l.checkpoint_id] = originals.has(key)
+          ? { value, judgment: l.judgment, original: originals.get(key) }
+          : { value, judgment: l.judgment };
         if (!ins.voided_at && value !== null) {
           const a = acc.get(l.checkpoint_id) ?? { max: -Infinity, min: Infinity, sum: 0, count: 0 };
           a.max = Math.max(a.max, value);

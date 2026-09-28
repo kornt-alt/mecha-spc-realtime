@@ -4,7 +4,8 @@
 const express = require('express');
 const { query, execute, withTransaction } = require('../db/pool');
 const { fetchModelCheckpoints, fetchDoneCheckpointIds } = require('../db/queries');
-const { evaluateCheckpoint, summarize, validateSubmission, isShift } = require('../services/judgment');
+const { evaluateCheckpoint, summarize, validateSubmission, isShift, judge } = require('../services/judgment');
+const { toNum } = require('../services/spcStats');
 const { AppError, wrap } = require('../middleware/errorHandler');
 const { requireLogin } = require('../middleware/requireLogin');
 
@@ -70,15 +71,48 @@ router.post('/', wrap(async (req, res) => {
     submittedById.set(cp.id, item);
   }
 
+  // ── "แก้เป็นใบใหม่" — ใบนี้มาแทนใบเดิม (หน้าใบตรวจ ไม่ต้อง login) ──────────
+  //
+  // ⚠️ ยกเลิกใบเดิมใน transaction เดียวกับการ insert ใบใหม่ ไม่ใช่ยกเลิกก่อนแล้วค่อยกรอก
+  //    คนเปิดแก้แล้วทิ้งกลางคัน = ใบเดิมหายจากกราฟโดยไม่มีใบแทน · บันทึกใบใหม่ล้ม = ใบเดิมต้องอยู่ต่อ
+  // ⚠️ ใบแทนต้องมีทุกจุดที่ใบเดิมมี (ยังเปิดใช้อยู่) แทนเงื่อนไข "ถึงรอบ" — ใบเดิมอาจมาจากกะก่อน
+  //    เทียบกับรอบปัจจุบันเมื่อไหร่ จะถูกบังคับกรอกจุดที่ใบเดิมไม่เคยมี หรือเว้นจุดที่ใบเดิมมีได้
+  let replaced = null;
+  if (b.replaces_id !== undefined && b.replaces_id !== null && b.replaces_id !== '') {
+    if (!isIntLike(b.replaces_id)) throw new AppError('replaces_id ไม่ถูกต้อง', 400);
+    const replaceReason = String(b.replace_reason ?? '').trim();
+    if (!replaceReason) throw new AppError('ต้องระบุเหตุผลที่แก้ใบเดิม', 400);
+    const [[old]] = await query(
+      'SELECT id, model_id, machine_id, subgroup_no, mo_no, voided_at FROM inspections WHERE id = ?',
+      [Number(b.replaces_id)]
+    );
+    if (!old) throw new AppError('ไม่พบใบเดิมที่จะแก้ — อาจถูกล้างทิ้งไปแล้ว', 404);
+    if (old.voided_at) throw new AppError(`ใบ #${old.id} ถูกยกเลิกไปแล้ว แก้ซ้ำไม่ได้`, 400);
+    if (Number(old.model_id) !== Number(b.model_id)) throw new AppError('ใบเดิมเป็นคนละ item กับใบนี้', 400);
+    replaced = {
+      ...old,
+      reason: replaceReason,
+      checkpointIds: new Set(await resultCheckpointIds(old.id)),
+      staleBaselines: await staleBaselineCheckpoints(old.id),
+    };
+  }
+
   // ทุกจุดที่ "ถึงรอบ" ต้องมีผล — จุดที่ทำไปแล้วในรอบนี้ (ต่อกะ/ต่อวัน ตาม checkpoints.frequency)
   // เว้นได้ ดู fetchDoneCheckpointIds · ใบตรวจจึงมีผลแค่บางจุดได้ แต่จุดที่ถึงรอบห้ามขาด
   //
   // ⚠️ เช็คนอก transaction โดยตั้งใจ — ชุด "ทำแล้ว" โตขึ้นได้อย่างเดียวระหว่างนี้ (ยกเว้นมีคนยกเลิกใบ
   //    ในเสี้ยววินาทีเดียวกัน) สองคนบันทึกพร้อมกันแล้วต่างถูกบังคับกรอกจุดเดียวกัน = วัดเกิน ไม่ใช่ขาด
-  const done = await fetchDoneCheckpointIds({ modelId: b.model_id, machineId: b.machine_id, shift });
-  const missing = checkpoints.filter((c) => !done.has(c.id) && !submittedById.has(c.id));
-  if (missing.length > 0) {
-    throw new AppError(`ยังไม่ได้กรอก (ถึงรอบตรวจแล้ว): ${missing.map((c) => c.name).join(', ')}`, 400);
+  if (replaced) {
+    const missing = checkpoints.filter((c) => replaced.checkpointIds.has(c.id) && !submittedById.has(c.id));
+    if (missing.length > 0) {
+      throw new AppError(`ใบแทนต้องมีทุกจุดของใบเดิม — ยังไม่ได้กรอก: ${missing.map((c) => c.name).join(', ')}`, 400);
+    }
+  } else {
+    const done = await fetchDoneCheckpointIds({ modelId: b.model_id, machineId: b.machine_id, shift });
+    const missing = checkpoints.filter((c) => !done.has(c.id) && !submittedById.has(c.id));
+    if (missing.length > 0) {
+      throw new AppError(`ยังไม่ได้กรอก (ถึงรอบตรวจแล้ว): ${missing.map((c) => c.name).join(', ')}`, 400);
+    }
   }
 
   // จุดที่ส่งมาต้องครบทุกชิ้น — ส่งมาครึ่งเดียวใช้เป็นหลักฐานไม่ได้ ไม่ว่าจะถึงรอบหรือไม่
@@ -141,6 +175,16 @@ router.post('/', wrap(async (req, res) => {
       params
     );
 
+    if (replaced) {
+      // voided_at IS NULL ในเงื่อนไข — มีคนยกเลิกใบเดิมไประหว่างนี้ = rollback ทั้งใบใหม่ด้วย
+      const [r] = await conn.execute(
+        `UPDATE inspections SET voided_at = NOW(), voided_reason = ?
+          WHERE id = ? AND voided_at IS NULL`,
+        [`แก้ไขเป็นใบ #${inspectionId}: ${replaced.reason}`.slice(0, 255), replaced.id]
+      );
+      if (r.affectedRows === 0) throw new AppError(`ใบ #${replaced.id} ถูกยกเลิกไประหว่างนี้แล้ว — ไม่ได้บันทึกใบใหม่`, 409);
+    }
+
     return { inspectionId, subgroupNo };
   });
 
@@ -160,7 +204,11 @@ router.post('/', wrap(async (req, res) => {
     shift,
     overallResult: overall,
     // เฉพาะจุดที่อยู่ในใบนี้จริง — จุดที่เว้นไว้ (ยังไม่ถึงรอบ) ไม่มีจุดใหม่บนกราฟ
-    checkpointIds: included.map((c) => c.id),
+    // แก้เป็นใบใหม่: จุดของใบเดิมก็หายจากกราฟด้วย · ใบเดิมคนละเครื่องได้ จึงส่ง machineId: null
+    checkpointIds: replaced
+      ? [...new Set([...included.map((c) => c.id), ...replaced.checkpointIds])]
+      : included.map((c) => c.id),
+    ...(replaced && Number(replaced.machine_id) !== Number(b.machine_id) ? { machineId: null } : {}),
     ngCheckpointIds: linesByCheckpoint
       .filter((x) => x.lines.some((l) => l.judgment === 'NG'))
       .map((x) => x.checkpoint.id),
@@ -172,6 +220,8 @@ router.post('/', wrap(async (req, res) => {
     subgroup_no: saved.subgroupNo,
     shift,
     overall_result: overall,
+    replaced_id: replaced?.id ?? null,
+    staleBaselines: replaced?.staleBaselines ?? [],
     results: linesByCheckpoint.map((x) => ({
       checkpoint_id: x.checkpoint.id,
       name: x.checkpoint.name,
@@ -221,6 +271,14 @@ const staleBaselineCheckpoints = async (inspectionId) => {
   ));
 };
 
+const resultCheckpointIds = async (inspectionId) => {
+  const [rows] = await query(
+    'SELECT DISTINCT checkpoint_id FROM inspection_results WHERE inspection_id = ?',
+    [inspectionId]
+  );
+  return rows.map((r) => r.checkpoint_id);
+};
+
 router.put('/:id/void', wrap(async (req, res) => {
   if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
   const id = Number(req.params.id);
@@ -247,11 +305,6 @@ router.put('/:id/void', wrap(async (req, res) => {
     voided ? [reason, id] : [id]
   );
 
-  const [checkpointRows] = await query(
-    'SELECT DISTINCT checkpoint_id FROM inspection_results WHERE inspection_id = ?',
-    [id]
-  );
-
   // Dashboard ที่เปิดค้างอยู่ต้องขยับเอง ไม่งั้นจะยังวาดจุดที่ยกเลิกไปแล้ว
   // ใช้ event เดิม ความหมายตรงอยู่แล้ว: "ข้อมูลของรุ่นนี้เปลี่ยน โหลดกราฟที่กระทบใหม่"
   req.app.get('io')?.to(`model:${inspection.model_id}`).emit('inspection_saved', {
@@ -261,11 +314,118 @@ router.put('/:id/void', wrap(async (req, res) => {
     subgroupNo: inspection.subgroup_no,
     moNo: inspection.mo_no,
     voided,
-    checkpointIds: checkpointRows.map((r) => r.checkpoint_id),
+    checkpointIds: await resultCheckpointIds(id),
     ngCheckpointIds: [],
   });
 
   res.json({ success: true, voided, staleBaselines });
+}));
+
+// ── แก้ค่าในใบเดิม (ต้อง login) ──────────────────────────────────────────
+//
+// จุดบนกราฟอยู่ที่เดิม (เวลา/เลข subgroup ไม่เปลี่ยน) ต่างจาก "แก้เป็นใบใหม่" ที่หน้าใบตรวจ
+// body: { reason, results: [{ checkpoint_id, piece_no, value } | { checkpoint_id, piece_no, judgment, ng_reason? }] }
+//
+// ⚠️ ตัดสินใหม่ด้วย usl_used / lsl_used ของแถวนั้น (สเปก ณ วันที่ตรวจ) ไม่ใช่สเปกปัจจุบัน
+//    ใช้สเปกปัจจุบันเมื่อไหร่ การแก้เลขตัวเดียวจะเปลี่ยนเกณฑ์ตัดสินของทั้งชิ้นไปด้วยเงียบ ๆ
+// ⚠️ แก้ได้เฉพาะแถวที่มีอยู่ ไม่เพิ่ม/ลบจุดหรือชิ้น — จำนวนชิ้นต่อจุดต้องเท่า n_used เสมอ
+// ⚠️ ทุกค่าที่เปลี่ยนต้องลง inspection_result_edits (ค่าเดิม + ค่าใหม่ + เหตุผล + คนแก้)
+//    ไม่มีประวัติ = ใบที่ถูกแก้ใช้เป็นหลักฐานไม่ได้
+router.put('/:id/results', requireLogin, wrap(async (req, res) => {
+  if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const id = Number(req.params.id);
+  const reason = String(req.body?.reason ?? '').trim();
+  if (!reason) throw new AppError('ต้องระบุเหตุผลที่แก้ค่า', 400);
+  const submitted = Array.isArray(req.body?.results) ? req.body.results : [];
+  if (submitted.length === 0) throw new AppError('ไม่มีค่าที่จะแก้', 400);
+
+  const [[inspection]] = await query(
+    'SELECT id, model_id, machine_id, mo_no, subgroup_no, voided_at FROM inspections WHERE id = ?',
+    [id]
+  );
+  if (!inspection) throw new AppError('ไม่พบใบตรวจนี้', 404);
+  if (inspection.voided_at) throw new AppError('ใบนี้ถูกยกเลิกแล้ว ต้องคืนค่าก่อนถึงจะแก้ได้', 400);
+
+  const [rows] = await query(
+    `SELECT r.id, r.checkpoint_id, r.piece_no, r.value, r.judgment, r.ng_reason, r.usl_used, r.lsl_used,
+            c.char_type, c.name
+       FROM inspection_results r
+       JOIN checkpoints c ON c.id = r.checkpoint_id
+      WHERE r.inspection_id = ?`,
+    [id]
+  );
+  const byKey = new Map(rows.map((r) => [`${r.checkpoint_id}:${r.piece_no}`, r]));
+
+  // เทียบทุกแถวที่ส่งมา → เก็บเฉพาะแถวที่ค่า/ผลเปลี่ยนจริง
+  const changes = [];
+  const seen = new Set();
+  for (const item of submitted) {
+    const key = `${Number(item.checkpoint_id)}:${Number(item.piece_no) || 1}`;
+    const row = byKey.get(key);
+    if (!row) throw new AppError(`ไม่มีผลของจุดตรวจ id=${item.checkpoint_id} ชิ้นที่ ${item.piece_no} ในใบนี้`, 400);
+    if (seen.has(key)) throw new AppError(`ส่ง "${row.name}" ชิ้นที่ ${row.piece_no} ซ้ำ`, 400);
+    seen.add(key);
+
+    let value = null;
+    let judgment;
+    let ngReason = null;
+    if (row.char_type === 'attribute') {
+      if (item.judgment !== 'OK' && item.judgment !== 'NG') throw new AppError(`"${row.name}" ต้องเป็น OK หรือ NG`, 400);
+      judgment = item.judgment;
+      ngReason = judgment === 'NG' ? (String(item.ng_reason ?? '').trim() || row.ng_reason || null) : null;
+    } else {
+      value = toNum(item.value);
+      if (value === null) throw new AppError(`"${row.name}" ชิ้นที่ ${row.piece_no} ต้องเป็นตัวเลข`, 400);
+      judgment = judge(value, row.usl_used, row.lsl_used);
+    }
+
+    const oldValue = toNum(row.value);
+    if (value === oldValue && judgment === row.judgment) continue;
+    changes.push({ row, value, judgment, ngReason, oldValue });
+  }
+  if (changes.length === 0) throw new AppError('ไม่มีค่าไหนเปลี่ยน', 400);
+
+  const staleBaselines = await staleBaselineCheckpoints(id);
+  const editor = req.user ?? {};
+
+  const overall = await withTransaction(async (conn) => {
+    for (const c of changes) {
+      await conn.execute(
+        'UPDATE inspection_results SET value = ?, judgment = ?, ng_reason = ? WHERE id = ?',
+        [c.value, c.judgment, c.judgment === 'NG' ? c.ngReason : null, c.row.id]
+      );
+      await conn.execute(
+        `INSERT INTO inspection_result_edits
+           (inspection_id, checkpoint_id, piece_no, old_value, new_value, old_judgment, new_judgment,
+            reason, edited_by, edited_by_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id, c.row.checkpoint_id, c.row.piece_no, c.oldValue, c.value, c.row.judgment, c.judgment,
+          reason.slice(0, 255), editor.id ?? null, editor.display_name || editor.username || null,
+        ]
+      );
+    }
+    // ผลรวมทั้งใบคิดใหม่จากทุกแถว (แถวที่ไม่ได้แก้ก็ต้องนับ)
+    const [lines] = await conn.query('SELECT judgment FROM inspection_results WHERE inspection_id = ?', [id]);
+    const result = summarize(lines);
+    await conn.execute('UPDATE inspections SET overall_result = ? WHERE id = ?', [result, id]);
+    return result;
+  });
+
+  const changedIds = [...new Set(changes.map((c) => c.row.checkpoint_id))];
+  req.app.get('io')?.to(`model:${inspection.model_id}`).emit('inspection_saved', {
+    inspectionId: id,
+    modelId: inspection.model_id,
+    machineId: inspection.machine_id,
+    subgroupNo: inspection.subgroup_no,
+    moNo: inspection.mo_no,
+    edited: true,
+    overallResult: overall,
+    checkpointIds: changedIds,
+    ngCheckpointIds: changedIds.filter((cpId) => changes.some((c) => c.row.checkpoint_id === cpId && c.judgment === 'NG')),
+  });
+
+  res.json({ success: true, changed: changes.length, overall_result: overall, staleBaselines });
 }));
 
 // ชั้น 2 — ล้างใบที่ "ยกเลิกไปแล้ว" ออกจาก DB จริง
@@ -335,7 +495,9 @@ router.get('/', wrap(async (req, res) => {
     `SELECT i.*, m.item_no, m.item_name, mc.code AS machine_code, mc.name AS machine_name,
             ins.name AS inspector_name,
             (SELECT COUNT(*) FROM inspection_results r
-              WHERE r.inspection_id = i.id AND r.judgment = 'NG') AS ng_count
+              WHERE r.inspection_id = i.id AND r.judgment = 'NG') AS ng_count,
+            (SELECT COUNT(*) FROM inspection_result_edits e
+              WHERE e.inspection_id = i.id) AS edit_count
        FROM inspections i
        JOIN models m      ON m.id   = i.model_id
        JOIN machines mc   ON mc.id  = i.machine_id
@@ -373,7 +535,16 @@ router.get('/:id', wrap(async (req, res) => {
     [id]
   );
 
-  res.json({ inspection, results });
+  const [edits] = await query(
+    `SELECT e.*, c.name AS checkpoint_name, c.seq_no
+       FROM inspection_result_edits e
+       JOIN checkpoints c ON c.id = e.checkpoint_id
+      WHERE e.inspection_id = ?
+      ORDER BY e.edited_at DESC, e.id DESC`,
+    [id]
+  );
+
+  res.json({ inspection, results, edits });
 }));
 
 module.exports = router;

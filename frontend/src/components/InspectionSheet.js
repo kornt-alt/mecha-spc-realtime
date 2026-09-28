@@ -13,6 +13,9 @@
 // ความถี่ต่อจุด (checkpoints.frequency): จุดที่ "ทำแล้วรอบนี้" (GET /inspections/due) เป็นคอลัมน์สีเทา
 // ไม่บังคับกรอก แต่กรอกได้ — กรอกแล้วต้องครบทุกชิ้น · ตัวบังคับจริงคือ POST /inspections
 //
+// "แก้" ในตารางประวัติ = แก้เป็นใบใหม่: เติมค่าของใบเดิมลงใบตรวจ บันทึกแล้วใบเดิมถูกยกเลิกให้
+// ใน transaction เดียวกัน (POST /inspections + replaces_id) · ระหว่างแก้ จุดที่บังคับ = จุดของใบเดิม
+//
 // ⚠️ ค่าที่ลง DB คือค่าที่ backend ตัดสิน judgeLocal ที่นี่เป็น advisory ล้วน ๆ
 //    มีไว้ให้เห็นแดงทันทีตอนพิมพ์เท่านั้น ถ้าสองฝั่งไม่ตรงกันให้ยึด server
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -23,6 +26,9 @@ import { on } from '../utils/socket';
 import { normalizeRows, normalizeCheckpoints, normalizeChart, judgeLocal, toNum } from '../utils/normalize';
 import { readStation, writeStation, reconcileStation, isStationReady } from '../utils/station';
 import { masterHref } from '../utils/useModelParam';
+import { useDialog } from '../utils/useDialog';
+import AppDialog from './AppDialog';
+import { decimalsOf } from './SpecValue';
 import MoLookupBar from './MoLookupBar';
 import InspectionList from './InspectionList';
 import StationBar from './StationBar';
@@ -63,6 +69,26 @@ const blankInputs = (list) =>
 
 const mean = (nums) => nums.reduce((a, b) => a + b, 0) / nums.length;
 
+// ผลของใบเดิม (GET /inspections/:id) → inputs ของใบตรวจ · จุดที่ใบเดิมไม่มีคงค่าว่างไว้
+// ค่าวัดแสดงทศนิยม max(ของสเปก, ของค่าจริง) — กฎเดียวกับ InputGrid ห้ามปัดทิ้ง
+const inputsFromResults = (list, results) => {
+  const out = blankInputs(list);
+  const byId = new Map(list.map((c) => [c.id, c]));
+  for (const r of results) {
+    const cp = byId.get(Number(r.checkpoint_id));
+    if (!cp) continue; // จุดที่ถูกปิดใช้งานไปแล้ว — ใบแทนไม่ต้องมี (server ก็ไม่บังคับ)
+    if (cp.char_type === 'attribute') {
+      out[cp.id] = { judgment: r.judgment === 'NG' ? 'NG' : 'OK', touched: true };
+      continue;
+    }
+    const v = toNum(r.value);
+    const idx = Number(r.piece_no) - 1;
+    if (v === null || idx < 0 || idx >= out[cp.id].pieces.length) continue;
+    out[cp.id].pieces[idx] = v.toFixed(Math.max(cpDecimals(cp), decimalsOf(v)));
+  }
+  return out;
+};
+
 const ENTRY_LEFT = [{ key: 'piece', label: 'ชิ้นที่', width: 4.5 }];
 
 const InspectionSheet = () => {
@@ -85,6 +111,10 @@ const InspectionSheet = () => {
   const [doneIds, setDoneIds] = useState(null);
   const [enterDir, setEnterDir] = useState(readEnterDir);
   const [gridKey, setGridKey] = useState(0);
+  // กำลัง "แก้เป็นใบใหม่" แทนใบไหน · null = ใบตรวจปกติ
+  // { id, subgroup_no, mo_no, checkpointIds: Set } — checkpointIds = จุดที่ใบเดิมมี (บังคับกรอกแทนรอบปกติ)
+  const [replacing, setReplacing] = useState(null);
+  const { dialog, showPrompt, closeDialog } = useDialog();
 
   const gridRef = useRef(null);
   const saveRef = useRef(null);
@@ -156,6 +186,7 @@ const InspectionSheet = () => {
   useEffect(() => {
     const modelId = station.modelId;
     setCharts(null);
+    setReplacing(null); // เปลี่ยน item = ใบเดิมที่กำลังแก้ไม่เกี่ยวแล้ว (inputs ถูกล้างอยู่แล้ว)
     if (!modelId) {
       setCheckpoints([]);
       setInputs({});
@@ -201,7 +232,11 @@ const InspectionSheet = () => {
 
   useEffect(() => { loadDue(); }, [loadDue]);
 
-  const isDone = useCallback((cp) => Boolean(doneIds?.has(cp.id)), [doneIds]);
+  // ระหว่างแก้เป็นใบใหม่ "ทำแล้ว" = จุดที่ใบเดิมไม่มี (ไม่บังคับ) — ใบเดิมอาจมาจากกะก่อน เทียบกับรอบปัจจุบันไม่ได้
+  const isDone = useCallback(
+    (cp) => (replacing ? !replacing.checkpointIds.has(cp.id) : Boolean(doneIds?.has(cp.id))),
+    [doneIds, replacing]
+  );
 
   // ── ตัดสิน OK/NG สด ๆ ตอนพิมพ์ ────────────────────────────────────────
   const verdicts = useMemo(() => {
@@ -346,9 +381,53 @@ const InspectionSheet = () => {
     writeEnterDir(next);
   };
 
+  // ── แก้เป็นใบใหม่ ─────────────────────────────────────────────────────
+  //
+  // เติมค่าของใบเดิม + MO/Lot/หมายเหตุ + เครื่อง/กะ ของใบเดิม (ผู้ตรวจคงเป็นคนที่กำลังแก้)
+  // ⚠️ ยังไม่ยกเลิกใบเดิมตรงนี้ — ยกเลิกตอนบันทึกใบแทนสำเร็จเท่านั้น (server ทำใน transaction เดียว)
+  const startReplace = async (row) => {
+    setMsg(null);
+    try {
+      const { inspection, results } = await apiCall(`/inspections/${row.id}`);
+      setInputs(inputsFromResults(checkpoints, results ?? []));
+      setEntry({ mo_no: inspection.mo_no ?? '', lot_no: inspection.lot_no ?? '', remark: inspection.remark ?? '' });
+      setStation((prev) => ({ ...prev, machineId: String(inspection.machine_id), shift: inspection.shift }));
+      setReplacing({
+        id: inspection.id,
+        subgroup_no: inspection.subgroup_no,
+        mo_no: inspection.mo_no,
+        checkpointIds: new Set((results ?? []).map((r) => Number(r.checkpoint_id))),
+      });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e) {
+      setMsg({ variant: 'danger', text: `เปิดใบเดิมไม่สำเร็จ: ${e.message}` });
+    }
+  };
+
+  const cancelReplace = () => {
+    setReplacing(null);
+    setInputs(blankInputs(checkpoints));
+  };
+
   // ── บันทึก — ทั้งใบใน request เดียว ───────────────────────────────────
-  const handleSubmit = async (e) => {
+  // ⚠️ แก้เป็นใบใหม่ต้องถามเหตุผลก่อน (ลงเป็น voided_reason ของใบเดิม) — modal ไม่ใช่ synchronous
+  //    งานบันทึกทั้งก้อนจึงอยู่ใน save() ที่ onConfirm เรียก
+  const handleSubmit = (e) => {
     e.preventDefault();
+    if (!replacing) { save(null); return; }
+    showPrompt({
+      title: `แก้ใบตรวจ #${replacing.subgroup_no} (MO ${replacing.mo_no})`,
+      body: 'ใบนี้จะถูกบันทึกเป็นใบใหม่ (เวลาและเลข subgroup ใหม่) แล้วใบเดิมถูกยกเลิกพร้อมกัน',
+      inputLabel: 'เหตุผลที่แก้',
+      inputHint: 'จำเป็นต้องกรอก — เช่น "พิมพ์ค่าชิ้นที่ 2 ผิด — สมชาย"',
+      confirmLabel: 'บันทึกใบแทน',
+      cancelLabel: 'ปิด',
+      variant: 'primary',
+      onConfirm: (reason) => save(reason),
+    });
+  };
+
+  const save = async (replaceReason) => {
     setMsg(null);
     setSaving(true);
     try {
@@ -368,6 +447,7 @@ const InspectionSheet = () => {
           mo_item_name: moInfo?.itemName ?? '',
           mo_draw: moInfo?.draw ?? '',
           mo_model_group: moInfo?.modelGroup ?? '',
+          ...(replacing && replaceReason ? { replaces_id: replacing.id, replace_reason: replaceReason } : {}),
           // เฉพาะจุดที่ถึงรอบ + จุดที่ทำแล้วแต่คนกรอกเพิ่มเอง (ดู verdicts[].included)
           results: included.map((cp) =>
             cp.char_type === 'attribute'
@@ -380,10 +460,17 @@ const InspectionSheet = () => {
         },
       });
 
+      // ⚠️ ใบเดิมอยู่ในช่วง baseline ที่ล็อกไว้ = เส้น control limit ยังมาจากค่าเดิม ต้องบอกให้ re-baseline
+      const stale = res.staleBaselines?.length
+        ? ` · ใบเดิมอยู่ในช่วง baseline ที่ล็อกไว้ ต้อง Re-baseline: ${res.staleBaselines.join(', ')}`
+        : '';
       setMsg({
-        variant: res.overall_result === 'NG' ? 'danger' : 'success',
-        text: `บันทึกแล้ว — subgroup #${res.subgroup_no} · ผลรวม ${res.overall_result}`,
+        variant: res.overall_result === 'NG' ? 'danger' : stale ? 'warning' : 'success',
+        text: res.replaced_id
+          ? `บันทึกใบแทนแล้ว — subgroup #${res.subgroup_no} · ผลรวม ${res.overall_result} · ใบเดิมถูกยกเลิกแล้ว${stale}`
+          : `บันทึกแล้ว — subgroup #${res.subgroup_no} · ผลรวม ${res.overall_result}`,
       });
+      setReplacing(null);
       setInputs(blankInputs(checkpoints));
       loadHistory(station.modelId);
       loadCharts(station.modelId);
@@ -488,6 +575,16 @@ const InspectionSheet = () => {
             ไปตั้งจุดตรวจ
           </Link>
         </Alert>
+      )}
+
+      {replacing && (
+        <div className="replace-bar mb-3" role="status">
+          <span>
+            <b>กำลังแก้ใบ #{replacing.subgroup_no}</b> (MO {replacing.mo_no}) — บันทึกแล้วจะได้ใบใหม่
+            (เวลาและเลข subgroup ใหม่ จุดย้ายไปท้ายกราฟ) และใบเดิมถูกยกเลิกให้พร้อมกัน
+          </span>
+          <Button size="sm" variant="outline-secondary" onClick={cancelReplace}>เลิกแก้</Button>
+        </div>
       )}
 
       {checkpoints.length > 0 && (
@@ -632,7 +729,7 @@ const InspectionSheet = () => {
                 ตอนนี้ MO เป็นช่องแรกที่สแกน ยิ่งต้องกันตั้งแต่ตรงนี้ */}
             <Button ref={saveRef} type="submit" variant="primary" disabled={!filledAll || !ready || !hasMo || saving}>
               {saving && <Spinner size="sm" animation="border" className="me-1" />}
-              บันทึกใบตรวจ
+              {replacing ? 'บันทึกใบแทน' : 'บันทึกใบตรวจ'}
             </Button>
           </div>
 
@@ -691,6 +788,7 @@ const InspectionSheet = () => {
               โหลดทั้งประวัติและกราฟใหม่หลังยกเลิก เพราะทั้งคู่เปลี่ยนพร้อมกัน */}
           <InspectionList
             rows={history}
+            onReplace={startReplace}
             onChanged={async () => {
               await loadHistory(station.modelId);
               await loadCharts(station.modelId);
@@ -701,6 +799,7 @@ const InspectionSheet = () => {
           />
         </section>
       )}
+      <AppDialog dialog={dialog} onHide={closeDialog} />
     </Container>
   );
 };

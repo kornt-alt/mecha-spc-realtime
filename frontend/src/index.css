@@ -1051,6 +1051,12 @@ code {
   background: #F6F8FB;
 }
 
+/* ค่าที่ถูกแก้หลังบันทึก (แก้ค่าในใบเดิม) — มุมเล็ก ๆ ไม่แย่งสีกับแกนแดง/เหลือง · ค่าเดิมอยู่ใน title */
+.igrid td.igrid__edited {
+  background-image: linear-gradient(225deg, var(--blue) 6px, transparent 6px);
+  cursor: help;
+}
+
 /* เส้นหนาคั่นระหว่างใบตรวจ — ใบหนึ่งมีหลายแถว ต้องเห็นว่าจบใบตรงไหน */
 .igrid tbody tr.igrid__first td {
   border-top: 2px solid var(--line-strong);
@@ -1227,4 +1233,24 @@ code {
   .status-board__trend {
     display: none;
   }
+}
+
+/* ── แถบ "กำลังแก้ใบ #…" บนใบตรวจ (แก้เป็นใบใหม่) ── */
+.replace-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 0.9rem;
+  background: var(--blue-tint);
+  border: 1px solid var(--blue);
+  border-left-width: 4px;
+  border-radius: 6px;
+}
+
+/* ช่องที่ค่าเปลี่ยนจากเดิม ในกล่องแก้ค่าในใบเดิม */
+.cell-edited {
+  background: var(--blue-tint);
+  box-shadow: inset 3px 0 0 var(--blue);
 }

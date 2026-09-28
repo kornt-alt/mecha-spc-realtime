@@ -46,6 +46,10 @@ const REQUIRED = {
     'id', 'checkpoint_id', 'inspection_id', 'chart', 'rules', 'man_pd', 'man_qc',
     'machine_note', 'method', 'material', 'measurement', 'corrective_action', 'recorded_by',
   ],
+  inspection_result_edits: [
+    'id', 'inspection_id', 'checkpoint_id', 'piece_no', 'old_value', 'new_value',
+    'old_judgment', 'new_judgment', 'reason', 'edited_by', 'edited_by_name', 'edited_at',
+  ],
 };
 
 // ตารางของระบบเดิมที่ควรหายไปแล้ว — มีอยู่ก็ไม่พัง แค่บอกว่ายังลบไม่หมด
