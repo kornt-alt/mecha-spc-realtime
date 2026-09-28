@@ -1,9 +1,15 @@
 // frontend/src/utils/api.js — ตัวเรียก API ตัวเดียวของแอป
 //
 // ย้ายออกมาจาก App.js เพราะ component ต้อง import จาก '../App' ซึ่งเป็นวงกลม
-// และของเดิมมี logic แนบ Bearer token + เตะออกตอน 401 ที่ติดมาจากเทมเพลตอื่น
-// ทั้งที่ backend นี้ไม่มี auth เลยสักเส้น — ถอดทิ้งแล้ว
+//
+// แนบ Bearer token เมื่อ login หน้า Master อยู่ (utils/auth.js) — backend กั้นเฉพาะเส้นที่แก้ master
+//
+// ⚠️ 401 = ล้าง session อย่างเดียว **ห้าม redirect / เตะออกจากหน้า** (ของเดิมติดมาจากเทมเพลตอื่น
+//    แล้วถอดทิ้งไปรอบหนึ่งแล้ว) · หน้าที่เหลือไม่ต้อง login เลย และ <RequireLogin> ของหน้า Master
+//    จะเปิดกล่อง login ทับให้เองโดยไม่ทำฟอร์มที่กรอกค้างหาย
+// ⚠️ IPBASS ยังยิง raw fetch ไม่ผ่านไฟล์นี้ — token IPBASS หมดอายุต้องไม่ไปล้าง session ตรงนี้
 import { API_ORIGIN, APP_BASE } from './config';
+import { clearSession, getToken } from './auth';
 
 export const API_BASE = `${API_ORIGIN}${APP_BASE}/api`;
 
@@ -23,15 +29,24 @@ const messageOf = (data, status) =>
 
 export const apiCall = async (endpoint, options = {}) => {
   const { body, ...rest } = options;
+  const token = getToken();
 
   const response = await fetch(`${API_BASE}${endpoint}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     ...rest,
     body: body ? JSON.stringify(body) : undefined,
   });
 
   const data = await parseBody(response);
-  if (!response.ok) throw new Error(messageOf(data, response.status));
+  if (!response.ok) {
+    if (response.status === 401) clearSession();
+    const err = new Error(messageOf(data, response.status));
+    err.status = response.status;
+    throw err;
+  }
   return data;
 };
 

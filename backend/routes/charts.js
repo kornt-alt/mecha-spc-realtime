@@ -6,12 +6,18 @@
 'use strict';
 
 const express = require('express');
-const { fetchCheckpointRows, fetchCheckpoint, fetchCheckpointBaselines } = require('../db/queries');
+const {
+  fetchCheckpointRows, fetchCheckpoint, fetchCheckpointBaselines, fetchModelTargets,
+} = require('../db/queries');
+const { targetFor } = require('../services/capabilityTarget');
 const { analyze } = require('../services/spcStats');
 const {
   computeBaseline, setBaseline, clearBaseline, baselineOf, pickBaseline, scopeOf,
 } = require('../services/baseline');
 const { AppError, wrap } = require('../middleware/errorHandler');
+// ตั้ง/ล้าง baseline = เปลี่ยนเส้น control limit ที่ทุกจอใช้ตัดสิน — ต้อง login (กดจากหน้า Master)
+// preview ยังเปิดอยู่ อ่านอย่างเดียวไม่เขียนอะไร
+const { requireLogin } = require('../middleware/requireLogin');
 
 const router = express.Router();
 
@@ -28,7 +34,7 @@ const filterFrom = (q) => ({
   machine_id: q.machine_id || null,
 });
 
-// GET /api/charts/:checkpointId — จุด + ลิมิต + Cp/Cpk + จุดที่ผิดกฎ Nelson ในก้อนเดียว
+// GET /api/charts/:checkpointId — จุด + ลิมิต + Cp/Cpk + จุดที่ผิดกฎ OCS (ทั้ง X̄ และ R) ในก้อนเดียว
 router.get('/:checkpointId', wrap(async (req, res) => {
   const { checkpointId } = req.params;
   if (!isIntLike(checkpointId)) throw new AppError('checkpoint id ไม่ถูกต้อง', 400);
@@ -57,9 +63,10 @@ router.get('/:checkpointId', wrap(async (req, res) => {
   //    ไม่ตรงเมื่อไหร่คือเอาลิมิตของเครื่องหนึ่งไปตัดสินอีกเครื่อง · ยังไม่ได้ล็อกของเครื่องนั้น
   //    ก็ได้ null แล้วกราฟจะคำนวณสดเป็น provisional ให้ (ไม่ยืมของชุดรวมมาใช้ ดู pickBaseline)
   const filter = filterFrom(req.query);
-  const [rows, baselineRows] = await Promise.all([
+  const [rows, baselineRows, targets] = await Promise.all([
     fetchCheckpointRows(checkpointId, filter),
     fetchCheckpointBaselines(checkpointId),
+    fetchModelTargets(checkpoint.model_id),
   ]);
   const baseline = baselineOf(pickBaseline(baselineRows, scopeOf(filter)));
 
@@ -71,6 +78,8 @@ router.get('/:checkpointId', wrap(async (req, res) => {
     baseline,
     baselines: baselineRows.map(baselineOf),
     baselineScope: scopeOf(filter),
+    // เกณฑ์ Cp/Cpk ขั้นต่ำของจุดนี้ (ลูกค้า/override/ค่าระบบ เลือกแล้วที่ server) — client แค่เอาไปเทียบสี
+    capabilityTarget: targetFor(checkpoint, targets),
     ...result,
   });
 }));
@@ -94,7 +103,7 @@ router.get('/:checkpointId/baseline/preview', wrap(async (req, res) => {
 }));
 
 // POST /api/charts/:checkpointId/baseline — freeze ลิมิตจากช่วงที่เลือก
-router.post('/:checkpointId/baseline', wrap(async (req, res) => {
+router.post('/:checkpointId/baseline', requireLogin, wrap(async (req, res) => {
   if (!isIntLike(req.params.checkpointId)) throw new AppError('checkpoint id ไม่ถูกต้อง', 400);
 
   const r = await setBaseline(req.params.checkpointId, filterFrom(req.body ?? {}));
@@ -119,7 +128,7 @@ router.post('/:checkpointId/baseline', wrap(async (req, res) => {
 }));
 
 // DELETE /api/charts/:checkpointId/baseline — กลับไปเป็น provisional
-router.delete('/:checkpointId/baseline', wrap(async (req, res) => {
+router.delete('/:checkpointId/baseline', requireLogin, wrap(async (req, res) => {
   if (!isIntLike(req.params.checkpointId)) throw new AppError('checkpoint id ไม่ถูกต้อง', 400);
 
   const checkpoint = await fetchCheckpoint(req.params.checkpointId);

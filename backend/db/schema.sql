@@ -53,6 +53,47 @@ CREATE TABLE IF NOT EXISTS inspectors (
     FOREIGN KEY (division_id) REFERENCES divisions(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ผู้ใช้ที่ login เข้าหน้า Master ได้ — หน้าอื่นไม่ต้อง login (ใบตรวจหน้าไลน์ห้ามติด login)
+-- สร้าง/เปลี่ยนรหัส/ปิดบัญชีด้วย npm run user:add / user:passwd / user:disable (scripts/user.js)
+-- password_hash = 'scrypt$<salt>$<hash>' (services/auth.js) · ไม่มี FK จากตารางไหนมาหาโดยตั้งใจ
+CREATE TABLE IF NOT EXISTS users (
+  id             INT AUTO_INCREMENT PRIMARY KEY,
+  username       VARCHAR(50)  NOT NULL,
+  password_hash  VARCHAR(255) NOT NULL,
+  display_name   VARCHAR(100) NULL,
+  is_active      TINYINT(1)   NOT NULL DEFAULT 1,
+  last_login_at  DATETIME     NULL,
+  created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_users_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- passkey = รหัสลับรายบัญชี พิมพ์ช่องเดียวเข้าได้เลย (hashPasskey ใน services/auth.js)
+-- ⚠️ UNIQUE โดยตั้งใจ — login ด้วย passkey ไม่มี username passkey ซ้ำกันจะไม่รู้ว่าเป็นของใคร
+--    NULL = ยังไม่ได้ตั้ง (UNIQUE ยอมให้ NULL ซ้ำได้)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS passkey_hash CHAR(64) NULL;
+ALTER TABLE users ADD UNIQUE INDEX IF NOT EXISTS uq_users_passkey (passkey_hash);
+
+-- ลูกค้าเจ้าของ item + เกณฑ์ Cp/Cpk ขั้นต่ำที่ลูกค้ากำหนด
+--
+-- เกณฑ์ที่ใช้จริงเลือกที่ services/capabilityTarget.js ที่เดียว:
+--   models.min_* (override ราย item) ?? customers.min_* ?? 1.33 (ค่าระบบ)
+-- แยก 2 ชุด: จุดทั่วไป (min_cp/min_cpk) กับจุด CTF = checkpoints.is_critical (min_*_ctf)
+-- เพราะลูกค้ามักกำหนดจุดวิกฤตสูงกว่า
+--
+-- ⚠️ เป็นเกณฑ์ "แสดงผล" เท่านั้น ไม่ได้ตัดสิน OK/NG ของใบตรวจ และไม่ได้ snapshot ลงใบตรวจ
+--    แก้เกณฑ์แล้วรายงานย้อนหลังเปลี่ยนสีตามได้ — ตั้งใจ เพราะ Cp/Cpk เองก็คำนวณสดทุกครั้ง
+CREATE TABLE IF NOT EXISTS customers (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  name         VARCHAR(100) NOT NULL,
+  min_cp       DECIMAL(4,2) NOT NULL DEFAULT 1.33,
+  min_cpk      DECIMAL(4,2) NOT NULL DEFAULT 1.33,
+  min_cp_ctf   DECIMAL(4,2) NOT NULL DEFAULT 1.33,
+  min_cpk_ctf  DECIMAL(4,2) NOT NULL DEFAULT 1.33,
+  is_active    TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_customers_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- "รุ่น" ของระบบนี้คือ item number ของ IPBASS — ไม่ผูกกับเครื่อง (item เดียวรันได้หลายเครื่อง
 -- เครื่องไปอยู่ที่หัวใบตรวจ) ตารางยังชื่อ models และคอลัมน์อ้างอิงยังชื่อ model_id ตามเดิม
 -- เพราะชื่อพวกนั้นลามไป FK / socket room / URL param โดยไม่ได้อะไรกลับมา
@@ -66,13 +107,22 @@ CREATE TABLE IF NOT EXISTS models (
   item_name    VARCHAR(150) NOT NULL,
   drawing_no   VARCHAR(100) NULL,
   drawing_rev  VARCHAR(20)  NULL,
+  -- NULL = ไม่ระบุลูกค้า · min_* NULL = ใช้ค่าของลูกค้า (ดูคอมเมนต์ที่ตาราง customers)
+  customer_id  INT NULL,
+  min_cp       DECIMAL(4,2) NULL,
+  min_cpk      DECIMAL(4,2) NULL,
+  min_cp_ctf   DECIMAL(4,2) NULL,
+  min_cpk_ctf  DECIMAL(4,2) NULL,
   is_active    TINYINT(1)   NOT NULL DEFAULT 1,
   created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_models_division_item (division_id, item_no),
   KEY ix_models_item_no (item_no),
   KEY ix_models_division (division_id),
+  KEY ix_models_customer (customer_id),
   CONSTRAINT fk_models_division
-    FOREIGN KEY (division_id) REFERENCES divisions(id) ON DELETE RESTRICT
+    FOREIGN KEY (division_id) REFERENCES divisions(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_models_customer
+    FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- จุดตรวจของแต่ละรุ่น เรียงตาม seq_no ตามลำดับในแบบ
@@ -95,6 +145,10 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   lsl                 DECIMAL(12,4) NULL,
   target              DECIMAL(12,4) NULL,
   sample_size         TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  -- ความถี่ที่ต้องตรวจ (หัวชีต Input "2 pcs / shift", "1 pcs / day") ดู fetchDoneCheckpointIds
+  frequency           ENUM('shift','day') NOT NULL DEFAULT 'shift',
+  -- ลักษณะที่วัด (Slot / OD / Rz / Position) แยกจาก name ที่เป็นเลขจุดบนแบบ ("Dimension 3.1")
+  characteristic      VARCHAR(64)  NULL,
   is_critical         TINYINT(1) NOT NULL DEFAULT 0,
   is_active           TINYINT(1) NOT NULL DEFAULT 1,
   baseline_xbarbar    DECIMAL(14,6) NULL,
@@ -118,7 +172,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 -- ⚠️ baseline แยกตาม "จุดตรวจ × เครื่อง" ไม่ใช่ต่อจุดตรวจเฉย ๆ อย่างเดิม
 --    หลายเครื่องผลิต item เดียวกันได้ และแต่ละเครื่องคือคนละ process — เอาข้อมูลมารวมกัน
 --    แล้วคิดเส้นกลางชุดเดียว จะได้ X̿ ที่ไม่ใช่ของเครื่องไหนเลย เครื่องที่ค่ากลางเบี่ยงจาก
---    กลุ่มจะติดกฎ Nelson ข้อ 2 ค้างตลอดโดยไม่มีอะไรผิดจริง แล้วคนจะเลิกเชื่อคำเตือนทั้งหมด
+--    กลุ่มจะติดกฎ OCS shift 7 จุด ค้างตลอดโดยไม่มีอะไรผิดจริง แล้วคนจะเลิกเชื่อคำเตือนทั้งหมด
 --
 -- ⚠️ machine_id = 0 คือชุด "รวมทุกเครื่อง" ไม่ใช่รหัสเครื่องจริง (machines.id เป็น
 --    AUTO_INCREMENT จึงเริ่มที่ 1 เสมอ เลข 0 ว่างอยู่) — ที่ไม่ใช้ NULL เพราะ MySQL/MariaDB
@@ -220,6 +274,39 @@ CREATE TABLE IF NOT EXISTS inspection_results (
     FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── Event Log ของจุดที่ผิดกฎ OCS (ท้ายชีต SC ของฟอร์ม SP-QC-214C) ──────────────
+--
+-- 1 แถว = สาเหตุ + มาตรการแก้ไข ของ 1 จุดบนกราฟ 1 เส้น (X̄ หรือ R) ที่ผิดกฎ OCS
+-- จุดที่ผิดกฎแต่ยังไม่มีแถวในตารางนี้ = "ยังไม่ได้บันทึกสาเหตุ" (หน้า /sc โชว์เป็นสีเหลือง)
+--
+-- rules = snapshot ของกฎที่ผิด ณ ตอนบันทึก (เช่น 'out,shift_up') — กฎคำนวณสดจากข้อมูล
+--         ยกเลิกใบตรวจหรือล็อก baseline ใหม่แล้วจุดนี้อาจไม่ผิดกฎแล้ว แต่สิ่งที่คนเขียนไว้ต้องอยู่
+-- recorded_by บังคับกรอก — บันทึกได้โดยไม่ต้อง login (คนหน้าไลน์เป็นคนเขียน) ชื่อที่พิมพ์คือร่องรอยเดียว
+-- CASCADE ทั้งสองเส้น: DELETE /inspections/voided กับ purge-inspections.sql ลบใบตรวจจริงได้
+CREATE TABLE IF NOT EXISTS ocs_events (
+  id                INT AUTO_INCREMENT PRIMARY KEY,
+  checkpoint_id     INT NOT NULL,
+  inspection_id     INT NOT NULL,
+  chart             ENUM('xbar','range') NOT NULL,
+  rules             VARCHAR(64)  NULL,
+  man_pd            VARCHAR(255) NULL,
+  man_qc            VARCHAR(255) NULL,
+  machine_note      VARCHAR(255) NULL,
+  method            VARCHAR(255) NULL,
+  material          VARCHAR(255) NULL,
+  measurement       VARCHAR(255) NULL,
+  corrective_action TEXT NULL,
+  recorded_by       VARCHAR(100) NOT NULL,
+  created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_ocs_events_point (checkpoint_id, inspection_id, chart),
+  KEY ix_ocs_events_inspection (inspection_id),
+  CONSTRAINT fk_ocs_events_checkpoint
+    FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE CASCADE,
+  CONSTRAINT fk_ocs_events_inspection
+    FOREIGN KEY (inspection_id) REFERENCES inspections(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ── อัปเกรดตารางเดิมให้เข้ารูปใหม่ ─────────────────────────────────────────
 --
 -- ส่วนนี้มีไว้เฉพาะ DB ที่เคยรันระบบเดิมมาก่อน (machines เดิมมีแค่ id/division_id/name)
@@ -305,3 +392,31 @@ SET @sql = IF(
     WHERE baseline_xbarbar IS NOT NULL OR baseline_locked_at IS NOT NULL',
   'DO 0');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ── ลูกค้า + เกณฑ์ Cp/Cpk ของ item ──────────────────────────────────────────
+--
+-- ตาราง customers สร้างด้วย CREATE TABLE ข้างบนแล้ว (ตารางใหม่ ไม่มีรูปเก่า)
+ALTER TABLE models ADD COLUMN IF NOT EXISTS customer_id INT          NULL;
+ALTER TABLE models ADD COLUMN IF NOT EXISTS min_cp      DECIMAL(4,2) NULL;
+ALTER TABLE models ADD COLUMN IF NOT EXISTS min_cpk     DECIMAL(4,2) NULL;
+ALTER TABLE models ADD COLUMN IF NOT EXISTS min_cp_ctf  DECIMAL(4,2) NULL;
+ALTER TABLE models ADD COLUMN IF NOT EXISTS min_cpk_ctf DECIMAL(4,2) NULL;
+ALTER TABLE models ADD INDEX IF NOT EXISTS ix_models_customer (customer_id);
+
+-- ⚠️ FK ห่อ guard information_schema — ADD CONSTRAINT ไม่มี IF NOT EXISTS ที่ไว้ใจได้บน 10.3
+--    รันซ้ำแล้วชนชื่อ constraint เดิม db:apply จะพังทั้งไฟล์
+-- RESTRICT: ลบลูกค้าที่ยังมี item ผูกอยู่ไม่ได้ ให้ปิดใช้งาน (is_active = 0) แทน
+SET @sql = IF(
+  (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'models' AND CONSTRAINT_NAME = 'fk_models_customer') = 0,
+  'ALTER TABLE models ADD CONSTRAINT fk_models_customer
+     FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE RESTRICT',
+  'DO 0');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ── ความถี่ต่อจุดตรวจ + Characteristic (ฟอร์มชีต Input) ─────────────────────
+--
+-- จุดเดิมทั้งหมดได้ 'shift' = ต้องตรวจทุกกะ ตรงกับพฤติกรรมเดิมที่บังคับกรอกครบทุกจุดทุกใบ
+ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS frequency ENUM('shift','day') NOT NULL DEFAULT 'shift' AFTER sample_size;
+ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS characteristic VARCHAR(64) NULL AFTER frequency;

@@ -17,12 +17,13 @@ export const toNum = (v) => {
 // ตรงข้ามกับ toNum — ช่องตัวเลขที่เว้นว่างต้องส่ง null ไม่ใช่ '' (คอลัมน์เป็น decimal NULLable)
 export const numOrNull = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
 
+// min_* = เกณฑ์ Cp/Cpk ของ item (NULL = ตามลูกค้า) — มากับ /master/models
 const DECIMAL_FIELDS = [
   'usl', 'lsl', 'target', 'value', 'usl_used', 'lsl_used',
-  'baseline_xbarbar', 'baseline_rbar',
+  'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf',
 ];
 
-const INT_FIELDS = ['sample_size', 'seq_no', 'baseline_n', 'baseline_subgroups', 'n_used', 'piece_no'];
+const INT_FIELDS = ['sample_size', 'seq_no', 'n_used', 'piece_no', 'customer_id'];
 
 const normalizeRow = (row) => {
   if (!row || typeof row !== 'object') return row;

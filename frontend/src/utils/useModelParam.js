@@ -41,6 +41,16 @@ export const masterHref = ({ modelId = '', item = null, divisionId = null } = {}
   return qs ? `/master?${qs}` : '/master';
 };
 
+// ลิงก์ไปหน้า SC Chart (ฟอร์ม SP-QC-214C) ของจุดตรวจหนึ่งจุด — ?machine= / ?month= ว่าง = รวมทุกเครื่อง / เดือนนี้
+export const scHref = ({ modelId, checkpointId, machineId = '', month = '' }) => {
+  const q = new URLSearchParams();
+  if (modelId) q.set('model', String(modelId));
+  if (checkpointId) q.set('checkpoint', String(checkpointId));
+  if (machineId) q.set('machine', String(machineId));
+  if (month) q.set('month', month);
+  return `/sc?${q.toString()}`;
+};
+
 // ชื่อ param ที่ใช้ prefill ฟอร์มเพิ่ม item — MasterSetup อ่านชุดนี้แล้วล้างทิ้ง
 // export ไว้ให้ทั้งสองฝั่งอ้างลิสต์เดียวกัน เพิ่มฟิลด์แล้วจะได้ไม่ลืมอีกฝั่ง
 export const PREFILL_KEYS = ['item_no', 'item_name', 'drawing_no', 'division_id'];

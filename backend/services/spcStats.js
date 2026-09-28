@@ -204,123 +204,109 @@ const capability = ({ usl, lsl, sigmaWithin, values }) => {
   const sigmaOverall = sampleSd(values);
   const within = toNum(sigmaWithin);
 
-  const empty = { cp: null, cpk: null, pp: null, ppk: null, sigmaWithin: within, sigmaOverall, mean: null };
+  const empty = { cp: null, cpk: null, cpu: null, cpl: null, pp: null, ppk: null, sigmaWithin: within, sigmaOverall, mean: null };
   if (values.length < 2) return empty;
 
   const m = mean(values);
 
   // sigma = 0 (ค่าวัดเท่ากันหมด) หารไม่ได้ — เดิมได้ Infinity แล้วโชว์เป็น "∞" บนหน้าจอ
   const ratios = (sigma) => {
-    if (sigma === null || sigma <= 0) return { c: null, ck: null };
+    if (sigma === null || sigma <= 0) return { c: null, ck: null, upper: null, lower: null };
     const c = U !== null && L !== null ? (U - L) / (6 * sigma) : null;
     // Cpk ใช้ด้านที่มีอยู่จริงได้ ไม่จำเป็นต้องมีครบสองข้าง (สเปกด้านเดียวมีจริงในงาน)
     const upper = U !== null ? (U - m) / (3 * sigma) : null;
     const lower = L !== null ? (m - L) / (3 * sigma) : null;
     const sides = [upper, lower].filter((x) => x !== null);
-    return { c, ck: sides.length > 0 ? Math.min(...sides) : null };
+    return { c, ck: sides.length > 0 ? Math.min(...sides) : null, upper, lower };
   };
 
   const w = ratios(within);
   const o = ratios(sigmaOverall);
 
-  return { cp: w.c, cpk: w.ck, pp: o.c, ppk: o.ck, sigmaWithin: within, sigmaOverall, mean: m };
+  // cpu / cpl = Cpk ด้านบน/ด้านล่างแยกกัน (กล่องสถิติของชีต SC โชว์ทั้งสองตัว) ใช้ sigma ภายในเหมือน Cpk
+  return {
+    cp: w.c, cpk: w.ck, cpu: w.upper, cpl: w.lower,
+    pp: o.c, ppk: o.ck, sigmaWithin: within, sigmaOverall, mean: m,
+  };
 };
 
-// ── 4. กฎ Nelson ──────────────────────────────────────────────────────────
+// ── 4. กฎ OCS (Out of Control Signal) ตามฟอร์ม SP-QC-214C ──────────────────
 
-// nelsonRules(points, { center, ucl }) → [{ index, rules: [1, 5] }]
+// รหัสกฎ — ⚠️ ต้องตรงกับ OCS_RULES ใน frontend/src/utils/spcRules.js (ลำดับ = ลำดับแถวในตาราง OCS)
+const OCS_RULE_IDS = ['out', 'shift_up', 'shift_down', 'trend_up', 'trend_down', 'alt14'];
+
+// ocsRules(values, { center, ucl, lcl }) → [{ index, rules: ['out', 'shift_up'] }]
 //
-// ครบทั้ง 8 ข้อตามมาตรฐาน · sigma เอามาจากระยะ center→UCL หารสาม (ไม่ใช่ SD ของข้อมูล)
-// จุดที่ผิดกฎข้อ 1 = หลุด control limit · ข้ออื่นคือรูปแบบที่บอกว่า process กำลังเปลี่ยน
-// ทั้งที่ยังไม่มีจุดไหนหลุดเส้น — เป็นเหตุผลหลักที่ต้องมีกฎพวกนี้ ไม่ใช่ดูแค่เส้นบนล่าง
-const nelsonRules = (points, limits) => {
-  const k = points.length;
-  if (k === 0 || !limits) return [];
+// 6 กฎตามตาราง OCS ของชีต SC ใน Excel ที่ QC ใช้อยู่ (แทนกฎ Nelson 8 ข้อของเดิม):
+//   out         จุดหลุด UCL หรือ LCL (เทียบกับเส้นตรง ๆ ไม่แปลงเป็น sigma — LCL ของกราฟ R เป็น 0 ได้)
+//   shift_up    7 จุดติดกันอยู่เหนือ CL
+//   shift_down  7 จุดติดกันอยู่ใต้ CL
+//   trend_up    6 จุดติดกันไต่ขึ้นตลอด
+//   trend_down  6 จุดติดกันไต่ลงตลอด
+//   alt14       14 จุดติดกันสลับขึ้นลง
+//
+// ⚠️ ทำเครื่องหมายเฉพาะ "จุดที่ครบเงื่อนไข" (จุดท้ายของชุด) ไม่ใช่ทั้งชุด — ตรงกับคอลัมน์ *** ใน Event Log
+//    ของ Excel · ชุดที่ยาวต่อไปอีก จุดถัด ๆ ไปก็ครบเงื่อนไขด้วยตัวเองจึงถูกทำเครื่องหมายต่อเนื่อง
+//    (Excel ก็เป็นแบบนั้น — เทียบหน้าต่าง 7 จุดล่าสุดทุกคอลัมน์)
+// ⚠️ จุดที่เป็น null (MR จุดแรกของ I-MR) ตัดสายของทุกกฎที่ต้องนับติดกัน
+const ocsRules = (values, { center, ucl, lcl } = {}) => {
+  const k = values.length;
+  const C = toNum(center);
+  const U = toNum(ucl);
+  const L = toNum(lcl);
+  if (k === 0) return [];
 
-  const center = toNum(limits.center);
-  const sigma = (toNum(limits.ucl) - center) / 3;
-  if (!Number.isFinite(sigma) || sigma <= 0) return [];
-
-  const hits = new Map(); // index → Set(ruleNo)
-  const flag = (i, rule) => {
-    if (!hits.has(i)) hits.set(i, new Set());
-    hits.get(i).add(rule);
+  const hits = new Map(); // index → Set(ruleId)
+  const flag = (idx, rule) => {
+    if (!hits.has(idx)) hits.set(idx, new Set());
+    hits.get(idx).add(rule);
   };
-  // ระยะห่างจากเส้นกลางเป็นหน่วย sigma (บวก = เหนือเส้นกลาง)
-  const z = points.map((p) => (p - center) / sigma);
-  const side = (i) => (z[i] > 0 ? 1 : z[i] < 0 ? -1 : 0);
-  // ทำเครื่องหมายทั้งชุดที่ผิดกฎ ไม่ใช่เฉพาะจุดสุดท้าย — คนอ่านกราฟต้องเห็นว่าชุดไหน
-  const flagRun = (start, end, rule) => {
-    for (let i = start; i <= end; i += 1) flag(i, rule);
+  const ok = (idx) => idx >= 0 && values[idx] !== null && Number.isFinite(values[idx]);
+  // ทุกจุดในหน้าต่าง [i-len+1 .. i] มีค่าและผ่าน test
+  const run = (i, len, test) => {
+    if (i - len + 1 < 0) return false;
+    for (let j = i - len + 1; j <= i; j += 1) if (!ok(j) || !test(j)) return false;
+    return true;
   };
 
-  // 1: 1 จุดเกิน 3 sigma
-  for (let i = 0; i < k; i += 1) if (Math.abs(z[i]) > 3) flag(i, 1);
+  for (let i = 0; i < k; i += 1) {
+    if (!ok(i)) continue;
+    const v = values[i];
 
-  // 2: 9 จุดติดกันอยู่ข้างเดียวของเส้นกลาง
-  for (let i = 8; i < k; i += 1) {
-    const s = side(i);
-    if (s !== 0 && Array.from({ length: 9 }, (_, j) => side(i - j)).every((x) => x === s)) {
-      flagRun(i - 8, i, 2);
+    if ((U !== null && v > U) || (L !== null && v < L)) flag(i, 'out');
+
+    if (C !== null) {
+      if (run(i, 7, (j) => values[j] > C)) flag(i, 'shift_up');
+      if (run(i, 7, (j) => values[j] < C)) flag(i, 'shift_down');
     }
-  }
 
-  // 3: 6 จุดติดกันไต่ขึ้นหรือไต่ลงตลอด
-  for (let i = 5; i < k; i += 1) {
-    const win = points.slice(i - 5, i + 1);
-    const up = win.every((v, j) => j === 0 || v > win[j - 1]);
-    const down = win.every((v, j) => j === 0 || v < win[j - 1]);
-    if (up || down) flagRun(i - 5, i, 3);
-  }
-
-  // 4: 14 จุดติดกันสลับขึ้นลง
-  for (let i = 13; i < k; i += 1) {
-    let alternating = true;
-    // 14 จุด = 13 ผลต่าง ต้องเทียบเครื่องหมายคู่ติดกัน 12 ครั้ง
-    // (j สูงสุดคือ i-1 เพราะข้างในอ่าน points[j+1] — เลยไปกว่านี้จะหลุด array ได้ NaN)
-    for (let j = i - 12; j <= i - 1; j += 1) {
-      const prev = points[j] - points[j - 1];
-      const next = points[j + 1] - points[j];
-      if (prev === 0 || next === 0 || Math.sign(prev) === Math.sign(next)) {
-        alternating = false;
-        break;
+    // 6 จุดไต่ตลอด = 5 ช่วงที่เพิ่มขึ้นติดกัน (จุดแรกของหน้าต่างไม่ต้องเทียบกับตัวก่อนหน้า)
+    if (run(i, 6, () => true)) {
+      let up = true;
+      let down = true;
+      for (let j = i - 4; j <= i; j += 1) {
+        if (!(values[j] > values[j - 1])) up = false;
+        if (!(values[j] < values[j - 1])) down = false;
       }
+      if (up) flag(i, 'trend_up');
+      if (down) flag(i, 'trend_down');
     }
-    if (alternating) flagRun(i - 13, i, 4);
-  }
 
-  // 5: 2 ใน 3 จุดติดกัน เกิน 2 sigma ข้างเดียวกัน
-  for (let i = 2; i < k; i += 1) {
-    for (const s of [1, -1]) {
-      const beyond = [0, 1, 2].filter((j) => side(i - j) === s && Math.abs(z[i - j]) > 2);
-      if (beyond.length >= 2) flagRun(i - 2, i, 5);
-    }
-  }
-
-  // 6: 4 ใน 5 จุดติดกัน เกิน 1 sigma ข้างเดียวกัน
-  for (let i = 4; i < k; i += 1) {
-    for (const s of [1, -1]) {
-      const beyond = [0, 1, 2, 3, 4].filter((j) => side(i - j) === s && Math.abs(z[i - j]) > 1);
-      if (beyond.length >= 4) flagRun(i - 4, i, 6);
-    }
-  }
-
-  // 7: 15 จุดติดกันอยู่ในโซน 1 sigma ทั้งสองข้าง (แคบผิดปกติ — มักแปลว่าข้อมูลถูกแต่ง หรือลิมิตกว้างเกิน)
-  for (let i = 14; i < k; i += 1) {
-    if (Array.from({ length: 15 }, (_, j) => Math.abs(z[i - j])).every((a) => a < 1)) {
-      flagRun(i - 14, i, 7);
-    }
-  }
-
-  // 8: 8 จุดติดกันไม่มีจุดไหนอยู่ในโซน 1 sigma เลย (สองกลุ่มแยกกัน — มักแปลว่ามี 2 process ปนกัน)
-  for (let i = 7; i < k; i += 1) {
-    if (Array.from({ length: 8 }, (_, j) => Math.abs(z[i - j])).every((a) => a > 1)) {
-      flagRun(i - 7, i, 8);
+    // 14 จุดสลับขึ้นลง = 13 ผลต่างที่เครื่องหมายสลับกันทุกคู่ติดกัน (12 คู่ · ผลต่าง 0 ตัดสาย)
+    // ⚠️ j เริ่มที่ i-11 เพราะข้างในอ่าน values[j-2] — ต่ำกว่านี้จะอ่านจุดนอกหน้าต่าง 14 จุด
+    if (run(i, 14, () => true)) {
+      let alternating = true;
+      for (let j = i - 11; j <= i && alternating; j += 1) {
+        const prev = values[j - 1] - values[j - 2];
+        const next = values[j] - values[j - 1];
+        if (prev === 0 || next === 0 || Math.sign(prev) === Math.sign(next)) alternating = false;
+      }
+      if (alternating) flag(i, 'alt14');
     }
   }
 
   return [...hits.entries()]
-    .map(([index, rules]) => ({ index, rules: [...rules].sort((a, b) => a - b) }))
+    .map(([index, rules]) => ({ index, rules: OCS_RULE_IDS.filter((r) => rules.has(r)) }))
     .sort((a, b) => a.index - b.index);
 };
 
@@ -358,12 +344,33 @@ const analyze = (rows, { usl = null, lsl = null, baseline = null } = {}) => {
   const limits = computeLimits(subgroups, n, baseline);
   const chartValues = subgroups.map((s) => s.xbar);
   const allValues = subgroups.flatMap((s) => s.values);
-  const violations = nelsonRules(chartValues, limits);
-  const violationByIndex = new Map(violations.map((v) => [v.index, v.rules]));
 
   // จุดบนกราฟล่าง: n>=2 เป็น range ของ subgroup · n=1 เป็น moving range (จุดแรกไม่มี)
   const rangeAt = (i) =>
     limits.mode === 'i-mr' ? (i === 0 ? null : limits.movingRanges[i - 1]) : subgroups[i].range;
+  const rangeValues = subgroups.map((_, i) => rangeAt(i));
+
+  // กฎ OCS ใช้กับทั้งกราฟบน (X̄ / I) และกราฟล่าง (R / MR) แยกกัน — ตาราง OCS ของฟอร์มมีครบทั้งสองชุด
+  // violations: 1 แถวต่อ "จุด × กราฟ" · chart = 'xbar' | 'range' (Event Log ผูกกับคู่นี้)
+  const xbarHits = ocsRules(chartValues, { center: limits.center, ucl: limits.ucl, lcl: limits.lcl });
+  const rangeHits = ocsRules(rangeValues, { center: limits.rangeCenter, ucl: limits.rangeUcl, lcl: limits.rangeLcl });
+  const xbarByIndex = new Map(xbarHits.map((v) => [v.index, v.rules]));
+  const rangeByIndex = new Map(rangeHits.map((v) => [v.index, v.rules]));
+  const violations = [
+    ...xbarHits.map((v) => ({ ...v, chart: 'xbar' })),
+    ...rangeHits.map((v) => ({ ...v, chart: 'range' })),
+  ].sort((a, b) => a.index - b.index || (a.chart === 'xbar' ? -1 : 1));
+
+  // กล่องสถิติของชีต SC — คิดจากข้อมูลในช่วงที่ดูอยู่ ไม่ใช่จาก baseline
+  const presentRanges = rangeValues.filter((r) => r !== null);
+  const stats = {
+    count: allValues.length,
+    subgroups: subgroups.length,
+    max: allValues.length ? Math.max(...allValues) : null,
+    min: allValues.length ? Math.min(...allValues) : null,
+    xbarbar: chartValues.length ? mean(chartValues) : null,
+    rbar: presentRanges.length ? mean(presentRanges) : null,
+  };
 
   return {
     mode: limits.mode,
@@ -378,11 +385,13 @@ const analyze = (rows, { usl = null, lsl = null, baseline = null } = {}) => {
       range: rangeAt(i),
       values: s.values,
       meta: s.meta,
-      rules: violationByIndex.get(i) ?? [],
+      rules: xbarByIndex.get(i) ?? [],
+      rangeRules: rangeByIndex.get(i) ?? [],
     })),
     violations,
     inControl: violations.length === 0,
     capability: capability({ usl, lsl, sigmaWithin: limits.sigmaWithin, values: allValues }),
+    stats,
   };
 };
 
@@ -393,7 +402,8 @@ module.exports = {
   buildSubgroups,
   computeLimits,
   capability,
-  nelsonRules,
+  ocsRules,
+  OCS_RULE_IDS,
   analyze,
   MIN_BASELINE_SUBGROUPS,
 };

@@ -10,7 +10,10 @@
     "db:seed": "node db/migrate.js seed.sql",
     "db:drop-legacy": "node db/migrate.js drop-legacy.sql",
     "db:purge-inspections": "node db/migrate.js purge-inspections.sql",
-    "test": "node --test"
+    "user:add": "node scripts/user.js add",
+    "user:passwd": "node scripts/user.js passwd",
+    "user:disable": "node scripts/user.js disable",
+    "user:list": "node scripts/user.js list"
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -15,6 +15,7 @@ import {
 } from '../utils/checkpointForm';
 import SpecValue from './SpecValue';
 import AppDialog from './AppDialog';
+import UsersTab from './UsersTab';
 import SearchSelect from './SearchSelect';
 import { useDialog } from '../utils/useDialog';
 
@@ -59,7 +60,27 @@ const Caret = ({ dir }) => (
   </svg>
 );
 
-const blankModel = () => ({ division_id: '', item_no: '', item_name: '', drawing_no: '', drawing_rev: '' });
+const blankModel = () => ({
+  division_id: '', item_no: '', item_name: '', drawing_no: '', drawing_rev: '',
+  customer_id: '', ...blankMins(),
+});
+
+// ── เกณฑ์ Cp/Cpk ขั้นต่ำของ item ────────────────────────────────────────
+//
+// ช่องว่าง = ใช้เกณฑ์ของลูกค้า (ไม่มีลูกค้า = ค่าระบบ) — ลำดับเลือกอยู่ที่
+// backend/services/capabilityTarget.js ที่เดียว หน้านี้แค่เก็บค่า override
+// ⚠️ ต้องส่ง null ไม่ใช่ '' — คอลัมน์เป็น DECIMAL(4,2) NULL และ NULL คือ "ตามลูกค้า"
+const MIN_FIELDS = [
+  { key: 'min_cp', label: 'Cp' },
+  { key: 'min_cpk', label: 'Cpk' },
+  { key: 'min_cp_ctf', label: 'Cp (CTF)' },
+  { key: 'min_cpk_ctf', label: 'Cpk (CTF)' },
+];
+const blankMins = () => Object.fromEntries(MIN_FIELDS.map((f) => [f.key, '']));
+
+// DECIMAL(4,2) เก็บได้ถึง 99.99 · 0 หรือติดลบไม่มีความหมายเป็นเกณฑ์
+const badMin = (v) => v !== '' && v !== null && v !== undefined
+  && !(Number.isFinite(Number(v)) && Number(v) > 0 && Number(v) < 100);
 
 // ค่าที่หน้าใบตรวจหิ้วมาให้ทาง URL (ดู masterHref ใน utils/useModelParam.js)
 const readPrefill = (params) => {
@@ -98,7 +119,7 @@ const MasterSetup = () => {
   //    โหมดที่ค้างมาจากเมื่อวานเปลี่ยนความหมายของช่องครึ่งฟอร์มโดยที่คนกรอกไม่ได้สั่ง
   //    แต่คงไว้ระหว่างเซสชัน เพราะแบบใบเดียวมีจุดตรวจที่เขียนรูปเดียวกันหมดสิบกว่าจุด
   // กล่องยืนยัน/แจ้งเตือนของทั้งหน้า — ตัวเดียว ไม่ซ้อนกัน (ดู utils/useDialog.js)
-  const { dialog, showAlert, showConfirm, closeDialog } = useDialog();
+  const { dialog, showAlert, showConfirm, showForm, closeDialog } = useDialog();
 
   const [specMode, setSpecMode] = useState('limits');
   const [tolForm, setTolForm] = useState(EMPTY_TOL);
@@ -314,6 +335,8 @@ const MasterSetup = () => {
         <Nav.Item><Nav.Link eventKey="divisions">Division</Nav.Link></Nav.Item>
         <Nav.Item><Nav.Link eventKey="machines">เครื่อง</Nav.Link></Nav.Item>
         <Nav.Item><Nav.Link eventKey="inspectors">ผู้ตรวจ</Nav.Link></Nav.Item>
+        <Nav.Item><Nav.Link eventKey="customers">ลูกค้า</Nav.Link></Nav.Item>
+        <Nav.Item><Nav.Link eventKey="users">ผู้ใช้</Nav.Link></Nav.Item>
       </Nav>
 
       {tab === 'models' && (
@@ -325,7 +348,7 @@ const MasterSetup = () => {
           editingCp={editingCp} setEditingCp={setEditingCp}
           resetCp={resetCp} onRemember={rememberMeasurement} gaugeMemory={gaugeMemory}
           specMode={specMode} setSpecMode={setSpecMode} tolForm={tolForm} setTolForm={setTolForm}
-          models={models} divisions={lookups.divisions}
+          models={models} divisions={lookups.divisions} customers={lookups.customers ?? []}
           selectedModel={selectedModel} setSelectedModel={setSelectedModel}
           checkpoints={checkpoints}
           onSave={save} onRemove={remove} onMove={moveCheckpoint} onPurgeVoided={purgeVoided}
@@ -369,6 +392,26 @@ const MasterSetup = () => {
           onSave={save} onRemove={remove} onAlert={showAlert} labelOf={(r) => r.name}
         />
       )}
+      {tab === 'customers' && (
+        // เกณฑ์ตั้งต้นของลูกค้า — item ที่ผูกลูกค้านี้และเว้นช่องเกณฑ์ไว้จะใช้ค่าชุดนี้
+        // จุด CTF (is_critical) ใช้อีกชุดเพราะลูกค้ามักกำหนดจุดวิกฤตสูงกว่า
+        <SimpleTab
+          title="ลูกค้า" table="customers" rows={lookups.customers ?? []}
+          columns={[
+            { key: 'name', label: 'ชื่อลูกค้า', required: true },
+            { key: 'min_cp', label: 'min Cp', type: 'number', required: true, default: '1.33' },
+            { key: 'min_cpk', label: 'min Cpk', type: 'number', required: true, default: '1.33' },
+            { key: 'min_cp_ctf', label: 'min Cp (CTF)', type: 'number', required: true, default: '1.33' },
+            { key: 'min_cpk_ctf', label: 'min Cpk (CTF)', type: 'number', required: true, default: '1.33' },
+            { key: 'is_active', label: 'ใช้งาน', type: 'check' },
+          ]}
+          onSave={save} onRemove={remove} onAlert={showAlert} labelOf={(r) => r.name}
+        />
+      )}
+      {tab === 'users' && (
+        // บัญชี login หน้า Master — ไม่มีหน้าสมัครสาธารณะ คนที่ login อยู่เพิ่มให้คนอื่น (ดู UsersTab.js)
+        <UsersTab say={say} fail={fail} showForm={showForm} showConfirm={showConfirm} onAlert={showAlert} />
+      )}
 
       <BaselineModal
         info={baselineInfo}
@@ -390,7 +433,7 @@ const MasterSetup = () => {
 // ตารางเดียวใช้ได้ทั้งสามชั้น เพราะ backend เป็น generic CRUD อยู่แล้ว
 // ⚠️ key ของ columns ต้องตรงชื่อคอลัมน์ใน DB เป๊ะ — ไม่อยู่ใน ALLOWED_COLUMNS จะถูกตอบ 400
 const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, onAlert, labelOf }) => {
-  const blank = () => Object.fromEntries(columns.map((c) => [c.key, c.type === 'check' ? true : '']));
+  const blank = () => Object.fromEntries(columns.map((c) => [c.key, c.type === 'check' ? true : (c.default ?? '')]));
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);
 
@@ -402,10 +445,16 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, onAlert, lab
       if (c.required && form[c.key] === '') {
         return onAlert({ title: 'กรอกข้อมูลไม่ครบ', body: `กรอก "${c.label}" ก่อน` });
       }
+      if (c.type === 'number' && badMin(form[c.key])) {
+        return onAlert({ title: 'ค่าไม่ถูกต้อง', body: `"${c.label}" ต้องเป็นตัวเลขมากกว่า 0 และน้อยกว่า 100` });
+      }
     }
     const data = Object.fromEntries(columns.map((c) => [
       c.key,
-      c.type === 'check' ? (form[c.key] ? 1 : 0) : c.type === 'select' ? (form[c.key] || null) : form[c.key],
+      c.type === 'check' ? (form[c.key] ? 1 : 0)
+        : c.type === 'select' ? (form[c.key] || null)
+          : c.type === 'number' ? numOrNull(form[c.key])
+            : form[c.key],
     ]));
     if (await onSave(table, data, editingId)) reset();
   };
@@ -424,7 +473,7 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, onAlert, lab
         <Form onSubmit={submit}>
           <Row className="g-2 align-items-end mb-3">
             {columns.map((c) => (
-              <Col md={c.type === 'check' ? 1 : 3} key={c.key}>
+              <Col md={c.type === 'check' ? 1 : c.type === 'number' ? 2 : 3} key={c.key}>
                 <Form.Label className="small mb-1">{c.label}</Form.Label>
                 {c.type === 'check' ? (
                   <Form.Check
@@ -441,6 +490,9 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, onAlert, lab
                   />
                 ) : (
                   <Form.Control
+                    type={c.type === 'number' ? 'number' : 'text'}
+                    step={c.type === 'number' ? '0.01' : undefined}
+                    min={c.type === 'number' ? '0.01' : undefined}
                     value={form[c.key] ?? ''}
                     onChange={(e) => setForm((f) => ({ ...f, [c.key]: e.target.value }))}
                   />
@@ -497,7 +549,7 @@ const ModelsTab = ({
   fromMo, modelForm, setModelForm, editingModel, setEditingModel,
   cpForm, setCpForm, editingCp, setEditingCp, resetCp, onRemember, gaugeMemory,
   specMode, setSpecMode, tolForm, setTolForm,
-  models, divisions, selectedModel, setSelectedModel, checkpoints,
+  models, divisions, customers, selectedModel, setSelectedModel, checkpoints,
   onSave, onRemove, onMove, onPurgeVoided, onPreviewBaseline, onClearBaseline,
   scopeName,
   onAlert,
@@ -531,8 +583,27 @@ const ModelsTab = ({
     if (!modelForm.division_id || !modelForm.item_no || !modelForm.item_name) {
       return onAlert({ title: 'กรอกข้อมูลไม่ครบ', body: 'กรอก Division / Item No. / ชื่อ item ให้ครบ' });
     }
-    if (await onSave('models', modelForm, editingModel)) resetModel();
+    const bad = MIN_FIELDS.find((f) => badMin(modelForm[f.key]));
+    if (bad) {
+      return onAlert({
+        title: 'เกณฑ์ไม่ถูกต้อง',
+        body: `min ${bad.label} ต้องเป็นตัวเลขมากกว่า 0 และน้อยกว่า 100 — หรือเว้นว่างเพื่อใช้เกณฑ์ของลูกค้า`,
+      });
+    }
+    // ⚠️ ช่องว่างต้องเป็น null — '' ลงคอลัมน์ INT/DECIMAL ไม่ได้ และ NULL คือ "ตามลูกค้า"
+    const data = {
+      ...modelForm,
+      customer_id: modelForm.customer_id || null,
+      ...Object.fromEntries(MIN_FIELDS.map((f) => [f.key, numOrNull(modelForm[f.key])])),
+    };
+    if (await onSave('models', data, editingModel)) resetModel();
   };
+
+  // ช่องเกณฑ์ที่เว้นว่างบอกว่าจะได้ค่าอะไร — คนกรอกต้องเห็นว่าไม่ override แล้วได้เลขไหน
+  const formCustomer = customers.find((c) => String(c.id) === String(modelForm.customer_id)) ?? null;
+  const minPlaceholder = (key) => (formCustomer
+    ? `ตามลูกค้า ${Number(formCustomer[key]).toFixed(2)}`
+    : 'ค่าระบบ');
 
   const submitCp = async (e) => {
     e.preventDefault();
@@ -660,6 +731,39 @@ const ModelsTab = ({
                 <Col xs={4}><Form.Control placeholder="Rev"
                   value={modelForm.drawing_rev} onChange={(e) => setModelForm((f) => ({ ...f, drawing_rev: e.target.value }))} /></Col>
               </Row>
+              {/* ลูกค้ากำหนดเกณฑ์ Cp/Cpk ต่างกัน — เลือกลูกค้าแล้วช่องข้างล่างว่างไว้ได้ (ใช้ของลูกค้า)
+                  ⚠️ ต้องมีแถว "ไม่ระบุ" จริงในลิสต์ ไม่งั้นเลือกลูกค้าไปแล้วถอยกลับไม่ได้ */}
+              <div className="mb-2">
+                <SearchSelect
+                  id="model-customer"
+                  aria-label="ลูกค้าของ item"
+                  value={modelForm.customer_id === null ? '' : String(modelForm.customer_id ?? '')}
+                  onChange={(value) => setModelForm((f) => ({ ...f, customer_id: value }))}
+                  placeholder="-- ลูกค้า --"
+                  options={[
+                    { value: '', label: 'ไม่ระบุลูกค้า' },
+                    ...customers.map((c) => ({
+                      value: String(c.id),
+                      label: c.name,
+                      hint: Number(c.is_active) === 0 ? 'ปิดใช้งาน' : '',
+                    })),
+                  ]}
+                />
+              </div>
+              <div className="small text-muted mb-1">เกณฑ์ขั้นต่ำ (เว้นว่าง = ตามลูกค้า)</div>
+              <Row className="g-2 mb-2">
+                {MIN_FIELDS.map((f) => (
+                  <Form.Group as={Col} xs={6} key={f.key} controlId={`model-${f.key}`}>
+                    <Form.Label className="small mb-0">min {f.label}</Form.Label>
+                    <Form.Control
+                      type="number" step="0.01" min="0.01" size="sm"
+                      placeholder={minPlaceholder(f.key)}
+                      value={modelForm[f.key] ?? ''}
+                      onChange={(e) => setModelForm((m) => ({ ...m, [f.key]: e.target.value }))}
+                    />
+                  </Form.Group>
+                ))}
+              </Row>
               <Button type="submit" className="w-100" variant={editingModel ? 'warning' : 'primary'}>
                 {editingModel ? 'บันทึกการแก้ไข' : 'เพิ่ม Item'}
               </Button>
@@ -684,7 +788,8 @@ const ModelsTab = ({
                     <td role="button" onClick={() => setSelectedModel(String(m.id))}>
                       <div className="fw-bold">{m.item_no}</div>
                       <div className="small text-muted">
-                        {m.item_name} · {m.division_name} · {toNum(m.checkpoint_count) || 0} จุด
+                        {m.item_name} · {m.division_name}
+                        {m.customer_name && ` · ${m.customer_name}`} · {toNum(m.checkpoint_count) || 0} จุด
                         {!m.is_active && <Badge bg="secondary" className="ms-1">ปิดใช้งาน</Badge>}
                       </div>
                       {/* ใบที่ยกเลิกแล้วยังกิน FK อยู่ ทำให้ลบ item ไม่ได้ — ปุ่มนี้คือทางออก */}
@@ -700,6 +805,8 @@ const ModelsTab = ({
                         onClick={() => { setEditingModel(m.id); setModelForm({
                           division_id: m.division_id ?? '', item_no: m.item_no ?? '',
                           item_name: m.item_name ?? '', drawing_no: m.drawing_no ?? '', drawing_rev: m.drawing_rev ?? '',
+                          customer_id: m.customer_id ?? '',
+                          ...Object.fromEntries(MIN_FIELDS.map((f) => [f.key, m[f.key] ?? ''])),
                         }); }}>แก้</Button>
                       <Button size="sm" variant="outline-danger"
                         onClick={() => onRemove('models', m.id, m.item_no)}>ลบ</Button>

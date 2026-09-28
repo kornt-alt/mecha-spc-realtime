@@ -6,7 +6,10 @@
 
 const express = require('express');
 const { query } = require('../db/pool');
-const { fetchModelRows, fetchModelCheckpoints, fetchModelBaselines } = require('../db/queries');
+const {
+  fetchModelRows, fetchModelCheckpoints, fetchModelBaselines, fetchModelTargets,
+} = require('../db/queries');
+const { targetFor } = require('../services/capabilityTarget');
 const { buildInspectionFilter } = require('../db/queries');
 const { analyze } = require('../services/spcStats');
 const { baselineOf, pickBaseline, scopeOf } = require('../services/baseline');
@@ -23,17 +26,21 @@ router.get('/model/:modelId', wrap(async (req, res) => {
   if (!isIntLike(modelId)) throw new AppError('model id ไม่ถูกต้อง', 400);
 
   const [[model]] = await query(
-    `SELECT m.*, d.name AS division_name
-       FROM models m JOIN divisions d ON d.id = m.division_id WHERE m.id = ?`,
+    `SELECT m.*, d.name AS division_name, cu.name AS customer_name
+       FROM models m
+       JOIN divisions d ON d.id = m.division_id
+       LEFT JOIN customers cu ON cu.id = m.customer_id
+      WHERE m.id = ?`,
     [Number(modelId)]
   );
   if (!model) throw new AppError('ไม่พบรุ่นนี้', 404);
 
   const filter = filterFrom(req.query);
-  const [checkpoints, rowsByCheckpoint, baselinesByCheckpoint] = await Promise.all([
+  const [checkpoints, rowsByCheckpoint, baselinesByCheckpoint, targets] = await Promise.all([
     fetchModelCheckpoints(modelId, { activeOnly: req.query.all !== '1' }),
     fetchModelRows(modelId, filter),
     fetchModelBaselines(modelId),
+    fetchModelTargets(modelId),
   ]);
   // ⚠️ baseline แยกรายเครื่อง — ขอบเขตต้องตรงกับตัวกรองที่ใช้ดึงค่าวัดข้างบนเสมอ
   //    ไม่ตรงเมื่อไหร่คือเอาลิมิตของเครื่องหนึ่งไปวาดทับจุดของอีกเครื่อง
@@ -88,6 +95,7 @@ router.get('/model/:modelId', wrap(async (req, res) => {
         ngCount,
         ngRate: rows.length ? ngCount / rows.length : null,
         points: [], limits: null, capability: null, violations: [],
+        capabilityTarget: null,
       };
     }
 
@@ -103,12 +111,15 @@ router.get('/model/:modelId', wrap(async (req, res) => {
       baselines: baselineRows.map(baselineOf),
       ngCount,
       ngRate: rows.length ? ngCount / rows.length : null,
+      capabilityTarget: targetFor(checkpoint, targets),
       ...result,
     };
   });
 
   res.json({
     model,
+    // เกณฑ์ Cp/Cpk ทั้งสองชุดของ item (หัวรายงานโชว์) — รายจุดอยู่ที่ charts[].capabilityTarget
+    targets,
     filter,
     summary: {
       totalInspections: total,
@@ -138,6 +149,7 @@ router.get('/model/:modelId/export', wrap(async (req, res) => {
 
   const [[model]] = await query('SELECT * FROM models WHERE id = ?', [Number(modelId)]);
   if (!model) throw new AppError('ไม่พบรุ่นนี้', 404);
+  const targets = await fetchModelTargets(modelId);
 
   const filter = filterFrom(req.query);
   const { where, params } = buildInspectionFilter(filter);
@@ -167,6 +179,12 @@ router.get('/model/:modelId/export', wrap(async (req, res) => {
   ws.addRow([
     `ช่วงวันที่: ${filter.from && filter.to ? `${filter.from} ถึง ${filter.to}` : 'ทั้งหมด'}`,
     '', '', `ออกรายงานเมื่อ ${new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })}`,
+  ]);
+  const g = targets.general;
+  const c = targets.ctf;
+  ws.addRow([
+    `ลูกค้า: ${targets.customerName ?? 'ไม่ระบุ'} · เกณฑ์ Cp ≥ ${g.minCp.toFixed(2)} Cpk ≥ ${g.minCpk.toFixed(2)}` +
+    ` · จุด CTF: Cp ≥ ${c.minCp.toFixed(2)} Cpk ≥ ${c.minCpk.toFixed(2)}`,
   ]);
   ws.addRow([]);
 

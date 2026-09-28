@@ -27,6 +27,11 @@ INSERT IGNORE INTO inspectors (emp_code, name, division_id) VALUES
   ('QC002', 'สมหญิง วัดงาน',  (SELECT id FROM divisions WHERE name = 'Mecha 2')),
   ('QC003', 'ประเสริฐ คุมคุณภาพ', (SELECT id FROM divisions WHERE name = 'Mecha 1'));
 
+-- ลูกค้าตัวอย่าง 2 ราย — เกณฑ์จุด CTF ต่างกัน ไว้เทสว่าสี Cpk เปลี่ยนตามลูกค้าจริง
+INSERT IGNORE INTO customers (name, min_cp, min_cpk, min_cp_ctf, min_cpk_ctf) VALUES
+  ('Customer A', 1.33, 1.33, 1.67, 1.67),
+  ('Customer B', 1.33, 1.33, 1.33, 1.33);
+
 -- "รุ่น" = item number ของ IPBASS
 --
 -- ตัวอย่างจงใจใส่ 2 เคสที่เคยพังต่างกัน:
@@ -60,3 +65,9 @@ VALUES
   ((SELECT id FROM models WHERE item_no = 'AAB-1002/C'
                             AND division_id = (SELECT id FROM divisions WHERE name = 'Mecha 2')),
    1, 'ความหนา', 'variable', 'mm', 'Micrometer', 3.2000, 2.8000, 3.0000, 5, 0);
+
+-- ผูก item ตัวอย่างกับลูกค้า — UPDATE แยกเพราะ INSERT IGNORE ข้างบนไม่แตะแถวที่มีอยู่แล้ว
+UPDATE models SET customer_id = (SELECT id FROM customers WHERE name = 'Customer A')
+ WHERE item_no = 'AAB-1001-01' AND customer_id IS NULL;
+UPDATE models SET customer_id = (SELECT id FROM customers WHERE name = 'Customer B')
+ WHERE item_no = 'AAB-1002/C' AND customer_id IS NULL;

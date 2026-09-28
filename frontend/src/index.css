@@ -708,3 +708,226 @@ code {
   font-size: var(--fs-sm);
   color: var(--muted);
 }
+
+/* ── SC Chart (ฟอร์ม SP-QC-214C) — components/ScSheet.js ─────────────────────
+ * หน้าตาเลียนชีต SC ของ Excel: ตารางเส้นบาง ตัวเล็ก อัดแน่น พิมพ์ลง A4 แนวนอนได้
+ * สีตามแกนของทั้งระบบ: ค่าหลุดสเปก = แดง · จุดที่ผิดกฎ OCS = เหลือง (control) */
+.sc {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  padding: var(--sp-3);
+}
+
+.sc table {
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+
+.sc th,
+.sc td {
+  border: 1px solid var(--line-strong);
+  padding: 2px 6px;
+  vertical-align: middle;
+}
+
+.sc th {
+  background: var(--paper);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sc-head {
+  width: 100%;
+  margin-bottom: var(--sp-3);
+}
+
+.sc-head__group {
+  text-align: center;
+  background: var(--blue-tint) !important;
+}
+
+.sc-head__sign {
+  min-width: 7rem;
+  height: 1.6rem;
+}
+
+.sc-head__note {
+  font-weight: 400 !important;
+  text-align: left;
+}
+
+.sc-provisional {
+  color: var(--amber-text);
+}
+
+.sc-grid-wrap {
+  overflow-x: auto;
+  margin-bottom: var(--sp-3);
+}
+
+.sc-grid td {
+  min-width: 3.4rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.sc-grid tr:first-child td,
+.sc-grid tr:nth-child(2) td,
+.sc-grid tr:nth-child(3) td {
+  text-align: center;
+}
+
+.sc-grid__side {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-align: center;
+}
+
+.sc-grid__stat td {
+  font-weight: 600;
+  background: var(--blue-tint);
+}
+
+.sc-grid__rule {
+  font-weight: 400 !important;
+}
+
+.sc-grid__ocs td {
+  text-align: center !important;
+  color: var(--amber-text);
+}
+
+.sc-grid tr.sc-grid__ocs:nth-last-child(6) th,
+.sc-grid tr.sc-grid__ocs:nth-last-child(6) td {
+  border-top: 2px solid var(--line-strong);
+}
+
+.sc-cell--ng {
+  color: var(--red);
+  font-weight: 700;
+  background: rgba(var(--red-rgb), 0.08);
+}
+
+.sc-cell--ocs {
+  background: var(--amber-tint) !important;
+  color: var(--amber-text);
+  font-weight: 700;
+}
+
+.sc-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: start;
+  margin-bottom: var(--sp-3);
+}
+
+.sc-caption {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.sc-stats td {
+  text-align: right;
+  min-width: 5.5rem;
+}
+
+.sc-stats__note {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-align: left !important;
+  white-space: normal;
+  max-width: 12rem;
+}
+
+.sc-section {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  margin: var(--sp-3) 0 var(--sp-2);
+}
+
+.sc-events {
+  width: 100%;
+}
+
+.sc-events th {
+  white-space: normal;
+  vertical-align: bottom;
+}
+
+.sc-events__text {
+  white-space: pre-line;
+  min-width: 6rem;
+}
+
+.sc-events__missing {
+  color: var(--amber-text);
+  background: var(--amber-tint);
+}
+
+.sc-footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: var(--sp-2);
+}
+
+@media (max-width: 991.98px) {
+  .sc-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── พิมพ์ — หน้า SC Chart ออกเป็นฟอร์มกระดาษ A4 แนวนอน ──────────────────────
+ * ซ่อนเมนู/แถบเลือก/ปุ่ม เหลือแต่ตัวฟอร์ม · ตารางที่เลื่อนแนวนอนได้บนจอต้องแผ่เต็มตอนพิมพ์ */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  .app-nav,
+  .no-print {
+    display: none !important;
+  }
+
+  .page {
+    padding: 0 !important;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  .sc {
+    border: none;
+    padding: 0;
+  }
+
+  .sc-grid-wrap {
+    overflow: visible;
+  }
+
+  .sc table {
+    font-size: 7pt;
+  }
+
+  .sc-grid td {
+    min-width: 0;
+  }
+
+  .sc-body {
+    grid-template-columns: minmax(0, 1fr) auto;
+    break-inside: avoid;
+  }
+
+  .sc-cell--ng,
+  .sc-cell--ocs,
+  .sc-grid__stat td,
+  .sc th {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

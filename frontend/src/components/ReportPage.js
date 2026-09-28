@@ -8,13 +8,23 @@ import { apiCall, apiDownload } from '../utils/api';
 import { normalizeRows, normalizeChart } from '../utils/normalize';
 import { SHIFTS } from '../utils/config';
 import SearchSelect from './SearchSelect';
-import { useModelParam } from '../utils/useModelParam';
+import { Link } from 'react-router-dom';
+import { useModelParam, scHref } from '../utils/useModelParam';
 import ControlChart from './ControlChart';
 import InspectionList from './InspectionList';
 import SpecValue from './SpecValue';
+import { capTone } from '../utils/capability';
 
-// เกณฑ์ที่ฟอร์มของลูกค้าเขียนไว้ตรง ๆ: "CTF, min Cpk > 1.33"
-const CPK_TARGET = 1.33;
+// เกณฑ์ Cp/Cpk มากับผลของแต่ละจุด (capabilityTarget) — ลูกค้าต่างกันเกณฑ์ต่างกัน จุด CTF ก็คนละชุด
+// ต่ำกว่าเกณฑ์ถือเป็นเรื่องต้องดู แต่ยังไม่ใช่ของเสีย → เหลือง · ต่ำกว่า 1.0 → แดง
+const capStyle = (v, min) => {
+  const tone = capTone(v, min);
+  if (tone === 'below') return { color: 'var(--amber-text)', fontWeight: 600 };
+  if (tone === 'poor') return { color: 'var(--red)', fontWeight: 600 };
+  return undefined;
+};
+
+const fmtMin = (v) => (typeof v === 'number' ? v.toFixed(2) : '—');
 
 const emptyFilter = () => ({ from: '', to: '', mo_no: '', shift: '', inspector_id: '', machine_id: '' });
 
@@ -99,7 +109,14 @@ const ReportPage = () => {
       <div className="page-head">
         <h1>รายงานผลตรวจราย model</h1>
         {report && !loading && (
-          <div className="page-head__meta num">{report.charts.length} จุดตรวจ</div>
+          <div className="page-head__meta num">
+            {report.charts.length} จุดตรวจ
+            {` · ลูกค้า ${report.model?.customer_name ?? 'ไม่ระบุ'}`}
+            {report.targets && (
+              ` · เกณฑ์ Cpk ≥ ${fmtMin(report.targets.general.minCpk)}` +
+              ` (CTF ≥ ${fmtMin(report.targets.ctf.minCpk)})`
+            )}
+          </div>
         )}
       </div>
 
@@ -259,11 +276,7 @@ const ReportPage = () => {
                     const f = (v) => (typeof v === 'number' ? v.toFixed(2) : '—');
                     const isAttr = cp.char_type === 'attribute';
                     const outOfControl = (c.violations?.length ?? 0) > 0;
-                    // Cpk ต่ำกว่าเกณฑ์ของลูกค้าถือเป็นเรื่องต้องดู แต่ยังไม่ใช่ของเสีย → เหลือง
-                    const cpkStyle =
-                      typeof cap.cpk === 'number' && cap.cpk < CPK_TARGET
-                        ? { color: 'var(--amber-text)', fontWeight: 600 }
-                        : undefined;
+                    const t = c.capabilityTarget;
 
                     return (
                       <tr key={cp.id}>
@@ -274,11 +287,18 @@ const ReportPage = () => {
                             <span className="badge bg-light text-dark ms-1" title="จุดวิกฤต — CTF">CTF</span>
                           )}
                           {cp.gauge && <span className="sheet__gauge">{cp.gauge}</span>}
+                          {!isAttr && (
+                            <Link className="sheet__gauge" to={scHref({ modelId: cp.model_id, checkpointId: cp.id, machineId: applied.machine_id })}>
+                              ฟอร์ม SC →
+                            </Link>
+                          )}
                         </th>
                         <td className="sheet__spec"><SpecValue checkpoint={cp} /></td>
                         <td className="text-end num">{isAttr ? '—' : cp.sample_size}</td>
-                        <td className="text-end num">{f(cap.cp)}</td>
-                        <td className="text-end num" style={cpkStyle}>{f(cap.cpk)}</td>
+                        <td className="text-end num" style={capStyle(cap.cp, t?.minCp)}
+                          title={t ? `เกณฑ์ ≥ ${fmtMin(t.minCp)}` : undefined}>{f(cap.cp)}</td>
+                        <td className="text-end num" style={capStyle(cap.cpk, t?.minCpk)}
+                          title={t ? `เกณฑ์ ≥ ${fmtMin(t.minCpk)}` : undefined}>{f(cap.cpk)}</td>
                         <td className="text-end num">{f(cap.pp)}</td>
                         <td className="text-end num">{f(cap.ppk)}</td>
                         <td className="text-end num">
@@ -305,7 +325,7 @@ const ReportPage = () => {
           <Row>
             {report.charts.map((c) => (
               <Col xl={6} key={c.checkpoint.id}>
-                <ControlChart chart={c} height={200} />
+                <ControlChart chart={c} height={200} machineId={applied.machine_id} />
               </Col>
             ))}
           </Row>

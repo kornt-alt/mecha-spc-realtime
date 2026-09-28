@@ -189,6 +189,9 @@ const Dashboard = () => {
     return mc ? mc.code : null;
   }, [machines]);
 
+  // ลูกค้าของ item — สี Cp/Cpk บนกราฟเทียบกับเกณฑ์ของลูกค้ารายนี้ คนดูจอต้องรู้ว่าเกณฑ์ของใคร
+  const customerName = models.find((m) => String(m.id) === String(modelId))?.customer_name ?? null;
+
   const outOfControl = charts.filter((c) => (c.violations?.length ?? 0) > 0);
 
   return (
@@ -202,6 +205,7 @@ const Dashboard = () => {
               ? ` · ต้องดูก่อน ${outOfControl.length} จุด`
               : ' · ทุกจุด in control'}
             {` · ${machineId ? machineName : 'รวมทุกเครื่อง'}`}
+            {customerName && ` · ลูกค้า ${customerName}`}
           </div>
         )}
       </div>
@@ -295,7 +299,7 @@ const Dashboard = () => {
       <Row>
         {charts.map((c) => (
           <Col xl={6} key={c.checkpoint.id}>
-            <ControlChart chart={c} />
+            <ControlChart chart={c} machineId={machineId} />
           </Col>
         ))}
       </Row>

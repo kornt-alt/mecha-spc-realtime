@@ -7,7 +7,9 @@ import { Navbar, Nav, Container } from 'react-bootstrap';
 import InspectionSheet from './components/InspectionSheet';
 import Dashboard from './components/Dashboard';
 import ReportPage from './components/ReportPage';
+import ScSheet from './components/ScSheet';
 import MasterSetup from './components/MasterSetup';
+import RequireLogin from './components/RequireLogin';
 import { APP_BASE } from './utils/config';
 import { readStation } from './utils/station';
 import { modelHref } from './utils/useModelParam';
@@ -32,6 +34,7 @@ const MainNav = () => {
     <Nav className="me-auto">
       <Nav.Link as={NavLink} to="/" end>ใบตรวจ</Nav.Link>
       <Nav.Link as={NavLink} to={modelHref('/dashboard', modelId)}>Dashboard</Nav.Link>
+      <Nav.Link as={NavLink} to={modelHref('/sc', modelId)}>SC Chart</Nav.Link>
       <Nav.Link as={NavLink} to={modelHref('/report', modelId)}>รายงาน</Nav.Link>
       <Nav.Link as={NavLink} to="/master">ตั้งค่า Master</Nav.Link>
     </Nav>
@@ -53,8 +56,10 @@ const App = () => (
     <Routes>
       <Route path="/" element={<InspectionSheet />} />
       <Route path="/dashboard" element={<Dashboard />} />
+      <Route path="/sc" element={<ScSheet />} />
       <Route path="/report" element={<ReportPage />} />
-      <Route path="/master" element={<MasterSetup />} />
+      {/* หน้าเดียวที่ต้อง login — กั้นที่ route ไม่ใช่ใน MasterSetup (ดู RequireLogin.js) */}
+      <Route path="/master" element={<RequireLogin><MasterSetup /></RequireLogin>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   </Router>

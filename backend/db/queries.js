@@ -5,6 +5,7 @@
 'use strict';
 
 const { query } = require('./pool');
+const { resolveTargets } = require('../services/capabilityTarget');
 
 // สร้าง WHERE จากตัวกรองที่ "ส่งมาจริง" เท่านั้น — ค่าว่างคือไม่กรอง ไม่ใช่กรองด้วยค่าว่าง
 //
@@ -136,7 +137,53 @@ const fetchModelBaselines = async (modelId) => {
   return byCheckpoint;
 };
 
+// ── ความถี่ต่อจุดตรวจ — จุดไหน "ถึงรอบ" ต้องกรอกในใบนี้ ──────────────────────
+//
+// จุดที่ "ทำแล้วรอบนี้" = มีผลในใบตรวจที่ยังไม่ถูกยกเลิก ของ item + เครื่องเดียวกัน ภายในรอบปัจจุบัน
+//   frequency 'shift' → กะเดียวกัน ภายใน 12 ชั่วโมงที่ผ่านมา (กะยาวสุด 12 ชม. — กันกะ M ของเมื่อวานนับเป็นวันนี้)
+//   frequency 'day'   → วันเดียวกัน (DATE(inspected_at) = CURDATE())
+// จุดที่ไม่อยู่ในชุดนี้ = ถึงรอบ ต้องกรอก · จุดที่อยู่ในชุดนี้ = กรอกหรือไม่กรอกก็ได้
+//
+// ⚠️ กะดึกข้ามเที่ยงคืน → จุด 'day' กลับมาถึงรอบอีกครั้งหลัง 00:00 ในกะเดียวกัน
+//    ผลคือวัดเกินหนึ่งรอบ ไม่ใช่ขาด — ยอมรับไว้ก่อน (ไม่มีข้อมูลเวลาเริ่ม/จบของแต่ละกะในระบบ)
+// ⚠️ ใบที่ยกเลิกไม่นับ — ยกเลิกใบแรกของกะแล้วจุดพวกนั้นต้องกลับมาถึงรอบ
+const fetchDoneCheckpointIds = async ({ modelId, machineId, shift }) => {
+  const [rows] = await query(
+    `SELECT DISTINCT r.checkpoint_id
+       FROM inspection_results r
+       JOIN inspections i ON i.id = r.inspection_id
+       JOIN checkpoints c ON c.id = r.checkpoint_id
+      WHERE i.model_id = ? AND i.machine_id = ? AND i.voided_at IS NULL
+        AND (
+          (c.frequency = 'shift' AND i.shift = ? AND i.inspected_at >= NOW() - INTERVAL 12 HOUR)
+          OR (c.frequency = 'day' AND DATE(i.inspected_at) = CURDATE())
+        )`,
+    [Number(modelId), Number(machineId), shift]
+  );
+  return new Set(rows.map((r) => r.checkpoint_id));
+};
+
+// ── เกณฑ์ Cp/Cpk ของ item (ลูกค้า + override) ─────────────────────────────
+//
+// คืนผลที่เลือกแล้ว (resolveTargets) ไม่ใช่แถวดิบ — ลำดับ fallback ต้องมีที่เดียว
+// item ที่หาไม่เจอได้ค่าระบบ (ผลเดียวกับ item ที่ไม่ผูกลูกค้า) ไม่ throw
+// เพราะเกณฑ์เป็นแค่การแสดงผล ไม่ควรทำให้กราฟเปิดไม่ขึ้น
+const SELECT_TARGETS = `
+  SELECT m.id AS model_id, m.customer_id, m.min_cp, m.min_cpk, m.min_cp_ctf, m.min_cpk_ctf,
+         c.name AS customer_name,
+         c.min_cp AS cust_min_cp, c.min_cpk AS cust_min_cpk,
+         c.min_cp_ctf AS cust_min_cp_ctf, c.min_cpk_ctf AS cust_min_cpk_ctf
+    FROM models m
+    LEFT JOIN customers c ON c.id = m.customer_id
+`;
+
+const fetchModelTargets = async (modelId) => {
+  const [rows] = await query(`${SELECT_TARGETS} WHERE m.id = ?`, [Number(modelId)]);
+  return resolveTargets(rows[0] ?? {});
+};
+
 module.exports = {
+  fetchModelTargets,
   buildInspectionFilter,
   fetchCheckpointRows,
   fetchModelRows,
@@ -144,4 +191,5 @@ module.exports = {
   fetchModelCheckpoints,
   fetchCheckpointBaselines,
   fetchModelBaselines,
+  fetchDoneCheckpointIds,
 };

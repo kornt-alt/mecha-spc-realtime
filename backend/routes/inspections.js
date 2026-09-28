@@ -3,9 +3,10 @@
 
 const express = require('express');
 const { query, execute, withTransaction } = require('../db/pool');
-const { fetchModelCheckpoints } = require('../db/queries');
+const { fetchModelCheckpoints, fetchDoneCheckpointIds } = require('../db/queries');
 const { evaluateCheckpoint, summarize, validateSubmission, isShift } = require('../services/judgment');
 const { AppError, wrap } = require('../middleware/errorHandler');
+const { requireLogin } = require('../middleware/requireLogin');
 
 const router = express.Router();
 
@@ -69,20 +70,27 @@ router.post('/', wrap(async (req, res) => {
     submittedById.set(cp.id, item);
   }
 
-  // ทุกจุดที่ active ต้องมีผล — ใบตรวจที่กรอกไม่ครบใช้เป็นหลักฐานไม่ได้
-  const missing = checkpoints.filter((c) => !submittedById.has(c.id));
+  // ทุกจุดที่ "ถึงรอบ" ต้องมีผล — จุดที่ทำไปแล้วในรอบนี้ (ต่อกะ/ต่อวัน ตาม checkpoints.frequency)
+  // เว้นได้ ดู fetchDoneCheckpointIds · ใบตรวจจึงมีผลแค่บางจุดได้ แต่จุดที่ถึงรอบห้ามขาด
+  //
+  // ⚠️ เช็คนอก transaction โดยตั้งใจ — ชุด "ทำแล้ว" โตขึ้นได้อย่างเดียวระหว่างนี้ (ยกเว้นมีคนยกเลิกใบ
+  //    ในเสี้ยววินาทีเดียวกัน) สองคนบันทึกพร้อมกันแล้วต่างถูกบังคับกรอกจุดเดียวกัน = วัดเกิน ไม่ใช่ขาด
+  const done = await fetchDoneCheckpointIds({ modelId: b.model_id, machineId: b.machine_id, shift });
+  const missing = checkpoints.filter((c) => !done.has(c.id) && !submittedById.has(c.id));
   if (missing.length > 0) {
-    throw new AppError(`ยังไม่ได้กรอก: ${missing.map((c) => c.name).join(', ')}`, 400);
+    throw new AppError(`ยังไม่ได้กรอก (ถึงรอบตรวจแล้ว): ${missing.map((c) => c.name).join(', ')}`, 400);
   }
 
+  // จุดที่ส่งมาต้องครบทุกชิ้น — ส่งมาครึ่งเดียวใช้เป็นหลักฐานไม่ได้ ไม่ว่าจะถึงรอบหรือไม่
   // ตรวจความถูกต้องให้ครบก่อน แล้วค่อยเปิด transaction — จะได้ไม่ถือ connection ไว้เปล่า ๆ
-  for (const cp of checkpoints) {
+  const included = checkpoints.filter((c) => submittedById.has(c.id));
+  for (const cp of included) {
     const err = validateSubmission(cp, submittedById.get(cp.id));
     if (err) throw new AppError(err, 400);
   }
 
   // server เป็นคนตัดสิน OK/NG ไม่ใช่ค่าที่ client ส่งมา (ยกเว้น attribute ที่คนกดเอง)
-  const linesByCheckpoint = checkpoints.map((cp) => ({
+  const linesByCheckpoint = included.map((cp) => ({
     checkpoint: cp,
     lines: evaluateCheckpoint(cp, submittedById.get(cp.id)),
   }));
@@ -151,7 +159,8 @@ router.post('/', wrap(async (req, res) => {
     moNo,
     shift,
     overallResult: overall,
-    checkpointIds: checkpoints.map((c) => c.id),
+    // เฉพาะจุดที่อยู่ในใบนี้จริง — จุดที่เว้นไว้ (ยังไม่ถึงรอบ) ไม่มีจุดใหม่บนกราฟ
+    checkpointIds: included.map((c) => c.id),
     ngCheckpointIds: linesByCheckpoint
       .filter((x) => x.lines.some((l) => l.judgment === 'NG'))
       .map((x) => x.checkpoint.id),
@@ -264,7 +273,9 @@ router.put('/:id/void', wrap(async (req, res) => {
 // มีไว้เพื่อให้ลบ item ที่ติด FK RESTRICT ได้ โดยไม่ต้อง force delete ทับหลักฐานจริง
 // ลบได้เฉพาะใบที่ถูกประกาศไปแล้วว่าไม่นับเท่านั้น · inspection_results หายตาม CASCADE
 // รับ model_id ใน body ให้เข้ารูปเดียวกับ DELETE /master/delete
-router.delete('/voided', wrap(async (req, res) => {
+// ⚠️ ต้อง login — ลบหลักฐานออกจาก DB จริง กู้คืนไม่ได้ (กดจากหน้า Master)
+//    ต่างจาก PUT /:id/void ข้างบนที่ยังเปิดอยู่ เพราะยกเลิกคืนค่าได้ และมี voided_reason บังคับ
+router.delete('/voided', requireLogin, wrap(async (req, res) => {
   const { model_id: modelId } = req.body;
   if (!isIntLike(modelId)) throw new AppError('model_id ไม่ถูกต้อง', 400);
 
@@ -287,6 +298,24 @@ router.delete('/voided', wrap(async (req, res) => {
 }));
 
 // ── อ่าน ──────────────────────────────────────────────────────────────────
+
+// จุดไหนถึงรอบต้องกรอกในใบถัดไป — หน้าใบตรวจยิงทุกครั้งที่เปลี่ยน item / เครื่อง / กะ
+// ⚠️ เป็นแค่ตัวช่วยของหน้าจอ ตัวบังคับจริงคือ POST / ที่คำนวณชุดเดียวกันซ้ำตอนบันทึก
+// ⚠️ ต้องอยู่ก่อน GET /:id ไม่งั้น 'due' ถูกจับเป็น id
+router.get('/due', wrap(async (req, res) => {
+  const { model_id: modelId, machine_id: machineId, shift } = req.query;
+  if (!isIntLike(modelId) || !isIntLike(machineId)) throw new AppError('ต้องระบุ model_id และ machine_id', 400);
+  if (!isShift(shift)) throw new AppError('ต้องระบุกะ', 400);
+
+  const [checkpoints, done] = await Promise.all([
+    fetchModelCheckpoints(modelId),
+    fetchDoneCheckpointIds({ modelId, machineId, shift }),
+  ]);
+  res.json({
+    due: checkpoints.filter((c) => !done.has(c.id)).map((c) => c.id),
+    done: checkpoints.filter((c) => done.has(c.id)).map((c) => c.id),
+  });
+}));
 
 // รายการใบตรวจล่าสุด — ตาราง log ใต้ใบตรวจใช้เส้นนี้
 // ⚠️ เส้นนี้ **โชว์ใบที่ยกเลิกด้วย** โดยตั้งใจ — ไม่งั้นกดคืนค่าไม่ได้ และคนจะนึกว่าลบจริงไปแล้ว

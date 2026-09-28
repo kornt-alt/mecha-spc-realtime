@@ -36,7 +36,11 @@ const AppDialog = ({ dialog, onHide }) => {
     if (!canConfirm) return;
     const action = dialog?.onConfirm;
     const payload = isForm
-      ? Object.fromEntries(fields.map((f) => [f.name, String(form[f.name] ?? '').trim()]))
+      // ⚠️ ช่อง password ไม่ trim — ช่อง login ไม่ trim รหัสผ่าน ถ้าตรงนี้ตัดช่องว่างหัวท้ายทิ้ง
+      //    คนที่ตั้งรหัสลงท้ายด้วยเว้นวรรคจะ login ไม่ได้อีกเลย
+      ? Object.fromEntries(fields.map((f) => [
+        f.name, f.type === 'password' ? String(form[f.name] ?? '') : String(form[f.name] ?? '').trim(),
+      ]))
       : trimmed;
     onHide();
     action?.(payload);

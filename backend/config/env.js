@@ -32,6 +32,19 @@ const env = {
   // ⚠️ ต้องตรงกับ APP_BASE ใน frontend/src/utils/config.js และ homepage ใน frontend/package.json
   // ย้ายมาเป็น env เพื่อให้เปลี่ยนที่เดียวได้ แต่ค่า default คือของจริงที่ production ใช้อยู่
   APP_BASE: (process.env.APP_BASE || '/Mecha-Spc-Realtime').replace(/\/+$/, ''),
+
+  // ลายเซ็น token ของการ login หน้า Master (services/auth.js)
+  // ⚠️ ไม่อยู่ใน REQUIRED โดยตั้งใจ — deploy แล้วลืมตั้ง server ต้องยังขึ้น ใบตรวจหน้าไลน์ห้ามล่ม
+  //    เพราะ login ของหน้า Master · ไม่ตั้ง = สุ่มใหม่ทุกครั้งที่ start (ข้างล่าง) ผลคือ restart แล้ว
+  //    ทุกคนต้อง login ใหม่ ซึ่งยอมรับได้ แต่ควรตั้งค่าจริงไว้
+  AUTH_SECRET: process.env.AUTH_SECRET || '',
+  // อายุ token (ชั่วโมง) — 12 = หนึ่งกะ
+  AUTH_TOKEN_HOURS: Number(process.env.AUTH_TOKEN_HOURS) > 0 ? Number(process.env.AUTH_TOKEN_HOURS) : 12,
 };
+
+if (!env.AUTH_SECRET) {
+  env.AUTH_SECRET = require('crypto').randomBytes(32).toString('hex');
+  console.warn('[env] ไม่ได้ตั้ง AUTH_SECRET ใน backend/.env — สุ่มให้ชั่วคราว restart แล้วทุกคนต้อง login หน้า Master ใหม่');
+}
 
 module.exports = env;

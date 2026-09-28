@@ -1,6 +1,6 @@
 // frontend/src/components/SpcReference.js — แผงอ้างอิง "สูตรกับกฎ" ของ control chart
 //
-// คนหน้าไลน์อ่านกราฟทุกกะแต่ไม่มีที่ให้เปิดดูว่า UCL มายังไง และกฎข้อ 5 แปลว่าอะไร
+// คนหน้าไลน์อ่านกราฟทุกกะแต่ไม่มีที่ให้เปิดดูว่า UCL มายังไง และกฎแต่ละข้อแปลว่าอะไร
 // เดิมต้องไปถามหัวหน้าหรือเปิดคู่มือเล่มที่ไม่มีใครรู้ว่าอยู่ไหน — ย้ายมาไว้บนจอเดียวกับกราฟ
 //
 // ⚠️ แผงนี้เป็น "ข้อความอ้างอิง" ล้วน ไม่คำนวณอะไรทั้งนั้น และไม่รับข้อมูลจาก API เลย
@@ -16,7 +16,7 @@
 //    ค้างอยู่ใน DOM เมื่อไหร่ getByText() ของเทสจะเจอสองที่แล้ว throw
 import React, { useState } from 'react';
 import { Card, Button } from 'react-bootstrap';
-import { RULE_NUMBERS, RULE_TEXT, RULE_DETAIL } from '../utils/spcRules';
+import { OCS_RULES } from '../utils/spcRules';
 
 // แถวสูตรหนึ่งบรรทัด — ชื่อทางซ้าย สมการทางขวา
 const F = ({ name, eq, note }) => (
@@ -108,11 +108,11 @@ const SpcReference = () => {
             </section>
           </div>
 
-          <h3 className="spc-ref__h mt-3">กฎ Nelson 8 ข้อ — จับว่ากระบวนการเปลี่ยน</h3>
+          <h3 className="spc-ref__h mt-3">กฎ OCS 6 ข้อ (ตามฟอร์ม SP-QC-214C) — จับว่ากระบวนการเปลี่ยน</h3>
           <p className="spc-ref__p">
-            σ ในกฎพวกนี้วัดจากระยะเส้นกลางถึง UCL หารสาม ไม่ใช่ส่วนเบี่ยงเบนมาตรฐานของข้อมูล ·
+            ใช้กับทั้งกราฟบน (X̄ / I) และกราฟล่าง (R / MR) แยกกัน ·
             ผิดกฎ = กระบวนการกำลังเปลี่ยน <b>ของยังไม่เสีย</b> (จึงเป็นสีเหลือง ไม่ใช่แดง)
-            ต้องไปดูที่เครื่องก่อนที่จะมีของหลุดสเปกจริง
+            ต้องไปดูที่เครื่องก่อนที่จะมีของหลุดสเปกจริง แล้วบันทึกสาเหตุใน Event Log ที่หน้า SC Chart
           </p>
           <table className="spc-ref__rules">
             <thead>
@@ -123,14 +123,13 @@ const SpcReference = () => {
               </tr>
             </thead>
             <tbody>
-              {RULE_NUMBERS.map((n) => (
-                <tr key={n}>
-                  <td className="num">
-                    <b>{n}</b>
-                    <div className="spc-ref__ruleshort">{RULE_TEXT[n]}</div>
+              {OCS_RULES.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    <b>{r.label}</b>
                   </td>
-                  <td>{RULE_DETAIL[n].when}</td>
-                  <td className="text-muted">{RULE_DETAIL[n].means}</td>
+                  <td>{r.when}</td>
+                  <td className="text-muted">{r.means}</td>
                 </tr>
               ))}
             </tbody>

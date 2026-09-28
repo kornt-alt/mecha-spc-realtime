@@ -6,6 +6,7 @@ const { query, execute, withTransaction } = require('../db/pool');
 const { fetchModelCheckpoints, fetchModelBaselines } = require('../db/queries');
 const { baselineOf } = require('../services/baseline');
 const { AppError, wrap } = require('../middleware/errorHandler');
+const { requireLogin, requireLoginUnless } = require('../middleware/requireLogin');
 
 const router = express.Router();
 
@@ -15,10 +16,17 @@ const ALLOWED_COLUMNS = {
   divisions:   ['name', 'ipbass_dept'],
   machines:    ['division_id', 'code', 'name', 'is_active'],
   inspectors:  ['emp_code', 'name', 'division_id', 'is_active'],
-  models:      ['division_id', 'item_no', 'item_name', 'drawing_no', 'drawing_rev', 'is_active'],
+  customers:   ['name', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf', 'is_active'],
+  models:      [
+    'division_id', 'item_no', 'item_name', 'drawing_no', 'drawing_rev', 'is_active',
+    // min_* NULL = ใช้เกณฑ์ของลูกค้า (ลำดับเลือกอยู่ที่ services/capabilityTarget.js)
+    'customer_id', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf',
+  ],
   checkpoints: [
     'model_id', 'seq_no', 'name', 'char_type', 'unit', 'gauge',
     'usl', 'lsl', 'target', 'sample_size', 'is_critical', 'is_active',
+    // frequency = 'shift' | 'day' (จุดไหนต้องกรอกในใบไหน ดู fetchDoneCheckpointIds)
+    'frequency', 'characteristic',
   ],
 };
 const allowedTables = Object.keys(ALLOWED_COLUMNS);
@@ -37,6 +45,16 @@ const pickColumns = (table, data) => {
 
 const notifyMasterChanged = (req) => req.app.get('io')?.emit('master_updated');
 
+// ร่องรอยว่าใครแก้ master — ยังไม่มีตาราง audit ลง console ไว้ก่อน (pm2/nssm เก็บ log ให้)
+// ผู้ตรวจที่เพิ่มจากหน้าใบตรวจไม่มี req.user (เส้นเดียวที่ไม่ต้อง login)
+const logWrite = (req, action, table, id) =>
+  console.log(`[master] ${req.user?.username ?? '(หน้าใบตรวจ ไม่ได้ login)'} ${action} ${table} id=${id}`);
+
+// ⚠️ ทุกเส้นที่เขียนในไฟล์นี้ต้อง login ยกเว้นเพิ่มผู้ตรวจ — ปุ่ม "+ เพิ่มผู้ตรวจใหม่" ที่หน้าใบตรวจ
+//    (StationBar → InspectionSheet.addInspector) ต้องใช้ได้โดยไม่ login เพราะหน้าไลน์ไม่มีใคร login
+//    ส่วนแก้/ลบผู้ตรวจยังต้อง login เหมือน master อื่น
+const isAddInspector = (req) => req.body?.table === 'inspectors';
+
 // ── อ่าน ──────────────────────────────────────────────────────────────────
 
 // ทุกอย่างที่หัวใบตรวจต้องใช้ในคำขอเดียว — หน้า InspectionSheet เปิดมาแล้วยิงทีเดียวจบ
@@ -44,14 +62,15 @@ router.get('/lookups', wrap(async (req, res) => {
   const activeOnly = req.query.all !== '1';
   const flag = activeOnly ? ' WHERE is_active = 1' : '';
 
-  const [[divisions], [machines], [inspectors]] = await Promise.all([
+  const [[divisions], [machines], [inspectors], [customers]] = await Promise.all([
     // ipbass_dept ต้องมาด้วย — ฝั่ง client ใช้เลือก dept ตอนยิง MOPLAN
     query('SELECT id, name, ipbass_dept FROM divisions ORDER BY name'),
     query(`SELECT id, division_id, code, name, is_active FROM machines${flag} ORDER BY code`),
     query(`SELECT id, emp_code, name, division_id, is_active FROM inspectors${flag} ORDER BY name`),
+    query(`SELECT id, name, min_cp, min_cpk, min_cp_ctf, min_cpk_ctf, is_active FROM customers${flag} ORDER BY name`),
   ]);
 
-  res.json({ divisions, machines, inspectors });
+  res.json({ divisions, machines, inspectors, customers });
 }));
 
 router.get('/models', wrap(async (req, res) => {
@@ -67,13 +86,14 @@ router.get('/models', wrap(async (req, res) => {
   if (activeOnly) where.push('m.is_active = 1');
 
   const [rows] = await query(
-    `SELECT m.*, d.name AS division_name,
+    `SELECT m.*, d.name AS division_name, cu.name AS customer_name,
             (SELECT COUNT(*) FROM checkpoints c WHERE c.model_id = m.id AND c.is_active = 1) AS checkpoint_count,
             -- ใบตรวจที่ยกเลิกไปแล้วของ item นี้ — หน้า Master ใช้โชว์ปุ่ม "ล้างใบที่ยกเลิกแล้ว"
             (SELECT COUNT(*) FROM inspections i
               WHERE i.model_id = m.id AND i.voided_at IS NOT NULL) AS voided_count
        FROM models m
        JOIN divisions d ON d.id = m.division_id
+       LEFT JOIN customers cu ON cu.id = m.customer_id
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY m.item_no`,
     params
@@ -86,8 +106,10 @@ router.get('/models/:id', wrap(async (req, res) => {
   if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
 
   const [[model]] = await query(
-    `SELECT m.*, d.name AS division_name
-       FROM models m JOIN divisions d ON d.id = m.division_id
+    `SELECT m.*, d.name AS division_name, cu.name AS customer_name
+       FROM models m
+       JOIN divisions d ON d.id = m.division_id
+       LEFT JOIN customers cu ON cu.id = m.customer_id
       WHERE m.id = ?`,
     [Number(req.params.id)]
   );
@@ -111,7 +133,7 @@ router.get('/models/:id', wrap(async (req, res) => {
 
 // ── เขียน (generic CRUD) ──────────────────────────────────────────────────
 
-router.post('/add', wrap(async (req, res) => {
+router.post('/add', requireLoginUnless(isAddInspector), wrap(async (req, res) => {
   const { table, data } = req.body;
   if (!allowedTables.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
 
@@ -122,11 +144,12 @@ router.post('/add', wrap(async (req, res) => {
   const sql = `INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`;
   const [result] = await execute(sql, keys.map((k) => data[k]));
 
+  logWrite(req, 'add', table, result.insertId);
   notifyMasterChanged(req);
   res.json({ success: true, id: result.insertId });
 }));
 
-router.put('/update', wrap(async (req, res) => {
+router.put('/update', requireLogin, wrap(async (req, res) => {
   const { table, id, data } = req.body;
   if (!allowedTables.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
   if (!isIntLike(id)) throw new AppError('id ไม่ถูกต้อง', 400);
@@ -142,11 +165,12 @@ router.put('/update', wrap(async (req, res) => {
   const affectsBaseline =
     table === 'checkpoints' && keys.some((k) => k === 'sample_size');
 
+  logWrite(req, 'update', table, id);
   notifyMasterChanged(req);
   res.json({ success: true, baselineMayBeStale: affectsBaseline });
 }));
 
-router.delete('/delete', wrap(async (req, res) => {
+router.delete('/delete', requireLogin, wrap(async (req, res) => {
   const { table, id } = req.body;
   if (!allowedTables.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
   if (!isIntLike(id)) throw new AppError('id ไม่ถูกต้อง', 400);
@@ -190,6 +214,7 @@ router.delete('/delete', wrap(async (req, res) => {
   }
 
   await execute(`DELETE FROM ${table} WHERE id = ?`, [Number(id)]);
+  logWrite(req, 'delete', table, id);
 
   notifyMasterChanged(req);
   res.json({ success: true });
@@ -201,7 +226,7 @@ router.delete('/delete', wrap(async (req, res) => {
 //
 // ⚠️ ต้องทำใน transaction และพักค่าไว้ที่เลขชั่วคราวก่อน เพราะมี UNIQUE(model_id, seq_no)
 //    ถ้า UPDATE ตรง ๆ ทีละแถวจะชนกันเองกลางคัน
-router.put('/checkpoints/:id/move', wrap(async (req, res) => {
+router.put('/checkpoints/:id/move', requireLogin, wrap(async (req, res) => {
   const { id } = req.params;
   const { direction } = req.body;
   if (!isIntLike(id)) throw new AppError('id ไม่ถูกต้อง', 400);

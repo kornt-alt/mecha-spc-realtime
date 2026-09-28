@@ -61,10 +61,13 @@ const API = `${env.APP_BASE}/api`;
 
 app.get(`${API}/health`, (req, res) => res.json({ ok: true, appBase: env.APP_BASE }));
 
+app.use(`${API}/auth`, require('./routes/auth'));
+app.use(`${API}/users`, require('./routes/users'));
 app.use(`${API}/master`, require('./routes/master'));
 app.use(`${API}/inspections`, require('./routes/inspections'));
 app.use(`${API}/charts`, require('./routes/charts'));
 app.use(`${API}/reports`, require('./routes/reports'));
+app.use(`${API}/events`, require('./routes/events'));
 
 // ต้องอยู่หลัง route ทั้งหมด — เส้นที่ไม่มีจริงใต้ /api ตอบ JSON ไม่ใช่ HTML
 app.use(API, notFoundApi);

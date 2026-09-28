@@ -132,7 +132,7 @@ const clearBaseline = async (checkpointId, machineId = AGGREGATE) => {
 //
 // ⚠️ ไม่มี fallback โดยตั้งใจ — เครื่องที่ยังไม่ได้ล็อก baseline ของตัวเอง ต้องได้เส้น
 //    provisional ที่คำนวณสดจากข้อมูลของเครื่องนั้น ไม่ใช่ยืมลิมิตของชุดรวมมาใช้
-//    ยืมเมื่อไหร่ เครื่องที่ค่ากลางเบี่ยงจากกลุ่มจะติดกฎ Nelson ข้อ 2 ค้างตลอดโดยไม่มีอะไร
+//    ยืมเมื่อไหร่ เครื่องที่ค่ากลางเบี่ยงจากกลุ่มจะติดกฎ OCS shift 7 จุด ค้างตลอดโดยไม่มีอะไร
 //    ผิดจริง แล้วคนจะเลิกเชื่อคำเตือนทั้งหมด (เส้น provisional อย่างน้อยก็บอกตัวเองว่ายังไม่ล็อก)
 const pickBaseline = (rows = [], machineId = AGGREGATE) => {
   const want = Number(machineId) || AGGREGATE;

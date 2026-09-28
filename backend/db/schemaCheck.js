@@ -17,10 +17,15 @@ const REQUIRED = {
   divisions: ['id', 'name', 'ipbass_dept'],
   machines: ['id', 'division_id', 'code', 'name', 'is_active'],
   inspectors: ['id', 'emp_code', 'name', 'is_active'],
-  models: ['id', 'division_id', 'item_no', 'item_name', 'is_active'],
+  users: ['id', 'username', 'password_hash', 'display_name', 'is_active', 'passkey_hash'],
+  customers: ['id', 'name', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf', 'is_active'],
+  models: [
+    'id', 'division_id', 'item_no', 'item_name', 'is_active',
+    'customer_id', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf',
+  ],
   checkpoints: [
     'id', 'model_id', 'seq_no', 'name', 'char_type',
-    'usl', 'lsl', 'target', 'sample_size', 'is_active',
+    'usl', 'lsl', 'target', 'sample_size', 'frequency', 'characteristic', 'is_active',
     // ⚠️ ไม่มี baseline_* ตรงนี้แล้ว ย้ายไปตาราง checkpoint_baselines (แยกรายเครื่อง)
     //    คอลัมน์เก่ายังค้างอยู่ใน DB จนกว่าจะรัน drop-legacy.sql แต่ไม่มีโค้ดไหนอ่านแล้ว
   ],
@@ -36,6 +41,10 @@ const REQUIRED = {
   inspection_results: [
     'id', 'inspection_id', 'checkpoint_id', 'piece_no',
     'value', 'judgment', 'usl_used', 'lsl_used', 'n_used',
+  ],
+  ocs_events: [
+    'id', 'checkpoint_id', 'inspection_id', 'chart', 'rules', 'man_pd', 'man_qc',
+    'machine_note', 'method', 'material', 'measurement', 'corrective_action', 'recorded_by',
   ],
 };
 
