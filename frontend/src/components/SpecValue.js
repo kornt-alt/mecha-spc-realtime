@@ -13,7 +13,7 @@ import React from 'react';
 
 // ทศนิยมกี่ตำแหน่ง — ดูจากค่าที่มีจริง ไม่ fix ไว้ เพราะ OD ใช้ 3-4 ตำแหน่ง
 // แต่ความยาวหรือความแข็งใช้ 1-2 ตำแหน่ง แสดง 36.1500 mm มันรกเปล่า ๆ
-const decimalsOf = (...values) => {
+export const decimalsOf = (...values) => {
   let max = 0;
   for (const v of values) {
     if (typeof v !== 'number' || !Number.isFinite(v)) continue;

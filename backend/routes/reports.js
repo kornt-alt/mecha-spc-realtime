@@ -139,6 +139,96 @@ router.get('/model/:modelId', wrap(async (req, res) => {
   });
 }));
 
+// GET /api/reports/model/:modelId/grid — ตารางแบบชีต Input ของ Excel
+//
+// จุดตรวจเป็นคอลัมน์ ชิ้นเป็นแถว ใบตรวจหนึ่งใบกาง n แถว (ชิ้นที่ 1..n) เรียงเก่า→ใหม่ลงล่าง
+// เหมือนแถว 17 ลงไปในชีต Input · ใช้ทั้งแท็บ "ตารางแบบ Input" ของหน้ารายงาน
+// และตารางประวัติใต้ใบตรวจ (`?limit=` = เอาแค่ N ใบล่าสุด)
+//
+// ⚠️ แถวรวมใบที่ยกเลิกด้วย (ขีดฆ่าบนจอ) แต่ Max/Avg/Min หัวตาราง **ไม่รวม** — หลักเดียวกับ
+//    GET /model/:id ที่แยกรายการใบตรวจออกจากตัวเลขสถิติ
+router.get('/model/:modelId/grid', wrap(async (req, res) => {
+  const { modelId } = req.params;
+  if (!isIntLike(modelId)) throw new AppError('model id ไม่ถูกต้อง', 400);
+  const limit = isIntLike(req.query.limit) ? Math.min(Math.max(Number(req.query.limit), 1), 1000) : 1000;
+
+  const filter = filterFrom(req.query);
+  const { where, params } = buildInspectionFilter(filter, { includeVoided: true });
+  const [checkpoints, [inspections]] = await Promise.all([
+    fetchModelCheckpoints(modelId, { activeOnly: req.query.all !== '1' }),
+    query(
+      `SELECT i.id, i.mo_no, i.lot_no, i.shift, i.subgroup_no, i.inspected_at, i.overall_result,
+              i.voided_at, mc.code AS machine_code, ins.name AS inspector_name
+         FROM inspections i
+         JOIN machines mc    ON mc.id  = i.machine_id
+         JOIN inspectors ins ON ins.id = i.inspector_id
+        WHERE i.model_id = ?${where.length ? ` AND ${where.join(' AND ')}` : ''}
+        ORDER BY i.inspected_at DESC, i.id DESC
+        LIMIT ?`,
+      [Number(modelId), ...params, limit]
+    ),
+  ]);
+  inspections.reverse();
+
+  const [results] = inspections.length
+    ? await query(
+      `SELECT inspection_id, checkpoint_id, piece_no, value, judgment
+         FROM inspection_results WHERE inspection_id IN (?)`,
+      [inspections.map((i) => i.id)]
+    )
+    : [[]];
+
+  const byInspection = new Map();
+  for (const r of results) {
+    if (!byInspection.has(r.inspection_id)) byInspection.set(r.inspection_id, []);
+    byInspection.get(r.inspection_id).push(r);
+  }
+
+  // สถิติหัวคอลัมน์ (แถว Max / Average / Min ของชีต Input) — เฉพาะใบที่ยังไม่ยกเลิก
+  const acc = new Map();
+  const rows = [];
+  for (const ins of inspections) {
+    const lines = byInspection.get(ins.id) ?? [];
+    const pieces = Math.max(1, ...lines.map((l) => l.piece_no));
+    for (let p = 1; p <= pieces; p += 1) {
+      const cells = {};
+      for (const l of lines) {
+        if (l.piece_no !== p) continue;
+        const value = l.value === null ? null : Number(l.value);
+        cells[l.checkpoint_id] = { value, judgment: l.judgment };
+        if (!ins.voided_at && value !== null) {
+          const a = acc.get(l.checkpoint_id) ?? { max: -Infinity, min: Infinity, sum: 0, count: 0 };
+          a.max = Math.max(a.max, value);
+          a.min = Math.min(a.min, value);
+          a.sum += value;
+          a.count += 1;
+          acc.set(l.checkpoint_id, a);
+        }
+      }
+      rows.push({
+        inspection_id: ins.id,
+        inspected_at: ins.inspected_at,
+        mo_no: ins.mo_no,
+        lot_no: ins.lot_no,
+        machine_code: ins.machine_code,
+        shift: ins.shift,
+        inspector_name: ins.inspector_name,
+        subgroup_no: ins.subgroup_no,
+        overall_result: ins.overall_result,
+        voided_at: ins.voided_at,
+        piece_no: p,
+        pieces,
+        cells,
+      });
+    }
+  }
+
+  const stats = {};
+  for (const [id, a] of acc) stats[id] = { max: a.max, min: a.min, avg: a.sum / a.count, count: a.count };
+
+  res.json({ checkpoints, rows, stats, truncated: inspections.length === limit });
+}));
+
 // GET /api/reports/model/:modelId/export — ดาวน์โหลดเป็น Excel
 //
 // สร้างไฟล์ฝั่ง server แล้วเขียนลง res ตรง ๆ (แพตเทิร์นเดียวกับที่ MECHA_TIME_IN ใช้)

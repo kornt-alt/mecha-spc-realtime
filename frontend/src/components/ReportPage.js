@@ -9,8 +9,9 @@ import { normalizeRows, normalizeChart } from '../utils/normalize';
 import { SHIFTS } from '../utils/config';
 import SearchSelect from './SearchSelect';
 import { Link } from 'react-router-dom';
-import { useModelParam, scHref } from '../utils/useModelParam';
+import { useModelParam, useUrlParam, scHref } from '../utils/useModelParam';
 import ControlChart from './ControlChart';
+import InputGrid from './InputGrid';
 import InspectionList from './InspectionList';
 import SpecValue from './SpecValue';
 import { capTone } from '../utils/capability';
@@ -53,6 +54,9 @@ const ReportPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [exporting, setExporting] = useState(false);
+  // มุมมองผลลัพธ์อยู่ใน URL (?view=input) — ลิงก์/รีเฟรชแล้วกลับมาที่เดิม ตามหลักเดียวกับ ?model=
+  const [view, setView] = useUrlParam('view');
+  const [gridKey, setGridKey] = useState(0);
 
   useEffect(() => {
     Promise.all([apiCall('/master/models?all=1'), apiCall('/master/lookups?all=1')])
@@ -218,6 +222,29 @@ const ReportPage = () => {
       )}
 
       {report && !loading && (
+        <div className="btn-group mb-3" role="group" aria-label="มุมมอง">
+          <Button size="sm" variant={view === 'input' ? 'outline-primary' : 'primary'}
+            aria-pressed={view !== 'input'} onClick={() => setView('')}>
+            สรุป + กราฟ
+          </Button>
+          <Button size="sm" variant={view === 'input' ? 'primary' : 'outline-primary'}
+            aria-pressed={view === 'input'} onClick={() => setView('input')}>
+            ตารางแบบ Input
+          </Button>
+        </div>
+      )}
+
+      {/* ชีต Input ของ Excel — จุดตรวจเป็นคอลัมน์ ชิ้นเป็นแถว ตัวกรองชุดเดียวกับข้างบน */}
+      {report && !loading && view === 'input' && (
+        <InputGrid
+          modelId={modelId}
+          query={toQuery(applied)}
+          reloadKey={gridKey}
+          emptyText="ไม่มีใบตรวจที่ตรงกับตัวกรองนี้"
+        />
+      )}
+
+      {report && !loading && view !== 'input' && (
         <>
           {/* ตัวเลขสรุป — เงียบเมื่อปกติ มีสีเมื่อผิด
               แดง = หลุดสเปก (ของเสีย) · เหลือง = หลุดคอนโทรล (process เปลี่ยน ของยังไม่เสีย) */}
@@ -346,7 +373,7 @@ const ReportPage = () => {
             <Card.Body>
               <InspectionList
                 rows={report.inspections}
-                onChanged={() => load(modelId, applied)}
+                onChanged={() => { load(modelId, applied); setGridKey((k) => k + 1); }}
                 emptyText="ไม่มีใบตรวจที่ตรงกับตัวกรองนี้"
               />
             </Card.Body>

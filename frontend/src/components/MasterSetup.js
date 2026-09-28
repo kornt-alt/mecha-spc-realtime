@@ -39,13 +39,23 @@ const SPEC_MODES = [
 
 const EMPTY_TOL = { nominal: '', tolUpper: '', tolLower: '' };
 
+// ความถี่ตรวจต่อจุด (checkpoints.frequency) — หัวชีต Input ของ Excel "2 pcs / shift", "1 pcs / day"
+// จุดที่ทำแล้วในรอบนั้นไม่บังคับกรอกในใบถัดไป (ดู fetchDoneCheckpointIds ฝั่ง server)
+const FREQUENCIES = [
+  { value: 'shift', label: 'ทุกกะ' },
+  { value: 'day', label: 'ทุกวัน' },
+];
+const freqShort = (f) => (f === 'day' ? 'วัน' : 'กะ');
+
 const blankCheckpoint = (memory = null) => ({
   name: '',
   char_type: 'variable',
   unit: memory?.unit ?? '',
   gauge: memory?.gauge ?? '',
+  characteristic: '',
   usl: '', lsl: '', target: '',
   sample_size: memory?.sampleSize ?? 1,
+  frequency: 'shift',
   is_critical: false,
   is_active: true,
 });
@@ -571,6 +581,10 @@ const ModelsTab = ({
     () => mergeOptions(gaugeMemory, checkpoints.map((c) => c.gauge)),
     [gaugeMemory, checkpoints]
   );
+  const charOptions = useMemo(
+    () => mergeOptions([], checkpoints.map((c) => c.characteristic)),
+    [checkpoints]
+  );
 
   // ตรวจสดขณะพิมพ์ ไม่ใช่รอกดบันทึก — สเปกกลับหัวที่หลุดไปแล้วแก้ย้อนหลังไม่ได้
   // เพราะ judgment ถูก snapshot ลงใบตรวจไปแล้ว
@@ -620,6 +634,8 @@ const ModelsTab = ({
       // จุด attribute ไม่มีค่าตัวเลข หน่วยจึงไม่มีความหมาย ต้องล้างเหมือน usl/lsl/target
       unit: isAttr ? null : (cpForm.unit || null),
       gauge: cpForm.gauge || null,
+      characteristic: cpForm.characteristic?.trim() || null,
+      frequency: cpForm.frequency === 'day' ? 'day' : 'shift',
       // จุด attribute ไม่มีค่าตัวเลข ส่ง null ทั้งหมดและบังคับ n = 1
       usl: isAttr ? null : numOrNull(cpForm.usl),
       lsl: isAttr ? null : numOrNull(cpForm.lsl),
@@ -646,8 +662,10 @@ const ModelsTab = ({
     // ⚠️ toNum คืน null ได้ ต้อง ?? '' ก่อนใส่ input
     setCpForm({
       name: cp.name ?? '', char_type: cp.char_type, unit: cp.unit ?? '', gauge: cp.gauge ?? '',
+      characteristic: cp.characteristic ?? '',
       usl: cp.usl ?? '', lsl: cp.lsl ?? '', target: cp.target ?? '',
-      sample_size: cp.sample_size ?? 1, is_critical: cp.is_critical, is_active: cp.is_active,
+      sample_size: cp.sample_size ?? 1, frequency: cp.frequency === 'day' ? 'day' : 'shift',
+      is_critical: cp.is_critical, is_active: cp.is_active,
     });
   };
 
@@ -832,11 +850,18 @@ const ModelsTab = ({
           <Card.Body>
             <Form onSubmit={submitCp}>
               <Row className="g-2 mb-2 align-items-end">
-                <Form.Group as={Col} md={4} controlId="cp-name">
+                <Form.Group as={Col} md={3} controlId="cp-name">
                   <Form.Label className="small mb-1">ชื่อจุดตรวจ</Form.Label>
-                  <Form.Control placeholder="เช่น OD ด้านหน้า" {...cpField('name')} disabled={!selectedModel} />
+                  <Form.Control placeholder="เช่น Dimension 3.1" {...cpField('name')} disabled={!selectedModel} />
                 </Form.Group>
-                <Form.Group as={Col} md={3} controlId="cp-char-type">
+                {/* Characteristic = แถว 11 ของชีต Input (Slot / OD / Rz) แยกจากชื่อจุด
+                    free text + <datalist> ตามหลักเดียวกับหน่วย/เครื่องมือวัด */}
+                <Form.Group as={Col} md={2} controlId="cp-characteristic">
+                  <Form.Label className="small mb-1">Characteristic</Form.Label>
+                  <Form.Control list="cp-char-options" placeholder="เช่น OD"
+                    {...cpField('characteristic')} disabled={!selectedModel} />
+                </Form.Group>
+                <Form.Group as={Col} md={2} controlId="cp-char-type">
                   <Form.Label className="small mb-1">ชนิด</Form.Label>
                   <Form.Select {...cpField('char_type')} disabled={!selectedModel}>
                     {CHAR_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
@@ -862,6 +887,9 @@ const ModelsTab = ({
               </datalist>
               <datalist id="cp-gauge-options">
                 {gaugeOptions.map((g) => <option key={g} value={g} />)}
+              </datalist>
+              <datalist id="cp-char-options">
+                {charOptions.map((c) => <option key={c} value={c} />)}
               </datalist>
 
               {/* แบบส่วนใหญ่เขียนเป็นค่ากลาง + พิกัด (1.23 +0.5 -0.6) ไม่ใช่เลขสัมบูรณ์
@@ -931,6 +959,12 @@ const ModelsTab = ({
                   <Form.Control type="number" min="1" max="10"
                     {...cpField('sample_size')} disabled={!selectedModel || isAttr} />
                 </Form.Group>
+                <Form.Group as={Col} md={2} controlId="cp-frequency">
+                  <Form.Label className="small mb-1">ความถี่</Form.Label>
+                  <Form.Select {...cpField('frequency')} disabled={!selectedModel}>
+                    {FREQUENCIES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                  </Form.Select>
+                </Form.Group>
                 <Col md="auto" className="d-flex align-items-center gap-3">
                   <Form.Check label="จุดวิกฤต" checked={cpForm.is_critical} disabled={!selectedModel}
                     onChange={(e) => setCpForm((f) => ({ ...f, is_critical: e.target.checked }))} />
@@ -973,7 +1007,7 @@ const ModelsTab = ({
               <thead className="table-dark">
                 <tr>
                   <th style={{ width: 70 }}>ลำดับ</th><th>จุดตรวจ</th><th>ชนิด</th>
-                  <th>LSL ~ USL</th><th>n</th><th>Control limit</th><th style={{ width: 200 }}>จัดการ</th>
+                  <th>LSL ~ USL</th><th>n / ความถี่</th><th>Control limit</th><th style={{ width: 200 }}>จัดการ</th>
                 </tr>
               </thead>
               <tbody>
@@ -1001,12 +1035,15 @@ const ModelsTab = ({
                         {cp.is_critical && (
                           <span className="badge bg-light text-dark ms-1" title="จุดวิกฤต — CTF">CTF</span>
                         )}
+                        {cp.characteristic && <div className="small text-muted">{cp.characteristic}</div>}
                       </td>
                       <td className="small">{cp.char_type === 'attribute' ? 'ตรวจด้วยตา' : 'วัดค่า'}</td>
                       <td className="small">
                         {cp.char_type === 'attribute' ? '—' : `${cp.lsl ?? '-'} ~ ${cp.usl ?? '-'}`}
                       </td>
-                      <td>{cp.char_type === 'attribute' ? '—' : cp.sample_size}</td>
+                      <td className="num text-nowrap">
+                        {cp.char_type === 'attribute' ? 1 : cp.sample_size} / {freqShort(cp.frequency)}
+                      </td>
                       <td className="small">
                         {cp.char_type === 'attribute' ? '—'
                           /* ⚠️ ของเดิมสลับกันอยู่: ล็อกแล้ว = เขียวเด่น · provisional = เทาจาง

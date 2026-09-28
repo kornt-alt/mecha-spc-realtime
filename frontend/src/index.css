@@ -931,3 +931,174 @@ code {
     print-color-adjust: exact;
   }
 }
+
+/* ── ตารางแบบชีต Input (InputGrid + ใบตรวจแนวนอน) ─────────────────────────
+ * จุดตรวจเป็นคอลัมน์ ชิ้นเป็นแถว เหมือนชีต Input ของ Excel
+ * หัวตารางหลายแถว → ตรึงทั้ง <thead> (ไม่ใช่ทีละ th ซึ่งจะซ้อนทับกันที่ top:0)
+ * คอลัมน์ข้อมูลฝั่งซ้ายตรึงด้วย left ที่ component คำนวณจากความกว้างคงที่ */
+
+.igrid-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: auto;
+  max-height: calc(100vh - 14rem);
+}
+
+.igrid {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.25;
+}
+
+.igrid th,
+.igrid td {
+  padding: 0.3rem 0.45rem;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  background: var(--surface);
+}
+
+.igrid thead {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.igrid thead th,
+.igrid thead td {
+  background: var(--blue-tint);
+  font-size: var(--fs-xs);
+}
+
+.igrid__left {
+  position: sticky;
+  z-index: 2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.igrid thead .igrid__left {
+  z-index: 4;
+}
+
+.igrid__rowlabel {
+  text-align: right;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.igrid__colhead,
+.igrid__cp {
+  background: var(--ink) !important;
+  color: #fff;
+  font-weight: 600;
+}
+
+.igrid__head,
+.igrid__cp {
+  min-width: 7rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.igrid__cp {
+  white-space: normal;
+  vertical-align: bottom;
+}
+
+.igrid__char {
+  display: block;
+  font-weight: 400;
+  opacity: 0.8;
+}
+
+.igrid__seq {
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.igrid__ctf {
+  margin-left: 0.25rem;
+  padding: 0 0.25rem;
+  border-radius: 3px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 0.65rem;
+}
+
+.igrid__meta {
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.igrid__val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.igrid__ng {
+  color: var(--red);
+  font-weight: 700;
+  background: rgba(var(--red-rgb), 0.08) !important;
+}
+
+.igrid tbody tr.igrid__band td {
+  background: #F6F8FB;
+}
+
+/* เส้นหนาคั่นระหว่างใบตรวจ — ใบหนึ่งมีหลายแถว ต้องเห็นว่าจบใบตรงไหน */
+.igrid tbody tr.igrid__first td {
+  border-top: 2px solid var(--line-strong);
+}
+
+.igrid tbody tr.row--voided td {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+/* ── ใบตรวจแนวนอน — ส่วนที่ต่างจากตารางประวัติ ── */
+
+/* จุดที่ "ทำแล้วรอบนี้" (ตาม checkpoints.frequency) — ยังกรอกได้ แค่ไม่บังคับ */
+.igrid .igrid__col--done {
+  background: #EEF0F3 !important;
+  color: var(--muted);
+}
+
+.igrid__cp.igrid__col--done {
+  background: #5A6779 !important;
+  color: #fff;
+}
+
+.igrid__due-badge {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.65rem;
+  font-weight: 400;
+  opacity: 0.9;
+}
+
+.igrid__entry {
+  padding: 0.2rem !important;
+}
+
+.igrid__entry .cell {
+  max-width: none;
+  min-width: 6rem;
+}
+
+.igrid__sum td,
+.igrid__sum th {
+  background: var(--blue-tint);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-size: var(--fs-xs);
+}
+
+.igrid__sum .verdict {
+  font-size: var(--fs-xs);
+}
