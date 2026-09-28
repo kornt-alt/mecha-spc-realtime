@@ -89,6 +89,9 @@ CREATE TABLE IF NOT EXISTS customers (
   min_cpk      DECIMAL(4,2) NOT NULL DEFAULT 1.33,
   min_cp_ctf   DECIMAL(4,2) NOT NULL DEFAULT 1.33,
   min_cpk_ctf  DECIMAL(4,2) NOT NULL DEFAULT 1.33,
+  -- ชุดกฎ OCS ของลูกค้ารายนี้ ตามคู่มือ "ลักษณะกราฟที่ไม่อยู่ภายใต้การควบคุม"
+  --   basic = กฎ 1-4 (Mechanical Div.) · full = ครบ 8 กฎ (MAMM) — ตัวเลือกอยู่ที่ services/capabilityTarget.js
+  ocs_rule_set ENUM('basic','full') NOT NULL DEFAULT 'basic',
   is_active    TINYINT(1)   NOT NULL DEFAULT 1,
   created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_customers_name (name)
@@ -420,3 +423,6 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 -- จุดเดิมทั้งหมดได้ 'shift' = ต้องตรวจทุกกะ ตรงกับพฤติกรรมเดิมที่บังคับกรอกครบทุกจุดทุกใบ
 ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS frequency ENUM('shift','day') NOT NULL DEFAULT 'shift' AFTER sample_size;
 ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS characteristic VARCHAR(64) NULL AFTER frequency;
+
+-- ชุดกฎ OCS ต่อลูกค้า (basic = กฎ 1-4 · full = ครบ 8 กฎ) — ลูกค้าเดิมทั้งหมดได้ basic
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS ocs_rule_set ENUM('basic','full') NOT NULL DEFAULT 'basic' AFTER min_cpk_ctf;

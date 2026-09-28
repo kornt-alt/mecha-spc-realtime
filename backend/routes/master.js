@@ -16,7 +16,7 @@ const ALLOWED_COLUMNS = {
   divisions:   ['name', 'ipbass_dept'],
   machines:    ['division_id', 'code', 'name', 'is_active'],
   inspectors:  ['emp_code', 'name', 'division_id', 'is_active'],
-  customers:   ['name', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf', 'is_active'],
+  customers:   ['name', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf', 'ocs_rule_set', 'is_active'],
   models:      [
     'division_id', 'item_no', 'item_name', 'drawing_no', 'drawing_rev', 'is_active',
     // min_* NULL = ใช้เกณฑ์ของลูกค้า (ลำดับเลือกอยู่ที่ services/capabilityTarget.js)
@@ -67,7 +67,7 @@ router.get('/lookups', wrap(async (req, res) => {
     query('SELECT id, name, ipbass_dept FROM divisions ORDER BY name'),
     query(`SELECT id, division_id, code, name, is_active FROM machines${flag} ORDER BY code`),
     query(`SELECT id, emp_code, name, division_id, is_active FROM inspectors${flag} ORDER BY name`),
-    query(`SELECT id, name, min_cp, min_cpk, min_cp_ctf, min_cpk_ctf, is_active FROM customers${flag} ORDER BY name`),
+    query(`SELECT id, name, min_cp, min_cpk, min_cp_ctf, min_cpk_ctf, ocs_rule_set, is_active FROM customers${flag} ORDER BY name`),
   ]);
 
   res.json({ divisions, machines, inspectors, customers });

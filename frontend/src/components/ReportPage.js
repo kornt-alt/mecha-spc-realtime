@@ -118,7 +118,7 @@ const ReportPage = () => {
             {` · ลูกค้า ${report.model?.customer_name ?? 'ไม่ระบุ'}`}
             {report.targets && (
               ` · เกณฑ์ Cpk ≥ ${fmtMin(report.targets.general.minCpk)}` +
-              ` (CTF ≥ ${fmtMin(report.targets.ctf.minCpk)})`
+              ` (SC point ≥ ${fmtMin(report.targets.ctf.minCpk)})`
             )}
           </div>
         )}
@@ -311,7 +311,7 @@ const ReportPage = () => {
                         <th scope="row" className="sheet__name fw-normal">
                           <b>{cp.name}</b>
                           {cp.is_critical && (
-                            <span className="badge bg-light text-dark ms-1" title="จุดวิกฤต — CTF">CTF</span>
+                            <span className="badge bg-light text-dark ms-1" title="จุดวิกฤต — SC point">SC point</span>
                           )}
                           {cp.gauge && <span className="sheet__gauge">{cp.gauge}</span>}
                           {!isAttr && (

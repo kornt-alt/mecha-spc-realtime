@@ -18,7 +18,7 @@ const REQUIRED = {
   machines: ['id', 'division_id', 'code', 'name', 'is_active'],
   inspectors: ['id', 'emp_code', 'name', 'is_active'],
   users: ['id', 'username', 'password_hash', 'display_name', 'is_active', 'passkey_hash'],
-  customers: ['id', 'name', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf', 'is_active'],
+  customers: ['id', 'name', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf', 'ocs_rule_set', 'is_active'],
   models: [
     'id', 'division_id', 'item_no', 'item_name', 'is_active',
     'customer_id', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf',

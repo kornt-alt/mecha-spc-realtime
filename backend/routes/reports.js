@@ -102,7 +102,7 @@ router.get('/model/:modelId', wrap(async (req, res) => {
     const baselineRows = baselinesByCheckpoint.get(checkpoint.id) ?? [];
     const baseline = baselineOf(pickBaseline(baselineRows, scope));
 
-    const result = analyze(rows, { usl: checkpoint.usl, lsl: checkpoint.lsl, baseline });
+    const result = analyze(rows, { usl: checkpoint.usl, lsl: checkpoint.lsl, baseline, ruleSet: targets.ruleSet });
     const ngCount = rows.filter((r) => r.judgment === 'NG').length;
 
     return {
@@ -274,7 +274,7 @@ router.get('/model/:modelId/export', wrap(async (req, res) => {
   const c = targets.ctf;
   ws.addRow([
     `ลูกค้า: ${targets.customerName ?? 'ไม่ระบุ'} · เกณฑ์ Cp ≥ ${g.minCp.toFixed(2)} Cpk ≥ ${g.minCpk.toFixed(2)}` +
-    ` · จุด CTF: Cp ≥ ${c.minCp.toFixed(2)} Cpk ≥ ${c.minCpk.toFixed(2)}`,
+    ` · จุด SC point: Cp ≥ ${c.minCp.toFixed(2)} Cpk ≥ ${c.minCpk.toFixed(2)}`,
   ]);
   ws.addRow([]);
 

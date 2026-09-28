@@ -8,7 +8,12 @@
 // ⚠️ เลือกที่นี่ที่เดียว แล้วส่งไปกับผลกราฟ (capabilityTarget) — ฝั่ง client ห้ามมีลำดับ fallback
 //    ของตัวเอง และห้าม hardcode 1.33 กลับเข้าไปใน component (ของเดิมมีสองที่แล้วต้องตามแก้ทั้งคู่)
 // ⚠️ เป็นเกณฑ์สำหรับ "แสดงผล" ไม่ได้ตัดสิน OK/NG ของใบตรวจ (อันนั้นคือ spec limit ที่ judgment.js)
+//
+// ชุดกฎ OCS (ruleSet) ก็เลือกที่นี่ด้วย — เป็นค่าของลูกค้าเหมือนกัน: basic = กฎ 1-4 (Mechanical Div.)
+// full = ครบ 8 กฎ (MAMM) · item ที่ไม่มีลูกค้า = basic · ไม่มี override ราย item
 'use strict';
+
+const RULE_SET_NAMES = ['basic', 'full'];
 
 // พฤติกรรมเดิมก่อนมีตารางลูกค้า — item ที่ยังไม่ผูกลูกค้าจึงได้สีแบบที่เคยเห็นเป๊ะ
 const DEFAULT_MIN = 1.33;
@@ -46,6 +51,7 @@ const resolveTargets = (row = {}) => {
   // customer_id มีแต่ join ไม่เจอ (ไม่ควรเกิดเพราะ FK) ถือว่าไม่มีลูกค้า
   const hasCustomer = r.customer_id !== null && r.customer_id !== undefined && r.customer_name != null;
   return {
+    ruleSet: hasCustomer && RULE_SET_NAMES.includes(r.cust_ocs_rule_set) ? r.cust_ocs_rule_set : 'basic',
     customerId: hasCustomer ? Number(r.customer_id) : null,
     customerName: hasCustomer ? r.customer_name : null,
     general: pair(

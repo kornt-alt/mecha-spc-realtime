@@ -26,6 +26,6 @@ export const targetLabel = (t) => {
   const who = t.source === 'customer' || (t.source === 'item' && t.customerName)
     ? `ลูกค้า ${t.customerName ?? ''}`.trim()
     : '';
-  const tags = [t.critical ? 'CTF' : null, who || null, SOURCE_TEXT[t.source] ?? null].filter(Boolean);
+  const tags = [t.critical ? 'SC point' : null, who || null, SOURCE_TEXT[t.source] ?? null].filter(Boolean);
   return `เกณฑ์ Cp ≥ ${t.minCp.toFixed(2)} · Cpk ≥ ${t.minCpk.toFixed(2)}${tags.length ? ` (${tags.join(' · ')})` : ''}`;
 };

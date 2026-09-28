@@ -172,7 +172,8 @@ const SELECT_TARGETS = `
   SELECT m.id AS model_id, m.customer_id, m.min_cp, m.min_cpk, m.min_cp_ctf, m.min_cpk_ctf,
          c.name AS customer_name,
          c.min_cp AS cust_min_cp, c.min_cpk AS cust_min_cpk,
-         c.min_cp_ctf AS cust_min_cp_ctf, c.min_cpk_ctf AS cust_min_cpk_ctf
+         c.min_cp_ctf AS cust_min_cp_ctf, c.min_cpk_ctf AS cust_min_cpk_ctf,
+         c.ocs_rule_set AS cust_ocs_rule_set
     FROM models m
     LEFT JOIN customers c ON c.id = m.customer_id
 `;

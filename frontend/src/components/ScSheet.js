@@ -17,7 +17,7 @@ import { apiCall } from '../utils/api';
 import { on, joinModel, leaveModel } from '../utils/socket';
 import { normalizeRows, normalizeCheckpoints, normalizeChart } from '../utils/normalize';
 import { useModelParam, useUrlParam } from '../utils/useModelParam';
-import { OCS_RULES, chartLabel } from '../utils/spcRules';
+import { RULE_BY_ID, RULE_SET_LABEL, chartLabel, rulesFor } from '../utils/spcRules';
 import { targetLabel } from '../utils/capability';
 import useDialog from '../utils/useDialog';
 
@@ -188,7 +188,7 @@ const ScSheet = () => {
     const existing = eventByKey.get(`${point.inspectionId}:${chartKey}`);
     showForm({
       title: `บันทึกสาเหตุ — subgroup ${point.subgroupNo} (${chartLabel(chartKey, chart.limits.mode === 'i-mr')})`,
-      body: rules.map((r) => OCS_RULES.find((x) => x.id === r)?.label ?? r).join(' · '),
+      body: rules.map((r) => RULE_BY_ID[r]?.label ?? r).join(' · '),
       confirmLabel: 'บันทึก',
       fields: [
         ...EVENT_FIELDS.map((f) => ({ ...f, defaultValue: existing?.[f.name] ?? '' })),
@@ -269,7 +269,7 @@ const ScSheet = () => {
                 options={checkpoints.map((c) => ({
                   value: String(c.id),
                   label: `${c.seq_no}. ${c.name}`,
-                  hint: [c.characteristic, c.is_critical ? 'CTF' : null].filter(Boolean).join(' · '),
+                  hint: [c.characteristic, c.is_critical ? 'SC point' : null].filter(Boolean).join(' · '),
                 }))}
               />
             </div>
@@ -331,7 +331,7 @@ const ScSheet = () => {
                 <td colSpan={3}>
                   <b>{cp.seq_no}. {cp.name}</b>
                   {cp.characteristic && <span className="text-muted"> · {cp.characteristic}</span>}
-                  {cp.is_critical ? <Badge bg="light" text="dark" className="ms-1">CTF</Badge> : null}
+                  {cp.is_critical ? <Badge bg="light" text="dark" className="ms-1">SC point</Badge> : null}
                   <div><SpecValue checkpoint={cp} /></div>
                 </td>
                 <th>Aver.</th><td className="num">{isNum(specMid) ? specMid : '—'}</td>
@@ -357,6 +357,12 @@ const ScSheet = () => {
                   {limits?.provisional
                     ? <span className="sc-provisional">ลิมิตยังไม่ล็อก (provisional) — คำนวณสดจากข้อมูลในช่วงนี้</span>
                     : <span className="text-muted">ลิมิตจาก baseline ที่ล็อกไว้</span>}
+                  {chart?.ocs && (
+                    <span className="text-muted">
+                      {' · '}{RULE_SET_LABEL[chart.ocs.ruleSet] ?? RULE_SET_LABEL.basic}
+                      {chart.capabilityTarget?.customerName ? ` (ลูกค้า ${chart.capabilityTarget.customerName})` : ''}
+                    </span>
+                  )}
                 </th>
                 <th>LCL</th>
                 <td className="num">{fmt(limits?.lcl)}</td>
@@ -420,23 +426,25 @@ const ScSheet = () => {
                       </tr>
 
                       {/* ── OCS: ● ที่จุดที่ครบเงื่อนไขของกฎ ── */}
-                      {[['xbar', 'rules'], ['range', 'rangeRules']].map(([chartKey, key]) => (
-                        OCS_RULES.map((rule, r) => (
+                      {/* แถวตามกฎที่ใช้จริงของลูกค้า (chart.ocs) — กฎ 5-8 มีแค่กราฟบน */}
+                      {[['xbar', 'rules'], ['range', 'rangeRules']].map(([chartKey, key]) => {
+                        const list = rulesFor(chart.ocs?.[chartKey]);
+                        return list.map((rule, r) => (
                           <tr key={`${chartKey}-${rule.id}`} className="sc-grid__ocs">
                             {r === 0 && (
-                              <th rowSpan={OCS_RULES.length} className="sc-grid__side">
+                              <th rowSpan={list.length} className="sc-grid__side">
                                 OCS {chartLabel(chartKey, isImr)}
                               </th>
                             )}
-                            <th className="sc-grid__rule">{rule.label}</th>
+                            <th className="sc-grid__rule">{rule.no}. {rule.label}</th>
                             {block.map((p) => (
                               <td key={p.index} className={p[key]?.includes(rule.id) ? 'sc-cell--ocs' : ''}>
                                 {p[key]?.includes(rule.id) ? '●' : ''}
                               </td>
                             ))}
                           </tr>
-                        ))
-                      ))}
+                        ));
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -489,7 +497,7 @@ const ScSheet = () => {
                           <tr key={`${v.index}-${v.chart}`} className={e ? '' : 'sc-events--pending'}>
                             <td>
                               <b>{chartLabel(v.chart, isImr)}</b> #{v.point.subgroupNo}
-                              <div className="small">{v.rules.map((r) => OCS_RULES.find((x) => x.id === r)?.label ?? r).join(', ')}</div>
+                              <div className="small">{v.rules.map((r) => RULE_BY_ID[r]?.label ?? r).join(', ')}</div>
                             </td>
                             <td>{fmtDate(v.point.meta?.inspectedAt)}</td>
                             <td>{fmtTime(v.point.meta?.inspectedAt)}</td>

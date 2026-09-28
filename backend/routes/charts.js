@@ -70,7 +70,7 @@ router.get('/:checkpointId', wrap(async (req, res) => {
   ]);
   const baseline = baselineOf(pickBaseline(baselineRows, scopeOf(filter)));
 
-  const result = analyze(rows, { usl: checkpoint.usl, lsl: checkpoint.lsl, baseline });
+  const result = analyze(rows, { usl: checkpoint.usl, lsl: checkpoint.lsl, baseline, ruleSet: targets.ruleSet });
 
   // baselines = ทุกชุดที่ล็อกไว้ของจุดนี้ (หน้า Master Setup เอาไปโชว์ว่าเครื่องไหนล็อกแล้วบ้าง)
   res.json({

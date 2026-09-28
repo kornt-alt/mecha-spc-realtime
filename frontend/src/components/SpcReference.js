@@ -108,9 +108,11 @@ const SpcReference = () => {
             </section>
           </div>
 
-          <h3 className="spc-ref__h mt-3">กฎ OCS 6 ข้อ (ตามฟอร์ม SP-QC-214C) — จับว่ากระบวนการเปลี่ยน</h3>
+          <h3 className="spc-ref__h mt-3">กฎ OCS 8 ข้อ (ลักษณะกราฟที่ไม่อยู่ภายใต้การควบคุม) — จับว่ากระบวนการเปลี่ยน</h3>
           <p className="spc-ref__p">
-            ใช้กับทั้งกราฟบน (X̄ / I) และกราฟล่าง (R / MR) แยกกัน ·
+            <b>Mechanical Div. ใช้ข้อ 1–4 · MAMM ใช้ครบ 8 ข้อ</b> — ตั้งที่ลูกค้าในหน้า Master ·
+            ข้อ 1–4 ใช้กับทั้งกราฟบน (X̄ / I) และกราฟล่าง (R / MR) แยกกัน · ข้อ 5–8 ใช้โซน σ
+            (σ = ระยะ CL ถึง UCL/LCL หาร 3) กับกราฟบนเท่านั้น ·
             ผิดกฎ = กระบวนการกำลังเปลี่ยน <b>ของยังไม่เสีย</b> (จึงเป็นสีเหลือง ไม่ใช่แดง)
             ต้องไปดูที่เครื่องก่อนที่จะมีของหลุดสเปกจริง แล้วบันทึกสาเหตุใน Event Log ที่หน้า SC Chart
           </p>
@@ -126,7 +128,8 @@ const SpcReference = () => {
               {OCS_RULES.map((r) => (
                 <tr key={r.id}>
                   <td>
-                    <b>{r.label}</b>
+                    <b>{r.no}. {r.label}</b>
+                    {r.no > 4 && <div className="small text-muted">เฉพาะลูกค้าที่ตั้ง 8 ข้อ · กราฟ X̄/I</div>}
                   </td>
                   <td>{r.when}</td>
                   <td className="text-muted">{r.means}</td>

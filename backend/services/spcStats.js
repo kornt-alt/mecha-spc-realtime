@@ -230,34 +230,57 @@ const capability = ({ usl, lsl, sigmaWithin, values }) => {
   };
 };
 
-// ── 4. กฎ OCS (Out of Control Signal) ตามฟอร์ม SP-QC-214C ──────────────────
+// ── 4. กฎ OCS (Out of Control Signal) ─────────────────────────────────────
+//
+// ตามคู่มือ "ลักษณะกราฟที่ไม่อยู่ภายใต้การควบคุม" (8 กฎ) — Mechanical Div. ใช้กฎ 1-4 · MAMM ใช้ครบ 8
+// ชุดที่ใช้เลือกตามลูกค้าของ item (customers.ocs_rule_set → capabilityTarget.resolveTargets)
 
 // รหัสกฎ — ⚠️ ต้องตรงกับ OCS_RULES ใน frontend/src/utils/spcRules.js (ลำดับ = ลำดับแถวในตาราง OCS)
-const OCS_RULE_IDS = ['out', 'shift_up', 'shift_down', 'trend_up', 'trend_down', 'alt14'];
+//   กฎ 1 out · กฎ 2 shift_up/down · กฎ 3 trend_up/down · กฎ 4 alt14
+//   กฎ 5 zone_a · กฎ 6 zone_b · กฎ 7 strat15 · กฎ 8 mix8
+const OCS_RULE_IDS = [
+  'out', 'shift_up', 'shift_down', 'trend_up', 'trend_down', 'alt14',
+  'zone_a', 'zone_b', 'strat15', 'mix8',
+];
 
-// ocsRules(values, { center, ucl, lcl }) → [{ index, rules: ['out', 'shift_up'] }]
+// กฎ 5-8 อิงโซน σ สองฝั่งของ CL — ใช้กับกราฟบน (X̄ / I) เท่านั้น
+// กราฟ R/MR ไม่สมมาตร (LCL = 0 บ่อย) โซนบนกราฟนั้นไม่มีความหมายในทางปฏิบัติ
+const ZONE_RULES = ['zone_a', 'zone_b', 'strat15', 'mix8'];
+
+const RULE_SETS = {
+  basic: OCS_RULE_IDS.filter((r) => !ZONE_RULES.includes(r)),
+  full: OCS_RULE_IDS,
+};
+
+// ocsRules(values, { center, ucl, lcl, enabled }) → [{ index, rules: ['out', 'shift_up'] }]
 //
-// 6 กฎตามตาราง OCS ของชีต SC ใน Excel ที่ QC ใช้อยู่ (แทนกฎ Nelson 8 ข้อของเดิม):
-//   out         จุดหลุด UCL หรือ LCL (เทียบกับเส้นตรง ๆ ไม่แปลงเป็น sigma — LCL ของกราฟ R เป็น 0 ได้)
-//   shift_up    7 จุดติดกันอยู่เหนือ CL
-//   shift_down  7 จุดติดกันอยู่ใต้ CL
-//   trend_up    6 จุดติดกันไต่ขึ้นตลอด
-//   trend_down  6 จุดติดกันไต่ลงตลอด
+//   out         จุดหลุด UCL หรือ LCL (เทียบกับเส้นตรง ๆ — LCL ของกราฟ R เป็น 0 ได้)
+//   shift_*     7 จุดติดกันอยู่เหนือ / ใต้ CL
+//   trend_*     7 จุดติดกันไต่ขึ้น / ลงตลอด (= 6 ช่วงที่เพิ่ม/ลดติดกัน) — คู่มือใช้ 7 ไม่ใช่ 6 ของฟอร์ม Excel
 //   alt14       14 จุดติดกันสลับขึ้นลง
+//   zone_a      2 ใน 3 จุดติดกันเกิน 2σ ฝั่งเดียวกัน (Zone A)
+//   zone_b      4 ใน 5 จุดติดกันเกิน 1σ ฝั่งเดียวกัน (Zone B ขึ้นไป)
+//   strat15     15 จุดติดกันอยู่ใน ±1σ (Zone C) — แคบผิดปกติ มักคือ subgroup ปนหลายแหล่ง
+//   mix8        8 จุดติดกันอยู่นอก ±1σ (ฝั่งไหนก็ได้ ไม่มีจุดใน Zone C) — ข้อมูลผสมสองกลุ่ม
 //
+// ⚠️ σ ของโซนมาจากเส้นลิมิตตรง ๆ: เหนือ CL = (UCL−CL)/3 · ใต้ CL = (CL−LCL)/3 ไม่คิดใหม่จากข้อมูล
+//    โซนจึงตรงกับเส้นที่วาดบนกราฟเสมอ (baseline ที่ล็อกไว้ก็ได้ σ ของ baseline)
 // ⚠️ ทำเครื่องหมายเฉพาะ "จุดที่ครบเงื่อนไข" (จุดท้ายของชุด) ไม่ใช่ทั้งชุด — ตรงกับคอลัมน์ *** ใน Event Log
 //    ของ Excel · ชุดที่ยาวต่อไปอีก จุดถัด ๆ ไปก็ครบเงื่อนไขด้วยตัวเองจึงถูกทำเครื่องหมายต่อเนื่อง
-//    (Excel ก็เป็นแบบนั้น — เทียบหน้าต่าง 7 จุดล่าสุดทุกคอลัมน์)
+//    กฎ "x ใน y จุด" (zone_a/zone_b) จุดท้ายต้องเป็นหนึ่งในจุดที่เกินเองด้วย ไม่งั้นจุดที่กลับเข้าโซนปกติ
+//    แล้วจะโดนทำเครื่องหมายแทน
 // ⚠️ จุดที่เป็น null (MR จุดแรกของ I-MR) ตัดสายของทุกกฎที่ต้องนับติดกัน
-const ocsRules = (values, { center, ucl, lcl } = {}) => {
+const ocsRules = (values, { center, ucl, lcl, enabled = RULE_SETS.basic } = {}) => {
   const k = values.length;
   const C = toNum(center);
   const U = toNum(ucl);
   const L = toNum(lcl);
   if (k === 0) return [];
+  const on = new Set(enabled);
 
   const hits = new Map(); // index → Set(ruleId)
   const flag = (idx, rule) => {
+    if (!on.has(rule)) return;
     if (!hits.has(idx)) hits.set(idx, new Set());
     hits.get(idx).add(rule);
   };
@@ -268,23 +291,41 @@ const ocsRules = (values, { center, ucl, lcl } = {}) => {
     for (let j = i - len + 1; j <= i; j += 1) if (!ok(j) || !test(j)) return false;
     return true;
   };
+  // จำนวนจุดในหน้าต่าง len จุดล่าสุดที่ผ่าน test
+  // ⚠️ ต้นกราฟหน้าต่างสั้นกว่า len ได้ — ไม่งั้น 2 จุดแรกที่เกิน 2σ ติดกันจะไม่ถูกจับเลย
+  //    (จุดที่ 3 กลับเข้าโซนปกติ = ไม่ใช่จุดที่ทำเครื่องหมาย) · จุดว่างนับเป็นไม่ผ่าน
+  const countIn = (i, len, test) => {
+    let n = 0;
+    for (let j = Math.max(0, i - len + 1); j <= i; j += 1) if (ok(j) && test(j)) n += 1;
+    return n;
+  };
+
+  // σ แยกสองฝั่ง — มีได้เมื่อรู้ทั้ง CL/UCL/LCL และช่วงกว้างกว่า 0
+  const zones = C !== null && U !== null && L !== null && U > C && C > L
+    ? { up: (U - C) / 3, down: (C - L) / 3 }
+    : null;
+  // ระยะจาก CL เป็นจำนวน σ ของฝั่งที่จุดนั้นอยู่ (บวก = เหนือ CL)
+  const z = (v) => (v >= C ? (v - C) / zones.up : (v - C) / zones.down);
+  const beyond = (j, side, n) => Math.sign(z(values[j])) === side && Math.abs(z(values[j])) > n;
 
   for (let i = 0; i < k; i += 1) {
     if (!ok(i)) continue;
     const v = values[i];
 
+    // กฎ 1
     if ((U !== null && v > U) || (L !== null && v < L)) flag(i, 'out');
 
+    // กฎ 2
     if (C !== null) {
       if (run(i, 7, (j) => values[j] > C)) flag(i, 'shift_up');
       if (run(i, 7, (j) => values[j] < C)) flag(i, 'shift_down');
     }
 
-    // 6 จุดไต่ตลอด = 5 ช่วงที่เพิ่มขึ้นติดกัน (จุดแรกของหน้าต่างไม่ต้องเทียบกับตัวก่อนหน้า)
-    if (run(i, 6, () => true)) {
+    // กฎ 3 — 7 จุดไต่ตลอด = 6 ช่วงที่เพิ่มขึ้นติดกัน (จุดแรกของหน้าต่างไม่ต้องเทียบกับตัวก่อนหน้า)
+    if (run(i, 7, () => true)) {
       let up = true;
       let down = true;
-      for (let j = i - 4; j <= i; j += 1) {
+      for (let j = i - 5; j <= i; j += 1) {
         if (!(values[j] > values[j - 1])) up = false;
         if (!(values[j] < values[j - 1])) down = false;
       }
@@ -292,7 +333,7 @@ const ocsRules = (values, { center, ucl, lcl } = {}) => {
       if (down) flag(i, 'trend_down');
     }
 
-    // 14 จุดสลับขึ้นลง = 13 ผลต่างที่เครื่องหมายสลับกันทุกคู่ติดกัน (12 คู่ · ผลต่าง 0 ตัดสาย)
+    // กฎ 4 — 14 จุดสลับขึ้นลง = 13 ผลต่างที่เครื่องหมายสลับกันทุกคู่ติดกัน (12 คู่ · ผลต่าง 0 ตัดสาย)
     // ⚠️ j เริ่มที่ i-11 เพราะข้างในอ่าน values[j-2] — ต่ำกว่านี้จะอ่านจุดนอกหน้าต่าง 14 จุด
     if (run(i, 14, () => true)) {
       let alternating = true;
@@ -303,6 +344,18 @@ const ocsRules = (values, { center, ucl, lcl } = {}) => {
       }
       if (alternating) flag(i, 'alt14');
     }
+
+    if (!zones) continue;
+    const side = Math.sign(z(v));
+
+    // กฎ 5 — 2 ใน 3 เกิน 2σ ฝั่งเดียวกับจุดนี้ (จุดนี้ต้องเกินเอง)
+    if (beyond(i, side, 2) && countIn(i, 3, (j) => beyond(j, side, 2)) >= 2) flag(i, 'zone_a');
+    // กฎ 6 — 4 ใน 5 เกิน 1σ ฝั่งเดียวกับจุดนี้ (จุดนี้ต้องเกินเอง)
+    if (beyond(i, side, 1) && countIn(i, 5, (j) => beyond(j, side, 1)) >= 4) flag(i, 'zone_b');
+    // กฎ 7 — 15 จุดติดกันอยู่ใน ±1σ
+    if (run(i, 15, (j) => Math.abs(z(values[j])) < 1)) flag(i, 'strat15');
+    // กฎ 8 — 8 จุดติดกันอยู่นอก ±1σ
+    if (run(i, 8, (j) => Math.abs(z(values[j])) > 1)) flag(i, 'mix8');
   }
 
   return [...hits.entries()]
@@ -314,7 +367,7 @@ const ocsRules = (values, { center, ucl, lcl } = {}) => {
 
 // analyze(rows, { usl, lsl, baseline }) — ตัวที่ route เรียกใช้จริง
 // คืนทุกอย่างที่หน้ากราฟต้องการในก้อนเดียว ฝั่ง client แค่เอาไปวาด ไม่ต้องคำนวณอะไรอีก
-const analyze = (rows, { usl = null, lsl = null, baseline = null } = {}) => {
+const analyze = (rows, { usl = null, lsl = null, baseline = null, ruleSet = 'basic' } = {}) => {
   const { subgroups, n, mixedN } = buildSubgroups(rows);
 
   if (mixedN) {
@@ -352,8 +405,13 @@ const analyze = (rows, { usl = null, lsl = null, baseline = null } = {}) => {
 
   // กฎ OCS ใช้กับทั้งกราฟบน (X̄ / I) และกราฟล่าง (R / MR) แยกกัน — ตาราง OCS ของฟอร์มมีครบทั้งสองชุด
   // violations: 1 แถวต่อ "จุด × กราฟ" · chart = 'xbar' | 'range' (Event Log ผูกกับคู่นี้)
-  const xbarHits = ocsRules(chartValues, { center: limits.center, ucl: limits.ucl, lcl: limits.lcl });
-  const rangeHits = ocsRules(rangeValues, { center: limits.rangeCenter, ucl: limits.rangeUcl, lcl: limits.rangeLcl });
+  // ชุดกฎตามลูกค้า (basic = 1-4 · full = 1-8) · กราฟล่างไม่ใช้กฎโซน (5-8) เสมอ
+  const xbarRules = RULE_SETS[ruleSet] ?? RULE_SETS.basic;
+  const rangeRules = xbarRules.filter((r) => !ZONE_RULES.includes(r));
+  const xbarHits = ocsRules(chartValues, { center: limits.center, ucl: limits.ucl, lcl: limits.lcl, enabled: xbarRules });
+  const rangeHits = ocsRules(rangeValues, {
+    center: limits.rangeCenter, ucl: limits.rangeUcl, lcl: limits.rangeLcl, enabled: rangeRules,
+  });
   const xbarByIndex = new Map(xbarHits.map((v) => [v.index, v.rules]));
   const rangeByIndex = new Map(rangeHits.map((v) => [v.index, v.rules]));
   const violations = [
@@ -389,6 +447,8 @@ const analyze = (rows, { usl = null, lsl = null, baseline = null } = {}) => {
       rangeRules: rangeByIndex.get(i) ?? [],
     })),
     violations,
+    // กฎที่ใช้กับจุดนี้ — หน้า SC วาดแถวตาราง OCS ตามนี้ (ลูกค้า basic ไม่มีแถวกฎ 5-8)
+    ocs: { ruleSet: RULE_SETS[ruleSet] ? ruleSet : 'basic', xbar: xbarRules, range: rangeRules },
     inControl: violations.length === 0,
     capability: capability({ usl, lsl, sigmaWithin: limits.sigmaWithin, values: allValues }),
     stats,
@@ -404,6 +464,8 @@ module.exports = {
   capability,
   ocsRules,
   OCS_RULE_IDS,
+  RULE_SETS,
+  ZONE_RULES,
   analyze,
   MIN_BASELINE_SUBGROUPS,
 };

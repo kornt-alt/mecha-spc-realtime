@@ -47,6 +47,12 @@ const FREQUENCIES = [
 ];
 const freqShort = (f) => (f === 'day' ? 'วัน' : 'กะ');
 
+// ชุดกฎ OCS ของลูกค้า (customers.ocs_rule_set) — รูป { id, name } ตามที่ช่อง select ของ SimpleTab ใช้
+const OCS_RULE_SET_OPTIONS = [
+  { id: 'basic', name: 'ข้อ 1–4 (Mechanical)' },
+  { id: 'full', name: 'ครบ 8 ข้อ (MAMM)' },
+];
+
 const blankCheckpoint = (memory = null) => ({
   name: '',
   char_type: 'variable',
@@ -83,8 +89,8 @@ const blankModel = () => ({
 const MIN_FIELDS = [
   { key: 'min_cp', label: 'Cp' },
   { key: 'min_cpk', label: 'Cpk' },
-  { key: 'min_cp_ctf', label: 'Cp (CTF)' },
-  { key: 'min_cpk_ctf', label: 'Cpk (CTF)' },
+  { key: 'min_cp_ctf', label: 'Cp (SC point)' },
+  { key: 'min_cpk_ctf', label: 'Cpk (SC point)' },
 ];
 const blankMins = () => Object.fromEntries(MIN_FIELDS.map((f) => [f.key, '']));
 
@@ -411,8 +417,10 @@ const MasterSetup = () => {
             { key: 'name', label: 'ชื่อลูกค้า', required: true },
             { key: 'min_cp', label: 'min Cp', type: 'number', required: true, default: '1.33' },
             { key: 'min_cpk', label: 'min Cpk', type: 'number', required: true, default: '1.33' },
-            { key: 'min_cp_ctf', label: 'min Cp (CTF)', type: 'number', required: true, default: '1.33' },
-            { key: 'min_cpk_ctf', label: 'min Cpk (CTF)', type: 'number', required: true, default: '1.33' },
+            { key: 'min_cp_ctf', label: 'min Cp (SC point)', type: 'number', required: true, default: '1.33' },
+            { key: 'min_cpk_ctf', label: 'min Cpk (SC point)', type: 'number', required: true, default: '1.33' },
+            // ชุดกฎ OCS ตามคู่มือ — Mechanical Div. ใช้ข้อ 1-4 · MAMM ใช้ครบ 8 (เลือกที่ backend/services/capabilityTarget.js)
+            { key: 'ocs_rule_set', label: 'กฎ OCS', type: 'select', required: true, default: 'basic', options: OCS_RULE_SET_OPTIONS },
             { key: 'is_active', label: 'ใช้งาน', type: 'check' },
           ]}
           onSave={save} onRemove={remove} onAlert={showAlert} labelOf={(r) => r.name}
@@ -767,6 +775,10 @@ const ModelsTab = ({
                     })),
                   ]}
                 />
+                {/* ชุดกฎ OCS มากับลูกค้า ไม่มี override ราย item — บอกไว้ตรงนี้ คนเลือกลูกค้าจะได้รู้ว่ากราฟจะใช้กี่กฎ */}
+                <div className="small text-muted mt-1">
+                  {formCustomer?.ocs_rule_set === 'full' ? 'กฎ OCS ครบ 8 ข้อ (ตามลูกค้า)' : 'กฎ OCS ข้อ 1–4'}
+                </div>
               </div>
               <div className="small text-muted mb-1">เกณฑ์ขั้นต่ำ (เว้นว่าง = ตามลูกค้า)</div>
               <Row className="g-2 mb-2">
@@ -966,7 +978,7 @@ const ModelsTab = ({
                   </Form.Select>
                 </Form.Group>
                 <Col md="auto" className="d-flex align-items-center gap-3">
-                  <Form.Check label="จุดวิกฤต" checked={cpForm.is_critical} disabled={!selectedModel}
+                  <Form.Check label="SC point" checked={cpForm.is_critical} disabled={!selectedModel}
                     onChange={(e) => setCpForm((f) => ({ ...f, is_critical: e.target.checked }))} />
                   <Form.Check label="ใช้งาน" checked={cpForm.is_active} disabled={!selectedModel}
                     onChange={(e) => setCpForm((f) => ({ ...f, is_active: e.target.checked }))} />
@@ -1033,7 +1045,7 @@ const ModelsTab = ({
                       <td>
                         {cp.name}
                         {cp.is_critical && (
-                          <span className="badge bg-light text-dark ms-1" title="จุดวิกฤต — CTF">CTF</span>
+                          <span className="badge bg-light text-dark ms-1" title="จุดวิกฤต — SC point">SC point</span>
                         )}
                         {cp.characteristic && <div className="small text-muted">{cp.characteristic}</div>}
                       </td>

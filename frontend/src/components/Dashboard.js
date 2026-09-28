@@ -1,5 +1,8 @@
 // frontend/src/components/Dashboard.js — จอ realtime ของไลน์ เลือกรุ่นแล้วเห็นทุกจุดตรวจ
 //
+// ค่าเริ่มต้นเป็น "ตารางสถานะ" (StatusBoard) 1 แถวต่อจุด จอหน้าไลน์เห็นครบทุกจุดในหน้าเดียว
+// แล้วกดไปเจาะที่หน้า SC Chart · การ์ดกราฟเต็มแบบเดิมยังอยู่ที่ ?view=charts
+//
 // ต่างจากระบบเดิมตรง: เข้า room ของรุ่นที่ดูอยู่เท่านั้น พอมีใบตรวจใหม่เข้ามา server ส่ง
 // แค่ "จุดไหนเปลี่ยนบ้าง" มาให้ แล้วหน้านี้โหลดใหม่เฉพาะกราฟที่กระทบ
 // (ของเดิม broadcast ประวัติทั้งก้อนของทุก spec ให้ทุกเครื่องทุกครั้งที่มีคนบันทึก)
@@ -16,7 +19,7 @@
 // ⚠️ ลำดับการ์ดเรียงตาม seq_no เสมอ ห้ามเรียงใหม่ตามสถานะ — socket ดันของใหม่เข้ามาได้ตลอด
 //    ถ้าเรียงตามสถานะ การ์ดจะสลับที่ใต้เมาส์คนที่กำลังอ่านอยู่ จุดที่ผิดใช้เส้นเหลืองซ้ายชี้แทน
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Container, Row, Col, Card, Alert, Spinner } from 'react-bootstrap';
+import { Container, Row, Col, Card, Alert, Spinner, Button } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
 import { on, joinModel, leaveModel } from '../utils/socket';
 import { normalizeRows, normalizeChart } from '../utils/normalize';
@@ -24,6 +27,7 @@ import { useModelParam, useUrlParam } from '../utils/useModelParam';
 import ControlChart from './ControlChart';
 import SearchSelect from './SearchSelect';
 import SpcReference from './SpcReference';
+import StatusBoard, { statusOf } from './StatusBoard';
 
 // ⚠️ ตัวกรองต้องมีทางกลับไป "ทุกเครื่อง" เป็นแถวจริงในลิสต์ ไม่ใช่แค่ placeholder
 //    (placeholder เลือกกลับไม่ได้เมื่อเลือกอะไรไปแล้ว — กฎเดียวกับตัวกรองที่ ReportPage)
@@ -50,6 +54,9 @@ const Dashboard = () => {
   const [machines, setMachines] = useState([]);
   const [modelId, setModelId] = useModelParam();
   const [machineId, setMachineId] = useUrlParam('machine');
+  // มุมมองอยู่ใน URL — จอหน้าไลน์บุ๊กมาร์กแบบที่ต้องการได้ (ค่าว่าง = ตารางสถานะ)
+  const [view, setView] = useUrlParam('view');
+  const showCharts = view === 'charts';
   const [charts, setCharts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -192,7 +199,16 @@ const Dashboard = () => {
   // ลูกค้าของ item — สี Cp/Cpk บนกราฟเทียบกับเกณฑ์ของลูกค้ารายนี้ คนดูจอต้องรู้ว่าเกณฑ์ของใคร
   const customerName = models.find((m) => String(m.id) === String(modelId))?.customer_name ?? null;
 
-  const outOfControl = charts.filter((c) => (c.violations?.length ?? 0) > 0);
+  // ตัวนับหัวจอใช้ statusOf ตัวเดียวกับแถวในตาราง — สองที่ต้องไม่นับไม่ตรงกัน
+  const counts = useMemo(() => {
+    const out = { ng: 0, ocs: 0, watch: 0 };
+    for (const c of charts) {
+      const k = statusOf(c).key;
+      if (k in out) out[k] += 1;
+    }
+    return out;
+  }, [charts]);
+  const needsLook = counts.ng + counts.ocs + counts.watch;
 
   return (
     <Container fluid className="page">
@@ -201,9 +217,9 @@ const Dashboard = () => {
         {modelId && !loading && (
           <div className="page-head__meta num">
             {charts.length} จุดตรวจสอบ
-            {outOfControl.length > 0
-              ? ` · ต้องดูก่อน ${outOfControl.length} จุด`
-              : ' · ทุกจุด in control'}
+            {needsLook > 0
+              ? ` · NG ${counts.ng} · OCS ${counts.ocs} · ต้องดู ${counts.watch}`
+              : ' · ทุกจุดปกติ'}
             {` · ${machineId ? machineName : 'รวมทุกเครื่อง'}`}
             {customerName && ` · ลูกค้า ${customerName}`}
           </div>
@@ -246,9 +262,19 @@ const Dashboard = () => {
             ]}
           />
         </Col>
+
+        <Col md="auto" className="ms-md-auto">
+          <div className="btn-group" role="group" aria-label="มุมมอง">
+            <Button size="sm" variant={showCharts ? 'outline-primary' : 'primary'}
+              aria-pressed={!showCharts} onClick={() => setView('')}>ตารางสถานะ</Button>
+            <Button size="sm" variant={showCharts ? 'primary' : 'outline-primary'}
+              aria-pressed={showCharts} onClick={() => setView('charts')}>กราฟเต็ม</Button>
+          </div>
+        </Col>
       </Row>
 
-      <SpcReference />
+      {/* แผงสูตร/กฎ อยู่กับกราฟเต็ม — ตารางสถานะตั้งใจให้กระชับพอดีจอ */}
+      {showCharts && <SpcReference />}
 
       {error && <Alert variant="danger">{error}</Alert>}
 
@@ -296,13 +322,17 @@ const Dashboard = () => {
         <div className="empty">model นี้ยังไม่มีจุดตรวจสอบ หรือยังไม่มีใบตรวจสอบในระบบ</div>
       )}
 
-      <Row>
-        {charts.map((c) => (
-          <Col xl={6} key={c.checkpoint.id}>
-            <ControlChart chart={c} machineId={machineId} />
-          </Col>
-        ))}
-      </Row>
+      {charts.length > 0 && !showCharts && <StatusBoard charts={charts} machineId={machineId} />}
+
+      {showCharts && (
+        <Row>
+          {charts.map((c) => (
+            <Col xl={6} key={c.checkpoint.id}>
+              <ControlChart chart={c} machineId={machineId} />
+            </Col>
+          ))}
+        </Row>
+      )}
     </Container>
   );
 };

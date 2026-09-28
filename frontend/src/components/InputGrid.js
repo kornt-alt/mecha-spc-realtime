@@ -76,7 +76,7 @@ export const GridHead = ({ checkpoints, leftCols, stats = null, colClass = () =>
             {cp.characteristic && <span className="igrid__char">{cp.characteristic}</span>}
             <span className="igrid__name">
               <span className="igrid__seq">{cp.seq_no}</span> {cp.name}
-              {cp.is_critical && <span className="igrid__ctf" title="จุดวิกฤต — CTF">CTF</span>}
+              {cp.is_critical && <span className="igrid__ctf" title="จุดวิกฤต — SC point">SC point</span>}
             </span>
             {badge(cp)}
           </th>

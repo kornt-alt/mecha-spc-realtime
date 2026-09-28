@@ -29,7 +29,7 @@ const ChartHead = ({ cp, sub, right }) => (
         <div className="fw-bold small">
           {cp.seq_no}. {cp.name}
           {cp.is_critical && (
-            <span className="badge bg-light text-dark ms-2" title="จุดวิกฤต — CTF">CTF</span>
+            <span className="badge bg-light text-dark ms-2" title="จุดวิกฤต — SC point">SC point</span>
           )}
         </div>
         {sub && <div className="text-white-50" style={{ fontSize: '0.72rem' }}>{sub}</div>}
