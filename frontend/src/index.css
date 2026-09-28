@@ -1,10 +1,23 @@
-@import url('https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css');
+/* frontend/src/index.css — base + คลาสเฉพาะของแอป
+ *
+ * ตัวแปรสี/สเกลทั้งหมดอยู่ที่ src/styles/tokens.css ไฟล์นี้แค่เอามาใช้
+ * ลำดับ import อยู่ใน src/index.js — bootstrap ต้องมาก่อน tokens ก่อนไฟล์นี้
+ *
+ * ของเดิมในไฟล์นี้ที่เอาออก:
+ *   - @import bootstrap-icons จาก CDN — ไม่มี <i class="bi"> สักตัวในโค้ด แต่บล็อกการเรนเดอร์
+ *   - กฎ input[list] / datalist — ไม่มี component ไหนใช้ list= เลย
+ * ที่เก็บไว้เหมือนเดิม: font stack (ตกลงกันว่าใช้ฟอนต์เดิม ไม่โหลดเว็บฟอนต์)
+ */
 
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--paper);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -14,17 +27,1204 @@ code {
     monospace;
 }
 
-/* ปรับแต่ง datalist dropdown */
-input[list]::-webkit-calendar-picker-indicator {
-  filter: invert(1);
+/* ⚠️ ตัวเลขทุกตัวที่เป็นค่าวัด ต้องอยู่ในคลาสนี้
+ * tabular-nums ทำให้จุดทศนิยมตรงคอลัมน์กันทั้งตาราง — ค่าวัด 4 ตำแหน่งในช่องแคบ
+ * ถ้าใช้ proportional figures จะเหลื่อมจนอ่านเทียบกันไม่ได้
+ * นี่คือการเลือกรูปแบบตัวเลข "ในฟอนต์เดิม" ไม่ใช่การเปลี่ยนฟอนต์ */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
 }
 
-datalist {
-  font-size: 0.875rem;
+/* ── โครงหน้า ─────────────────────────────────────────────────────────── */
+
+.page {
+  padding: var(--sp-4) var(--sp-4) 6rem;
 }
 
-/* ทำให้ placeholder ดูจาง */
-.form-control::placeholder {
-  color: #999;
-  opacity: 1;
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.page-head h1,
+.page-head h2 {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.page-head__meta {
+  margin-left: auto;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+/* ── navbar ───────────────────────────────────────────────────────────── */
+
+.app-nav {
+  background: var(--ink);
+}
+
+.app-nav .navbar-brand {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #fff;
+}
+
+.app-nav .nav-link {
+  position: relative;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: var(--fs-md);
+  padding-inline: var(--sp-3);
+}
+
+.app-nav .nav-link:hover {
+  color: #fff;
+}
+
+/* เมนูที่เปิดอยู่ ขีดเส้นใต้สีเหลือง — เหลืองสว่างใช้ได้เพราะพื้นเป็นสีหมึก (8.9:1) */
+.app-nav .nav-link.active {
+  color: #fff;
+  font-weight: 600;
+}
+
+.app-nav .nav-link.active::after {
+  content: '';
+  position: absolute;
+  left: var(--sp-3);
+  right: var(--sp-3);
+  bottom: 2px;
+  height: 2px;
+  background: var(--amber);
+}
+
+/* ── สัญกรณ์พิกัดงาน (SpecValue) ────────────────────────────────────────
+ * เขียนแบบเดียวกับที่อยู่ในแบบของลูกค้า: ค่าพื้นตัวใหญ่ พิกัดบน/ล่างซ้อนกันข้าง ๆ
+ *   Ø2.000 ⁺⁰·⁰⁰⁰
+ *          ₋₀·₀₀₄
+ * ไม่ใช้ unicode superscript เพราะเรนเดอร์เพี้ยนข้ามฟอนต์ */
+
+.spec {
+  display: flex;
+  align-items: center;
+  gap: 0.35em;
+  line-height: 1.15;
+}
+
+.spec__nominal {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.spec__tol {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.spec__range {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── แถบสถานี ─────────────────────────────────────────────────────────── */
+
+.station {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-3);
+}
+
+.station__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+}
+
+.station__model {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.station__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.station__fact b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* ── ตารางใบตรวจ ──────────────────────────────────────────────────────── */
+
+.sheet-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: auto;
+  max-height: calc(100vh - 20rem);
+}
+
+.sheet {
+  width: 100%;
+  margin: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.25;
+}
+
+.sheet th,
+.sheet td {
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+/* หัวตารางลอยค้างไว้ — ใบที่มี 8 จุด × 5 ชิ้นยาวเกินหนึ่งหน้าจอ */
+.sheet thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--ink);
+  color: #fff;
+  font-weight: 600;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  border-bottom: none;
+}
+
+.sheet__seq {
+  width: 3rem;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ⚠️ ชื่อกับสเปกกว้างคงที่ ที่ว่างบนจอกว้างยกให้คอลัมน์ชิ้นงานไป
+   ของเดิมช่องชื่อเป็นตัวดูดที่ว่าง สเปกเลยถูกดันไปลอยห่างจากชื่อจุดที่มันอธิบายอยู่ */
+.sheet__name {
+  width: 15rem;
+}
+
+.sheet__name b {
+  font-weight: 600;
+}
+
+.sheet__gauge {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.sheet__spec {
+  width: 14rem;
+}
+
+.sheet__piece {
+  min-width: 5.5rem;
+  text-align: right;
+}
+
+.sheet__stat {
+  width: 6rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.sheet__stat b {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+
+.sheet__verdict {
+  width: 4.5rem;
+  text-align: center;
+}
+
+.sheet tbody tr:hover {
+  background: var(--blue-tint);
+}
+
+/* ใบตรวจที่ถูกยกเลิก — ยังอยู่ในตารางเพื่อให้กดคืนค่าได้ แต่ต้องอ่านออกทันทีว่าไม่นับแล้ว
+   ขีดฆ่าเฉพาะข้อมูล ไม่ขีดคอลัมน์จัดการ ไม่งั้นปุ่มคืนค่าจะถูกขีดไปด้วย */
+.sheet tbody tr.row--voided td {
+  opacity: 0.55;
+}
+
+.sheet tbody tr.row--voided td:not(:last-child) {
+  text-decoration: line-through;
+}
+
+/* ── ช่องกรอกค่าวัด ───────────────────────────────────────────────────── */
+
+.cell {
+  display: block;
+  width: 100%;
+  max-width: 8rem;
+  margin-left: auto;
+  padding: 0.3rem 0.4rem;
+  font-size: var(--fs-md);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-left-width: 2px;
+  border-left-color: var(--line-strong);
+  border-radius: var(--radius);
+}
+
+/* ซ่อนลูกศรขึ้นลง — กินที่ในช่องแคบ และกดพลาดแล้วค่าวัดเปลี่ยนโดยไม่รู้ตัว */
+.cell::-webkit-outer-spin-button,
+.cell::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.cell[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.cell:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(27, 79, 160, 0.2);
+}
+
+/* หลุดสเปก = แดง เส้นซ้ายหนาพอให้เห็นตอนกวาดตา ไม่ย้อมทั้งแถว */
+.cell--ng {
+  border-left-color: var(--red);
+  color: var(--red);
+  font-weight: 600;
+}
+
+.cell--ng:focus {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px rgba(196, 32, 50, 0.2);
+}
+
+/* ── ป้ายผลตัดสิน ── ที่เดียวในระบบที่ใช้สีเขียว ────────────────────────── */
+
+.verdict {
+  display: inline-block;
+  min-width: 2.6rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.verdict--ok {
+  color: var(--green);
+  background: #EAF5EF;
+}
+
+.verdict--ng {
+  color: #fff;
+  background: var(--red);
+}
+
+.verdict--empty {
+  color: var(--muted);
+  background: transparent;
+}
+
+/* ── แถบบันทึกติดขอบล่าง ───────────────────────────────────────────────
+ * ของเดิมปุ่มบันทึกอยู่ท้ายการ์ด ใบยาว ๆ ต้องเลื่อนลงสุดทุกครั้ง */
+
+.savebar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--ink);
+  border-radius: var(--radius);
+}
+
+.savebar__count {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.savebar__spacer {
+  margin-left: auto;
+}
+
+/* ── การ์ดกราฟ ────────────────────────────────────────────────────────── */
+
+.chart-card {
+  border-left: 3px solid transparent;
+}
+
+/* out of control = เหลือง (process เปลี่ยน ของยังไม่เสีย)
+ * ห้ามใช้แดงตรงนี้ แดงสงวนไว้ให้ "หลุดสเปก" อย่างเดียว */
+.chart-card--alert {
+  border-left-color: var(--amber-line);
+  background: var(--amber-tint);
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  padding: var(--sp-2) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.chart-legend__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  white-space: nowrap;
+}
+
+.chart-legend__swatch {
+  width: 1.1rem;
+  height: 0;
+  border-top-width: 2px;
+  border-top-style: solid;
+}
+
+/* รายการกฎที่ผิด — ของเดิมอ่านได้เฉพาะตอน hover จุด ซึ่งจอสัมผัสหน้าไลน์แตะไม่ติด */
+.rule-list {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2);
+  border: 1px solid var(--amber-line);
+  border-radius: var(--radius);
+  background: var(--amber-tint);
+  font-size: var(--fs-xs);
+  color: var(--amber-text);
+  list-style: none;
+}
+
+.rule-list li + li {
+  margin-top: 0.15rem;
+}
+
+.rule-list b {
+  color: var(--ink);
+}
+
+/* ── แถบบอกขอบเขตของกราฟ (กรองเครื่องอยู่) ───────────────────────────── */
+
+/* เหลือง = เรื่อง control limit ตามแกนสีของทั้งระบบ (ห้ามใช้แดง แดง = หลุดสเปก)
+ * ต้องเด่นเท่าคำเตือน provisional เพราะบอกเรื่องเดียวกัน: เส้นลิมิตที่เห็นอยู่ยังไม่ใช่ของชุดนี้ */
+.scope-note {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--amber-line);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--amber-tint);
+  color: var(--amber-text);
+  font-size: var(--fs-sm);
+}
+
+.scope-note b {
+  color: var(--ink);
+}
+
+/* ── รายการ baseline ที่ล็อกไว้ (ราย scope) ในตารางจุดตรวจ ────────────── */
+
+.baseline-scopes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.baseline-scopes li + li {
+  margin-top: 0.1rem;
+}
+
+/* ── แผงอ้างอิงสูตร/กฎ ───────────────────────────────────────────────── */
+
+.spc-ref__toggle {
+  padding: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.spc-ref__body {
+  font-size: var(--fs-sm);
+}
+
+.spc-ref__callout {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--blue);
+  background: var(--blue-tint);
+}
+
+/* auto-fit: จอหน้าไลน์กว้าง ๆ ได้ 2 คอลัมน์ แท็บเล็ตได้คอลัมน์เดียวโดยไม่ต้องเขียน media query */
+.spc-ref__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+}
+
+.spc-ref__h {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.spc-ref__p {
+  margin: var(--sp-2) 0 0;
+  color: var(--muted);
+}
+
+/* สูตร: ชื่อซ้าย สมการขวา — ชิดกันเป็นตารางโดยไม่ต้องใช้ <table> */
+.formula {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) 1fr;
+  gap: 0 var(--sp-2);
+  padding: 0.15rem 0;
+  border-bottom: 1px dotted var(--line);
+}
+
+.formula__name {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.formula__eq {
+  color: var(--blue);
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.formula__note {
+  grid-column: 2;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.spc-ref__rules {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+
+.spc-ref__rules th,
+.spc-ref__rules td {
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.spc-ref__rules th {
+  border-bottom-color: var(--line-strong);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* หมายเลขกฎใช้เหลือง = คอนโทรล ตรงกับสีของจุดที่ผิดกฎบนกราฟและกรอบรายการกฎใต้กราฟ */
+.spc-ref__rules td:first-child {
+  white-space: nowrap;
+  color: var(--amber-text);
+}
+
+.spc-ref__ruleshort {
+  color: var(--muted);
+}
+
+/* ── สถานะว่าง / โหลด ─────────────────────────────────────────────────── */
+
+.empty {
+  padding: var(--sp-5);
+  text-align: center;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+}
+
+/* ── focus ที่มองเห็นจริง ──────────────────────────────────────────────
+ * ทั้งใบกรอกด้วยคีย์บอร์ดอย่างเดียวได้ ถ้าไม่เห็น focus ก็หลงทันที */
+
+:focus-visible {
+  outline: 3px solid rgba(27, 79, 160, 0.45);
+  outline-offset: 1px;
+}
+
+.app-nav :focus-visible {
+  outline-color: var(--amber);
+}
+
+/* ── จังหวะเดียวที่มี motion ในแอป ──────────────────────────────────────
+ * ใบตรวจใหม่เข้ามาทาง socket แล้วจุดนั้นผิดกฎ → เส้นซ้ายการ์ดกะพริบครั้งเดียว */
+
+@keyframes pulse-amber {
+  0%   { border-left-color: var(--amber-line); }
+  35%  { border-left-color: var(--amber); }
+  100% { border-left-color: var(--amber-line); }
+}
+
+.chart-card--pulse {
+  animation: pulse-amber 900ms ease-out 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── จอแคบ ────────────────────────────────────────────────────────────
+ * เครื่องหน้าไลน์บางจุดเป็นจอ 1024 หรือแท็บเล็ต ตารางต้องยังกรอกได้ */
+
+@media (max-width: 991.98px) {
+  .page {
+    padding: var(--sp-3) var(--sp-2) 6rem;
+  }
+
+  .sheet-wrap {
+    max-height: calc(100vh - 16rem);
+  }
+
+  .sheet__piece {
+    width: 4.75rem;
+  }
+
+  .sheet__spec {
+    width: 9rem;
+  }
+
+  .station__row {
+    gap: var(--sp-2);
+  }
+}
+
+/* ── ช่องเลือกที่พิมพ์ค้นหาได้ (SearchSelect) ──────────────────────────────
+ * ลิสต์ลอยทับของข้างล่างด้วย position:absolute — การ์ดที่ครอบอยู่ต้องไม่ overflow:hidden
+ * ไม่งั้นลิสต์จะถูกตัดหายครึ่งตัว */
+
+.ss {
+  position: relative;
+}
+
+/* ลูกศรชี้ลงให้ดูออกว่าเป็นช่องเลือก ไม่ใช่ช่องพิมพ์ธรรมดา — วาดด้วย background
+ * ชุดเดียวกับที่ bootstrap ใช้กับ .form-select จะได้ไม่เพี้ยนจากช่องอื่นในฟอร์ม */
+.ss__input {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%235A6779' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 14px 10px;
+  padding-right: 2.25rem;
+}
+
+.ss__list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(var(--ink-rgb), 0.16);
+}
+
+.ss__opt {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  font-size: var(--fs-sm);
+}
+
+/* ไฮไลต์ตัวที่คีย์บอร์ดชี้อยู่ ต้องเป็นตัวเดียวกับที่เมาส์ hover
+ * (onMouseEnter ย้าย active ตาม) ไม่งั้นมีจุดสนใจสองที่พร้อมกัน */
+.ss__opt--active {
+  background: var(--blue-tint);
+}
+
+.ss__opt--add {
+  color: var(--blue);
+  font-weight: 600;
+  border-top: 1px solid var(--line);
+}
+
+.ss__hint {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ss__empty {
+  padding: 0.5rem 0.75rem;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+/* ── SC Chart (ฟอร์ม SP-QC-214C) — components/ScSheet.js ─────────────────────
+ * หน้าตาเลียนชีต SC ของ Excel: ตารางเส้นบาง ตัวเล็ก อัดแน่น พิมพ์ลง A4 แนวนอนได้
+ * สีตามแกนของทั้งระบบ: ค่าหลุดสเปก = แดง · จุดที่ผิดกฎ OCS = เหลือง (control) */
+.sc {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  padding: var(--sp-3);
+}
+
+.sc table {
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+
+.sc th,
+.sc td {
+  border: 1px solid var(--line-strong);
+  padding: 2px 6px;
+  vertical-align: middle;
+}
+
+.sc th {
+  background: var(--paper);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sc-head {
+  width: 100%;
+  margin-bottom: var(--sp-3);
+}
+
+.sc-head__group {
+  text-align: center;
+  background: var(--blue-tint) !important;
+}
+
+.sc-head__sign {
+  min-width: 7rem;
+  height: 1.6rem;
+}
+
+.sc-head__note {
+  font-weight: 400 !important;
+  text-align: left;
+}
+
+.sc-provisional {
+  color: var(--amber-text);
+}
+
+.sc-grid-wrap {
+  overflow-x: auto;
+  margin-bottom: var(--sp-3);
+}
+
+.sc-grid td {
+  min-width: 3.4rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.sc-grid tr:first-child td,
+.sc-grid tr:nth-child(2) td,
+.sc-grid tr:nth-child(3) td {
+  text-align: center;
+}
+
+.sc-grid__side {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-align: center;
+}
+
+.sc-grid__stat td {
+  font-weight: 600;
+  background: var(--blue-tint);
+}
+
+.sc-grid__rule {
+  font-weight: 400 !important;
+}
+
+.sc-grid__ocs td {
+  text-align: center !important;
+  color: var(--amber-text);
+}
+
+.sc-grid tr.sc-grid__ocs:nth-last-child(6) th,
+.sc-grid tr.sc-grid__ocs:nth-last-child(6) td {
+  border-top: 2px solid var(--line-strong);
+}
+
+.sc-cell--ng {
+  color: var(--red);
+  font-weight: 700;
+  background: rgba(var(--red-rgb), 0.08);
+}
+
+.sc-cell--ocs {
+  background: var(--amber-tint) !important;
+  color: var(--amber-text);
+  font-weight: 700;
+}
+
+.sc-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: start;
+  margin-bottom: var(--sp-3);
+}
+
+.sc-caption {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.sc-stats td {
+  text-align: right;
+  min-width: 5.5rem;
+}
+
+.sc-stats__note {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-align: left !important;
+  white-space: normal;
+  max-width: 12rem;
+}
+
+.sc-section {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  margin: var(--sp-3) 0 var(--sp-2);
+}
+
+.sc-events {
+  width: 100%;
+}
+
+.sc-events th {
+  white-space: normal;
+  vertical-align: bottom;
+}
+
+.sc-events__text {
+  white-space: pre-line;
+  min-width: 6rem;
+}
+
+.sc-events__missing {
+  color: var(--amber-text);
+  background: var(--amber-tint);
+}
+
+.sc-footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: var(--sp-2);
+}
+
+@media (max-width: 991.98px) {
+  .sc-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── พิมพ์ — หน้า SC Chart ออกเป็นฟอร์มกระดาษ A4 แนวนอน ──────────────────────
+ * ซ่อนเมนู/แถบเลือก/ปุ่ม เหลือแต่ตัวฟอร์ม · ตารางที่เลื่อนแนวนอนได้บนจอต้องแผ่เต็มตอนพิมพ์ */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  .app-nav,
+  .no-print {
+    display: none !important;
+  }
+
+  .page {
+    padding: 0 !important;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  .sc {
+    border: none;
+    padding: 0;
+  }
+
+  .sc-grid-wrap {
+    overflow: visible;
+  }
+
+  .sc table {
+    font-size: 7pt;
+  }
+
+  .sc-grid td {
+    min-width: 0;
+  }
+
+  .sc-body {
+    grid-template-columns: minmax(0, 1fr) auto;
+    break-inside: avoid;
+  }
+
+  .sc-cell--ng,
+  .sc-cell--ocs,
+  .sc-grid__stat td,
+  .sc th {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
+/* ── ตารางแบบชีต Input (InputGrid + ใบตรวจแนวนอน) ─────────────────────────
+ * จุดตรวจเป็นคอลัมน์ ชิ้นเป็นแถว เหมือนชีต Input ของ Excel
+ * หัวตารางหลายแถว → ตรึงทั้ง <thead> (ไม่ใช่ทีละ th ซึ่งจะซ้อนทับกันที่ top:0)
+ * คอลัมน์ข้อมูลฝั่งซ้ายตรึงด้วย left ที่ component คำนวณจากความกว้างคงที่ */
+
+.igrid-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: auto;
+  max-height: calc(100vh - 14rem);
+}
+
+.igrid {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.25;
+}
+
+.igrid th,
+.igrid td {
+  padding: 0.3rem 0.45rem;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  background: var(--surface);
+}
+
+.igrid thead {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.igrid thead th,
+.igrid thead td {
+  background: var(--blue-tint);
+  font-size: var(--fs-xs);
+}
+
+.igrid__left {
+  position: sticky;
+  z-index: 2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.igrid thead .igrid__left {
+  z-index: 4;
+}
+
+.igrid__rowlabel {
+  text-align: right;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.igrid__colhead,
+.igrid__cp {
+  background: var(--ink) !important;
+  color: #fff;
+  font-weight: 600;
+}
+
+.igrid__head,
+.igrid__cp {
+  min-width: 7rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.igrid__cp {
+  white-space: normal;
+  vertical-align: bottom;
+}
+
+.igrid__char {
+  display: block;
+  font-weight: 400;
+  opacity: 0.8;
+}
+
+.igrid__seq {
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.igrid__ctf {
+  margin-left: 0.25rem;
+  padding: 0 0.25rem;
+  border-radius: 3px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 0.65rem;
+}
+
+.igrid__meta {
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.igrid__val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.igrid__ng {
+  color: var(--red);
+  font-weight: 700;
+  background: rgba(var(--red-rgb), 0.08) !important;
+}
+
+.igrid tbody tr.igrid__band td {
+  background: #F6F8FB;
+}
+
+/* เส้นหนาคั่นระหว่างใบตรวจ — ใบหนึ่งมีหลายแถว ต้องเห็นว่าจบใบตรงไหน */
+.igrid tbody tr.igrid__first td {
+  border-top: 2px solid var(--line-strong);
+}
+
+.igrid tbody tr.row--voided td {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+/* ── ใบตรวจแนวนอน — ส่วนที่ต่างจากตารางประวัติ ── */
+
+/* จุดที่ "ทำแล้วรอบนี้" (ตาม checkpoints.frequency) — ยังกรอกได้ แค่ไม่บังคับ */
+.igrid .igrid__col--done {
+  background: #EEF0F3 !important;
+  color: var(--muted);
+}
+
+.igrid__cp.igrid__col--done {
+  background: #5A6779 !important;
+  color: #fff;
+}
+
+.igrid__due-badge {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.65rem;
+  font-weight: 400;
+  opacity: 0.9;
+}
+
+.igrid__entry {
+  padding: 0.2rem !important;
+}
+
+.igrid__entry .cell {
+  max-width: none;
+  min-width: 6rem;
+}
+
+.igrid__sum td,
+.igrid__sum th {
+  background: var(--blue-tint);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-size: var(--fs-xs);
+}
+
+.igrid__sum .verdict {
+  font-size: var(--fs-xs);
+}
+
+/* ── ตารางสถานะของ Dashboard (StatusBoard) ─────────────────────────────────
+ * 1 แถว = 1 จุดตรวจ · แดง = สเปก (NG) · เหลือง = คอนโทรล (OCS / ต้องดู) · ปกติไม่มีสี */
+
+.status-board-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow-x: auto;
+}
+
+.status-board {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--fs-sm);
+}
+
+.status-board th,
+.status-board td {
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.status-board thead th {
+  background: var(--ink);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-board tbody tr {
+  height: 44px;
+}
+
+.status-board tbody tr td:first-child {
+  border-left: 3px solid transparent;
+}
+
+.status-board tbody tr.status-board__row--ng td:first-child {
+  border-left-color: var(--red);
+}
+
+.status-board tbody tr.status-board__row--ocs td:first-child,
+.status-board tbody tr.status-board__row--watch td:first-child {
+  border-left-color: var(--amber-line);
+}
+
+.status-board tbody tr.status-board__row--ng {
+  background: rgba(var(--red-rgb), 0.05);
+}
+
+.status-board tbody tr.status-board__row--ocs {
+  background: var(--amber-tint);
+}
+
+.status-board__sub {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.status-board__spec {
+  width: 13rem;
+}
+
+.status-board__trend {
+  width: 160px;
+}
+
+.status-board__warn {
+  color: var(--amber-text);
+  font-weight: 600;
+}
+
+.status-board__bad {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.status-pill {
+  display: inline-block;
+  min-width: 3.5rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-align: center;
+  border: 1px solid transparent;
+}
+
+.status-pill--ok {
+  color: var(--muted);
+  border-color: var(--line);
+}
+
+.status-pill--ng {
+  background: var(--red);
+  color: #fff;
+}
+
+.status-pill--ocs {
+  background: var(--amber);
+  color: var(--ink);
+}
+
+.status-pill--watch {
+  background: var(--amber-tint);
+  color: var(--amber-text);
+  border-color: var(--amber-line);
+}
+
+.status-pill--nodata {
+  color: var(--muted);
+  border-style: dashed;
+  border-color: var(--line-strong);
+}
+
+@media (max-width: 991.98px) {
+  .status-board__spec,
+  .status-board__trend {
+    display: none;
+  }
 }

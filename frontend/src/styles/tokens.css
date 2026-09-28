@@ -1,0 +1,345 @@
+/* frontend/src/styles/tokens.css — ตัวแปรของธีมทั้งระบบอยู่ที่ไฟล์นี้ที่เดียว
+ *
+ * ⚠️ ต้องถูก import "หลัง" bootstrap.min.css เสมอ ไม่งั้นบล็อก override ข้างล่างแพ้
+ *    ลำดับที่ถูกต้องอยู่ใน frontend/src/index.js
+ *
+ * หลักการของสีในระบบนี้ (ดู CLAUDE.md หัวข้อ "spec limit ≠ control limit"):
+ *   แดง    = สเปก    → หลุดแล้วเป็นของเสีย (USL/LSL, ผล NG)
+ *   เหลือง = คอนโทรล → process กำลังเปลี่ยน ของยังไม่เสีย (UCL/LCL, กฎ OCS, provisional)
+ *   น้ำเงิน = ค่าที่วัดได้กับโครงหน้าจอ
+ * สองแกนนี้ห้ามใช้สีปนกัน — ของเดิมใช้แดงตัวเดียวกันทั้งสองอย่าง
+ */
+
+:root {
+  /* ── สีหลัก ─────────────────────────────────────────────────────────── */
+  --ink: #0B1F3A;
+  --ink-rgb: 11, 31, 58;
+  --blue: #1B4FA0;
+  --blue-rgb: 27, 79, 160;
+  --blue-tint: #EAF0F9;
+
+  --red: #C42032;
+  --red-rgb: 196, 32, 50;
+
+  /* ⚠️ เหลืองมี 3 ค่าโดยตั้งใจ — เหลืองสว่างบนพื้นขาวได้ contrast แค่ ~2:1 ไม่มีทางผ่านเกณฑ์
+   *    (#ffc107 ของ bootstrap ที่ใช้อยู่เดิมได้ 1.6:1) จึงแยกค่าตามพื้นที่วางบน */
+  --amber: #F5B324;        /* 8.9:1 บน --ink — ใช้บนพื้นเข้มเท่านั้น */
+  --amber-rgb: 245, 179, 36;
+  --amber-line: #C87F00;   /* 3.2:1 บนขาว — เส้น/ขอบ/จุด ผ่านเกณฑ์ non-text 3:1 */
+  --amber-text: #A06A00;   /* 4.6:1 บนขาว — ข้อความสีเหลือง */
+  --amber-tint: #FDF4E0;   /* ใช้เป็นพื้นเท่านั้น */
+
+  /* เขียวใช้ที่เดียวในระบบ: ป้ายผลตัดสิน OK — ห้ามเอาไปทำพื้นหรือขอบการ์ด */
+  --green: #1F7A4D;
+  --green-rgb: 31, 122, 77;
+
+  /* ── พื้นและเส้น ──────────────────────────────────────────────────────── */
+  --paper: #F7F8FA;
+  --surface: #FFFFFF;
+  --line: #D3D9E3;
+  --line-strong: #B6C0CE;
+  --muted: #5A6779;
+
+  /* ── ตัวอักษร ────────────────────────────────────────────────────────── */
+  --fs-xs: 0.75rem;    /* 12 */
+  --fs-sm: 0.8125rem;  /* 13 */
+  --fs-md: 0.9375rem;  /* 15 — body */
+  --fs-lg: 1.125rem;   /* 18 */
+  --fs-xl: 1.375rem;   /* 22 */
+  --fs-2xl: 1.75rem;   /* 28 */
+
+  /* ── ระยะและมุม ──────────────────────────────────────────────────────── */
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --radius: 4px;       /* แผงเครื่องมือวัด ไม่ใช่การ์ดมนแบบ SaaS */
+}
+
+/* ══ map ตัวแปรของ bootstrap 5.3 มาที่ token ข้างบน ════════════════════════
+ *
+ * utility อย่าง .text-danger / .bg-success / .border-primary อ่าน --bs-*-rgb
+ * ตรง ๆ จึงเปลี่ยนตามทันทีโดยไม่ต้องแก้ JSX
+ * ส่วนที่ bootstrap คอมไพล์ค่าดิบใส่คลาสไว้ (.btn-* .table-* .alert-*)
+ * ต้อง override ทีละคลาสข้างล่าง — พวกนั้นไม่ได้อ่าน --bs-primary
+ */
+:root {
+  --bs-primary: var(--blue);
+  --bs-primary-rgb: var(--blue-rgb);
+  --bs-danger: var(--red);
+  --bs-danger-rgb: var(--red-rgb);
+  --bs-success: var(--green);
+  --bs-success-rgb: var(--green-rgb);
+  --bs-warning: var(--amber-text);
+  --bs-warning-rgb: 160, 106, 0;
+  --bs-secondary: var(--muted);
+  --bs-secondary-rgb: 90, 103, 121;
+  --bs-dark: var(--ink);
+  --bs-dark-rgb: var(--ink-rgb);
+
+  --bs-body-color: var(--ink);
+  --bs-body-color-rgb: var(--ink-rgb);
+  --bs-body-bg: var(--paper);
+  --bs-secondary-color: var(--muted);
+  --bs-emphasis-color: var(--ink);
+
+  --bs-border-color: var(--line);
+  --bs-border-radius: var(--radius);
+  --bs-border-radius-sm: var(--radius);
+  --bs-border-radius-lg: var(--radius);
+
+  --bs-link-color: var(--blue);
+  --bs-link-color-rgb: var(--blue-rgb);
+  --bs-link-hover-color: var(--ink);
+
+  /* Alert เป็น variant family เดียวที่ bootstrap 5.3 ขับด้วยตัวแปรล้วน แก้ที่นี่พอ */
+  --bs-warning-text-emphasis: var(--amber-text);
+  --bs-warning-bg-subtle: var(--amber-tint);
+  --bs-warning-border-subtle: var(--amber-line);
+}
+
+/* ⚠️ อย่าไปตั้ง --bs-focus-ring-color หวังว่าจะคุม focus ของฟอร์ม — มันไม่คุม
+ * ตัวแปรนั้นมีที่ใช้ที่เดียวคือ utility class .focus-ring ซึ่งแอปนี้ไม่ได้ใช้เลย
+ * ส่วน .form-control:focus / .form-check-input:focus ของ bootstrap ฝังค่าดิบไว้
+ * จึงต้อง override ตรง ๆ ข้างล่าง ห้ามลบทิ้งเพราะ "ไม่อยากมีเงา"
+ * — ทั้งใบตรวจกรอกด้วยคีย์บอร์ด ถ้าไม่เห็น focus คือใช้งานไม่ได้เลย */
+
+/* ── ปุ่ม ── .btn-* ไม่อ่าน --bs-primary ต้องยัด --bs-btn-* เอง ─────────── */
+.btn-primary {
+  --bs-btn-bg: var(--blue);
+  --bs-btn-border-color: var(--blue);
+  --bs-btn-hover-bg: var(--ink);
+  --bs-btn-hover-border-color: var(--ink);
+  --bs-btn-active-bg: var(--ink);
+  --bs-btn-active-border-color: var(--ink);
+  --bs-btn-disabled-bg: var(--line-strong);
+  --bs-btn-disabled-border-color: var(--line-strong);
+  --bs-btn-disabled-color: #fff;
+}
+
+.btn-outline-primary {
+  --bs-btn-color: var(--blue);
+  --bs-btn-border-color: var(--blue);
+  --bs-btn-hover-bg: var(--blue);
+  --bs-btn-hover-border-color: var(--blue);
+  --bs-btn-active-bg: var(--blue);
+  --bs-btn-active-border-color: var(--blue);
+}
+
+.btn-danger {
+  --bs-btn-bg: var(--red);
+  --bs-btn-border-color: var(--red);
+  --bs-btn-hover-bg: #9E1928;
+  --bs-btn-hover-border-color: #9E1928;
+  --bs-btn-active-bg: #9E1928;
+  --bs-btn-active-border-color: #9E1928;
+}
+
+.btn-outline-danger {
+  --bs-btn-color: var(--red);
+  --bs-btn-border-color: var(--red);
+  --bs-btn-hover-bg: var(--red);
+  --bs-btn-hover-border-color: var(--red);
+}
+
+.btn-success {
+  --bs-btn-bg: var(--green);
+  --bs-btn-border-color: var(--green);
+  --bs-btn-hover-bg: #17603C;
+  --bs-btn-hover-border-color: #17603C;
+  --bs-btn-active-bg: #17603C;
+  --bs-btn-active-border-color: #17603C;
+}
+
+.btn-outline-success {
+  --bs-btn-color: var(--green);
+  --bs-btn-border-color: var(--green);
+  --bs-btn-hover-bg: var(--green);
+  --bs-btn-hover-border-color: var(--green);
+}
+
+/* warning = เหลืองบนพื้นขาว ต้องใช้ตัวเข้มเสมอ และตัวอักษรขาว */
+.btn-warning {
+  --bs-btn-bg: var(--amber-text);
+  --bs-btn-border-color: var(--amber-text);
+  --bs-btn-color: #fff;
+  --bs-btn-hover-bg: #7F5400;
+  --bs-btn-hover-border-color: #7F5400;
+  --bs-btn-hover-color: #fff;
+  --bs-btn-active-bg: #7F5400;
+  --bs-btn-active-border-color: #7F5400;
+  --bs-btn-active-color: #fff;
+}
+
+.btn-outline-warning {
+  --bs-btn-color: var(--amber-text);
+  --bs-btn-border-color: var(--amber-text);
+  --bs-btn-hover-bg: var(--amber-text);
+  --bs-btn-hover-border-color: var(--amber-text);
+  --bs-btn-hover-color: #fff;
+  --bs-btn-active-bg: var(--amber-text);
+  --bs-btn-active-color: #fff;
+}
+
+.btn-secondary {
+  --bs-btn-bg: var(--muted);
+  --bs-btn-border-color: var(--muted);
+  --bs-btn-hover-bg: var(--ink);
+  --bs-btn-hover-border-color: var(--ink);
+}
+
+.btn-link {
+  --bs-btn-color: var(--blue);
+  --bs-btn-hover-color: var(--ink);
+  text-decoration: none;
+}
+
+/* ── ตาราง ── .table-* คอมไพล์ค่าดิบไว้เหมือนกัน ────────────────────────── */
+.table {
+  --bs-table-border-color: var(--line);
+  --bs-table-striped-bg: rgba(11, 31, 58, 0.025);
+  --bs-table-hover-bg: var(--blue-tint);
+}
+
+.table-dark {
+  --bs-table-bg: var(--ink);
+  --bs-table-border-color: rgba(255, 255, 255, 0.15);
+  --bs-table-color: #fff;
+}
+
+.table-light {
+  --bs-table-bg: var(--blue-tint);
+  --bs-table-color: var(--ink);
+  --bs-table-border-color: var(--line);
+}
+
+.table-primary {
+  --bs-table-bg: var(--blue-tint);
+  --bs-table-color: var(--ink);
+}
+
+/* ⚠️ แถว NG ของเดิมย้อมแดงทั้งแถวจนตัวเลขช่องอื่นอ่านไม่ออก
+ *    เหลือไว้จาง ๆ พอให้กวาดตาเจอ — ตัวชี้จริงคือเส้นแดงซ้ายเฉพาะช่องที่ผิด */
+.table-danger {
+  --bs-table-bg: #FCECEE;
+  --bs-table-color: var(--ink);
+}
+
+/* ── Alert ── ตัว warning ของ bootstrap อ่านไม่ออกบนพื้นอ่อน แก้ทั้งชุด ──── */
+.alert-warning {
+  --bs-alert-color: var(--amber-text);
+  --bs-alert-bg: var(--amber-tint);
+  --bs-alert-border-color: var(--amber-line);
+}
+
+.alert-danger {
+  --bs-alert-color: var(--red);
+  --bs-alert-bg: #FCECEE;
+  --bs-alert-border-color: var(--red);
+}
+
+.alert-success {
+  --bs-alert-color: var(--green);
+  --bs-alert-bg: #EAF5EF;
+  --bs-alert-border-color: var(--green);
+}
+
+.alert-light {
+  --bs-alert-color: var(--muted);
+  --bs-alert-bg: var(--surface);
+  --bs-alert-border-color: var(--line);
+}
+
+/* ── Badge ── .bg-* อ่าน --bs-*-rgb อยู่แล้ว เหลือแค่ทรง ───────────────── */
+.badge {
+  --bs-badge-font-weight: 600;
+  --bs-badge-border-radius: var(--radius);
+  letter-spacing: 0.01em;
+}
+
+.badge.bg-light {
+  color: var(--ink) !important;
+  border: 1px solid var(--line);
+}
+
+/* ── ฟอร์ม ─────────────────────────────────────────────────────────────── */
+.form-control,
+.form-select {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.form-control:focus,
+.form-select:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(27, 79, 160, 0.2);
+}
+
+.form-control.is-invalid,
+.was-validated .form-control:invalid {
+  border-color: var(--red);
+  background-image: none; /* ไอคอนตกใจของ bootstrap กินที่ในช่องตัวเลขแคบ ๆ */
+}
+
+.form-control.is-invalid:focus {
+  box-shadow: 0 0 0 3px rgba(196, 32, 50, 0.2);
+}
+
+.form-check-input:checked {
+  background-color: var(--blue);
+  border-color: var(--blue);
+}
+
+.form-check-input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(27, 79, 160, 0.2);
+}
+
+/* ── การ์ด ── ไม่มีเงาที่ไหนเลยทั้งแอป ลำดับชั้นมาจากเส้นขอบกับพื้น ──────── */
+.card {
+  --bs-card-border-color: var(--line);
+  --bs-card-border-radius: var(--radius);
+  --bs-card-inner-border-radius: var(--radius);
+  --bs-card-cap-bg: var(--surface);
+  box-shadow: none;
+}
+
+.card-header {
+  border-bottom-color: var(--line);
+  font-weight: 600;
+}
+
+.shadow,
+.shadow-sm,
+.shadow-lg {
+  box-shadow: none !important;
+}
+
+/* ── Navbar ───────────────────────────────────────────────────────────
+ * ⚠️ ไอคอนปุ่ม toggler ของ bootstrap เป็น data-URI ที่ฝังสีไว้ใน URL
+ *    เปลี่ยนสีด้วยตัวแปรสีธรรมดาไม่ได้ ต้องเขียน data-URI ใหม่ทั้งอัน */
+.navbar-dark,
+.app-nav {
+  --bs-navbar-color: rgba(255, 255, 255, 0.72);
+  --bs-navbar-hover-color: #fff;
+  --bs-navbar-active-color: #fff;
+  --bs-navbar-brand-color: #fff;
+  --bs-navbar-brand-hover-color: #fff;
+  --bs-navbar-toggler-border-color: rgba(255, 255, 255, 0.25);
+  --bs-navbar-toggler-icon-bg: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba%28255,255,255,0.85%29' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
+/* ── Modal / Nav tabs ─────────────────────────────────────────────────── */
+.modal-content {
+  --bs-modal-border-color: var(--line);
+  --bs-modal-border-radius: var(--radius);
+}
+
+.nav-tabs {
+  --bs-nav-tabs-border-color: var(--line);
+  --bs-nav-tabs-link-active-color: var(--ink);
+  --bs-nav-tabs-link-active-border-color: var(--line) var(--line) var(--surface);
+  --bs-nav-link-color: var(--muted);
+  --bs-nav-link-hover-color: var(--ink);
+}
