@@ -23,8 +23,10 @@ const buildInspectionFilter = (f = {}, { includeVoided = false } = {}) => {
 
   if (!includeVoided) where.push('i.voided_at IS NULL');
 
+  // ความหมายเท่ากับ DATE(i.inspected_at) BETWEEN from AND to เป๊ะ แต่ไม่ห่อคอลัมน์ด้วยฟังก์ชัน
+  // index (model_id, inspected_at) จึงใช้ช่วงเวลาได้ — ห่อ DATE() เมื่อไหร่ต้องสแกนทุกใบของ item
   if (f.from && f.to) {
-    where.push('DATE(i.inspected_at) BETWEEN ? AND ?');
+    where.push('i.inspected_at >= ? AND i.inspected_at < DATE_ADD(?, INTERVAL 1 DAY)');
     params.push(f.from, f.to);
   }
   if (f.mo_no) {

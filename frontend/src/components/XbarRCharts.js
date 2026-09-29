@@ -9,6 +9,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
 } from 'recharts';
 import { capTone } from '../utils/capability';
+import { fmtDateTime } from '../utils/dateFormat';
 
 // ⚠️ ต้องตรงกับ token ใน src/styles/tokens.css — recharts รับเป็นสตริงสีเท่านั้น
 //    ใส่ var(--x) ตรง ๆ ไม่ได้เพราะค่าถูกเขียนลง attribute ของ SVG
@@ -68,7 +69,7 @@ const ChartTooltip = ({ active, payload, unit }) => {
       <div>ผู้ตรวจ: {m.inspector ?? '—'}</div>
       <div>เครื่อง: {m.machine ?? '—'}</div>
       <div className="text-muted">
-        {m.inspectedAt ? new Date(m.inspectedAt).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }) : '—'}
+        {fmtDateTime(m.inspectedAt)}
       </div>
     </div>
   );

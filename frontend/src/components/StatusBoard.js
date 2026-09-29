@@ -15,6 +15,7 @@ import { C, fmt, fmtCap, decimalsOf } from './XbarRCharts';
 import { capTone } from '../utils/capability';
 import { RULE_BY_ID } from '../utils/spcRules';
 import { scHref } from '../utils/useModelParam';
+import { fmtDateTime } from '../utils/dateFormat';
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const SPARK_POINTS = 30;
@@ -80,9 +81,7 @@ const Sparkline = ({ chart }) => {
   );
 };
 
-const fmtTime = (d) => (d
-  ? new Date(d).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-  : '');
+const fmtTime = (d) => fmtDateTime(d, '');
 
 const CAP_STYLE = { below: 'status-board__warn', poor: 'status-board__bad' };
 

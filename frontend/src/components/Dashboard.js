@@ -19,7 +19,8 @@
 // ⚠️ ลำดับการ์ดเรียงตาม seq_no เสมอ ห้ามเรียงใหม่ตามสถานะ — socket ดันของใหม่เข้ามาได้ตลอด
 //    ถ้าเรียงตามสถานะ การ์ดจะสลับที่ใต้เมาส์คนที่กำลังอ่านอยู่ จุดที่ผิดใช้เส้นเหลืองซ้ายชี้แทน
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Container, Row, Col, Card, Alert, Spinner, Button } from 'react-bootstrap';
+import { Container, Row, Col, Card, Alert, Spinner, Button, Form } from 'react-bootstrap';
+import { useSearchParams } from 'react-router-dom';
 import { apiCall } from '../utils/api';
 import { on, joinModel, leaveModel } from '../utils/socket';
 import { normalizeRows, normalizeChart } from '../utils/normalize';
@@ -28,10 +29,59 @@ import ControlChart from './ControlChart';
 import SearchSelect from './SearchSelect';
 import SpcReference from './SpcReference';
 import StatusBoard, { statusOf } from './StatusBoard';
+import DateInput from './DateInput';
+import { fmtTime, isoToDmy } from '../utils/dateFormat';
 
 // ⚠️ ตัวกรองต้องมีทางกลับไป "ทุกเครื่อง" เป็นแถวจริงในลิสต์ ไม่ใช่แค่ placeholder
 //    (placeholder เลือกกลับไม่ได้เมื่อเลือกอะไรไปแล้ว — กฎเดียวกับตัวกรองที่ ReportPage)
 const ALL_MACHINES = { value: '', label: 'ทุกเครื่อง' };
+
+// ช่วงข้อมูลที่ Dashboard ดึง (?range=) — เดิมดึงทุกใบตั้งแต่วันแรก ยิ่งข้อมูลสะสมยิ่งช้า
+// ⚠️ เส้น control limit ที่ล็อก baseline แล้วไม่ขึ้นกับช่วงนี้ · แต่ provisional กับ Cp/Cpk
+//    คำนวณจากข้อมูลในช่วงนี้ (หน้ารายงาน/SC ใช้ช่วงของตัวเอง ตัวเลขจึงต่างกันได้)
+const RANGE_DEFAULT = '30';
+const RANGES = [
+  { value: '7', label: '7 วันล่าสุด' },
+  { value: '30', label: '30 วันล่าสุด' },
+  { value: '90', label: '90 วันล่าสุด' },
+  { value: 'all', label: 'ทั้งหมด (ช้า)' },
+  { value: 'custom', label: 'กำหนดเอง…' },
+];
+
+// วันที่ YYYY-MM-DD ตามเวลาไทย ย้อนหลัง n-1 วันจากวันนี้ (รวมวันนี้ = n วัน)
+const thaiDate = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(d);
+const lastDays = (days) => {
+  const to = thaiDate(new Date());
+  const from = new Date(`${to}T00:00:00Z`);
+  from.setUTCDate(from.getUTCDate() - (days - 1));
+  return { from: from.toISOString().slice(0, 10), to };
+};
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+// ช่วงกำหนดเองใช้ได้ไหม — null = ใช้ได้ · string = เหตุผลที่ยังโหลดไม่ได้ (โชว์บนจอ)
+// ⚠️ ไม่ครบ = ไม่โหลด ห้าม fallback เงียบ ๆ ไปช่วงอื่น (จอบอกว่ากำหนดเองแต่แสดงอีกช่วง)
+//    และห้ามส่งไปครึ่งเดียว — backend กรองวันเมื่อได้ครบทั้งคู่เท่านั้น ครึ่งเดียว = ดึงทั้งหมด
+const customIssue = (from, to) => {
+  if (!ISO_DATE.test(from) || !ISO_DATE.test(to)) return 'เลือกวันเริ่มและวันสิ้นสุดให้ครบ';
+  if (from > to) return 'วันเริ่มต้องไม่เกินวันสิ้นสุด';
+  return null;
+};
+
+const rangeQuery = (range, from, to) => {
+  if (range === 'all') return [];
+  const r = range === 'custom' ? { from, to } : lastDays(Number(range) || Number(RANGE_DEFAULT));
+  return [`from=${r.from}`, `to=${r.to}`];
+};
+
+// ⚠️ ค่าว่างคือ "ไม่กรอง" ไม่ใช่ "กรองด้วยค่าว่าง" — ส่ง machine_id= เปล่า ๆ ไปเมื่อไหร่
+//    backend อ่านเป็น falsy แล้วไม่กรองให้อยู่ดี แต่ URL จะโกหกว่ากรองอยู่ (กฎเดียวกับ ReportPage)
+// ⚠️ loadAll กับ reloadCheckpoints (socket) ต้องใช้ตัวนี้ตัวเดียวกัน ไม่งั้นกราฟที่โหลดซ้ำ
+//    จะเป็นคนละช่วง/คนละเครื่องกับกราฟข้าง ๆ โดยไม่มีอะไรบอก
+const viewQuery = (machine, { range, from, to }, extra = []) => {
+  const q = [...extra, ...rangeQuery(range, from, to)];
+  if (machine) q.push(`machine_id=${encodeURIComponent(machine)}`);
+  return q.length ? `?${q.join('&')}` : '';
+};
 
 // event ที่เข้ามากระทบสิ่งที่จอนี้แสดงอยู่ไหม
 //
@@ -56,6 +106,27 @@ const Dashboard = () => {
   const [machineId, setMachineId] = useUrlParam('machine');
   // มุมมองอยู่ใน URL — จอหน้าไลน์บุ๊กมาร์กแบบที่ต้องการได้ (ค่าว่าง = ตารางสถานะ)
   const [view, setView] = useUrlParam('view');
+  const [params, setParams] = useSearchParams();
+  const rangeParam = params.get('range') ?? '';
+  const range = RANGES.some((r) => r.value === rangeParam) ? rangeParam : RANGE_DEFAULT;
+  const from = range === 'custom' ? params.get('from') ?? '' : '';
+  const to = range === 'custom' ? params.get('to') ?? '' : '';
+  const rangeIssue = range === 'custom' ? customIssue(from, to) : null;
+  // ⚠️ range/from/to ต้องเขียนใน setParams ครั้งเดียว — setSearchParams ของ react-router ส่ง
+  //    searchParams ตัวใน closure เข้า updater เรียกติดกันหลายครั้งใน tick เดียวตัวหลังทับตัวแรก
+  const setRange = useCallback((next) => {
+    setParams((prev) => {
+      const q = new URLSearchParams(prev);
+      const put = (k, v) => (v ? q.set(k, v) : q.delete(k));
+      put('range', next.range === RANGE_DEFAULT ? '' : next.range);
+      put('from', next.range === 'custom' ? next.from : '');
+      put('to', next.range === 'custom' ? next.to : '');
+      return q;
+    }, { replace: true, preventScrollReset: true });
+  }, [setParams]);
+  const rangeLabel = range === 'custom'
+    ? (rangeIssue ? 'ช่วงกำหนดเอง' : `${isoToDmy(from)} – ${isoToDmy(to)}`)
+    : RANGES.find((r) => r.value === range).label.replace(' (ช้า)', '');
   const showCharts = view === 'charts';
   const [charts, setCharts] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -68,6 +139,8 @@ const Dashboard = () => {
   modelIdRef.current = modelId;
   const machineIdRef = useRef('');
   machineIdRef.current = machineId;
+  const rangeRef = useRef({ range: RANGE_DEFAULT, from: '', to: '' });
+  rangeRef.current = { range, from, to };
 
   // ⚠️ ดึงด้วย ?all=1 โดยตั้งใจ — ลิงก์จากหน้ารายงานพา ?model= ของรุ่นที่ถูกปิดใช้งานมาได้
   //    ถ้าดึงเฉพาะรุ่นที่ active ช่องเลือกจะว่างทั้งที่กราฟโหลดขึ้น อธิบายตัวเองไม่ได้เลย
@@ -116,22 +189,35 @@ const Dashboard = () => {
     return mc ? `${mc.code} — ${mc.name}` : '';
   }, [machines, machineId]);
 
-  // ⚠️ ค่าว่างคือ "ไม่กรอง" ไม่ใช่ "กรองด้วยค่าว่าง" — ส่ง machine_id= เปล่า ๆ ไปเมื่อไหร่
-  //    backend อ่านเป็น falsy แล้วไม่กรองให้อยู่ดี แต่ URL จะโกหกว่ากรองอยู่ (กฎเดียวกับ ReportPage)
-  const machineQuery = (machine) => (machine ? `?machine_id=${encodeURIComponent(machine)}` : '');
-
   // โหลดกราฟทุกจุดของรุ่น — ใช้ /reports/model/:id เพราะดึงค่าวัดทีเดียวแล้วแยกให้
-  const loadAll = useCallback(async (id, machine) => {
-    if (!id) return setCharts([]);
+  // lite=1 = ไม่เอารายการใบตรวจ (Dashboard ไม่ได้ใช้)
+  //
+  // ⚠️ reqRef กัน response เก่า — เปลี่ยน item A → B แล้ว A ตอบช้ากว่า ข้อมูลของ A จะทับ B
+  //    แล้วค้างอยู่ใต้ชื่อ B · ทุก set* หลัง await ต้องเช็คว่ายังเป็นคำขอล่าสุด (รวม reloadCheckpoints)
+  // ⚠️ ล้างกราฟทันทีเฉพาะตอนเปลี่ยน item — เปลี่ยนแค่เครื่อง/ช่วง หรือ master_updated โหลดซ้ำ
+  //    ไม่ล้าง (จอหน้าไลน์จะได้ไม่กะพริบ ระหว่างนั้นโชว์ spinner แทนกราฟอยู่แล้ว)
+  const reqRef = useRef(0);
+  const loadedIdRef = useRef(null);
+  const loadAll = useCallback(async (id, machine, rng) => {
+    const my = ++reqRef.current;
+    if (String(id) !== String(loadedIdRef.current)) {
+      setCharts([]);
+      setError(null);
+      loadedIdRef.current = id;
+    }
+    if (!id) { setLoading(false); return; }
     setLoading(true);
     try {
-      const data = await apiCall(`/reports/model/${id}${machineQuery(machine)}`);
+      const data = await apiCall(`/reports/model/${id}${viewQuery(machine, rng, ['lite=1'])}`);
+      if (my !== reqRef.current) return;
       setCharts(data.charts.map(normalizeChart));
       setError(null);
     } catch (e) {
+      if (my !== reqRef.current) return;
+      setCharts([]);
       setError(e.message);
     } finally {
-      setLoading(false);
+      if (my === reqRef.current) setLoading(false);
     }
   }, []);
 
@@ -140,16 +226,23 @@ const Dashboard = () => {
   //    จนหน้าจอมีทั้งกราฟที่กรองและไม่กรองปนกันโดยไม่มีอะไรบอก — อ่านจาก ref เพราะ handler
   //    ของ socket ถูกผูกครั้งเดียว ค่าใน closure จะค้างอยู่ที่ตอนผูก
   const reloadCheckpoints = useCallback(async (ids) => {
-    const q = machineQuery(machineIdRef.current);
+    const my = reqRef.current;
+    const q = viewQuery(machineIdRef.current, rangeRef.current);
     const fresh = await Promise.all(
       ids.map((id) => apiCall(`/charts/${id}${q}`).then(normalizeChart).catch(() => null))
     );
+    // มี loadAll ใหม่เกิดขึ้นระหว่างรอ (เปลี่ยน item/เครื่อง/ช่วง) = ผลนี้เป็นของมุมมองเก่า ทิ้ง
+    if (my !== reqRef.current) return;
     setCharts((prev) =>
       prev.map((c) => fresh.find((f) => f?.checkpoint?.id === c.checkpoint?.id) ?? c)
     );
   }, []);
 
-  useEffect(() => { loadAll(modelId, machineId); }, [modelId, machineId, loadAll]);
+  // ช่วงกำหนดเองที่ยังไม่ครบ = ไม่โหลด (ดู customIssue) · กราฟเดิมถูกล้างไม่ให้ค้างเป็นของช่วงอื่น
+  useEffect(() => {
+    if (rangeIssue) { reqRef.current += 1; setCharts([]); setLoading(false); return; }
+    loadAll(modelId, machineId, { range, from, to });
+  }, [modelId, machineId, range, from, to, rangeIssue, loadAll]);
 
   // เข้า/ออก room ตามรุ่นที่ดูอยู่
   useEffect(() => {
@@ -185,7 +278,11 @@ const Dashboard = () => {
   }), [reloadCheckpoints]);
 
   useEffect(
-    () => on('master_updated', () => loadAll(modelIdRef.current, machineIdRef.current)),
+    () => on('master_updated', () => {
+      const r = rangeRef.current;
+      if (r.range === 'custom' && customIssue(r.from, r.to)) return;
+      loadAll(modelIdRef.current, machineIdRef.current, r);
+    }),
     [loadAll]
   );
 
@@ -221,6 +318,7 @@ const Dashboard = () => {
               ? ` · NG ${counts.ng} · OCS ${counts.ocs} · ต้องดู ${counts.watch}`
               : ' · ทุกจุดปกติ'}
             {` · ${machineId ? machineName : 'รวมทุกเครื่อง'}`}
+            {` · ${rangeLabel}`}
             {customerName && ` · ลูกค้า ${customerName}`}
           </div>
         )}
@@ -263,6 +361,27 @@ const Dashboard = () => {
           />
         </Col>
 
+        {/* ช่วงมี 4 ตัวจบ — Form.Select ธรรมดา (เหตุผลเดียวกับช่องกะ) */}
+        <Col md="auto">
+          <Form.Select size="sm" aria-label="ช่วงข้อมูล" value={range} disabled={!modelId}
+            onChange={(e) => {
+              const next = e.target.value;
+              // สลับเข้า "กำหนดเอง" ตั้งต้นที่ 30 วันล่าสุด คนแค่ขยับวัน ไม่ต้องกรอกจากศูนย์
+              setRange(next === 'custom' ? { range: next, ...lastDays(Number(RANGE_DEFAULT)) } : { range: next });
+            }}>
+            {RANGES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </Form.Select>
+        </Col>
+        {range === 'custom' && (
+          <Col md="auto" className="d-flex align-items-center gap-1">
+            <DateInput size="sm" style={{ width: '7.5rem' }} aria-label="ตั้งแต่วันที่" value={from}
+              onChange={(v) => setRange({ range, from: v, to })} />
+            <span className="small text-muted">ถึง</span>
+            <DateInput size="sm" style={{ width: '7.5rem' }} aria-label="ถึงวันที่" value={to}
+              onChange={(v) => setRange({ range, from, to: v })} />
+          </Col>
+        )}
+
         <Col md="auto" className="ms-md-auto">
           <div className="btn-group" role="group" aria-label="มุมมอง">
             <Button size="sm" variant={showCharts ? 'outline-primary' : 'primary'}
@@ -277,6 +396,8 @@ const Dashboard = () => {
       {showCharts && <SpcReference />}
 
       {error && <Alert variant="danger">{error}</Alert>}
+      {/* ช่วงไม่ครบไม่ใช่ error ของระบบ — ข้อความธรรมดา ไม่ใช่ Alert (role="alert") */}
+      {modelId && rangeIssue && <div className="empty">{rangeIssue}</div>}
 
       {/* ใบตรวจที่เพิ่งเข้ามาสด ๆ — หน้างานต้องเห็นทันทีว่ามี NG */}
       {alerts.length > 0 && (
@@ -288,7 +409,7 @@ const Dashboard = () => {
                 <span className={`verdict ${a.result === 'NG' ? 'verdict--ng' : 'verdict--ok'}`}>
                   {a.result}
                 </span>
-                <span className="num">{a.at.toLocaleTimeString('th-TH')}</span>
+                <span className="num">{fmtTime(a.at, '—', true)}</span>
                 <span>MO {a.moNo}</span>
                 {machineLabel(a.machineId) && (
                   <span className="num">เครื่อง {machineLabel(a.machineId)}</span>
@@ -318,13 +439,13 @@ const Dashboard = () => {
       {/* ⚠️ เส้นนี้คือ "ไม่มีจุดตรวจ" ไม่ใช่ "ไม่มีข้อมูล" — /reports/model/:id คืนการ์ดครบทุก
           จุดตรวจเสมอ ต่อให้กรองเครื่องแล้วไม่เหลือค่าวัดสักตัว (การ์ดนั้นจะบอกเองว่าไม่มีข้อมูล)
           เติมคำว่าเครื่องตรงนี้เมื่อไหร่คือบอกสาเหตุผิด */}
-      {modelId && !loading && charts.length === 0 && !error && (
+      {modelId && !loading && charts.length === 0 && !error && !rangeIssue && (
         <div className="empty">model นี้ยังไม่มีจุดตรวจสอบ หรือยังไม่มีใบตรวจสอบในระบบ</div>
       )}
 
-      {charts.length > 0 && !showCharts && <StatusBoard charts={charts} machineId={machineId} />}
+      {!loading && charts.length > 0 && !showCharts && <StatusBoard charts={charts} machineId={machineId} />}
 
-      {showCharts && (
+      {showCharts && !loading && (
         <Row>
           {charts.map((c) => (
             <Col xl={6} key={c.checkpoint.id}>

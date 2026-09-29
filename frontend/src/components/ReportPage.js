@@ -2,7 +2,7 @@
 //
 // ต่างจาก Dashboard ตรงที่หน้านี้กรองย้อนหลังได้ (ช่วงวัน / MO / shift / ผู้ตรวจ / เครื่อง)
 // และไม่รับ realtime — ตั้งใจ เพราะข้อมูลที่กำลังอ่านอยู่ไม่ควรขยับใต้มือระหว่างตรวจสอบ
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Container, Row, Col, Card, Form, Button, Alert, Spinner } from 'react-bootstrap';
 import { apiCall, apiDownload } from '../utils/api';
 import { normalizeRows, normalizeChart } from '../utils/normalize';
@@ -14,7 +14,9 @@ import ControlChart from './ControlChart';
 import InputGrid from './InputGrid';
 import InspectionList from './InspectionList';
 import EditInspectionModal from './EditInspectionModal';
+import useSession from '../utils/useSession';
 import SpecValue from './SpecValue';
+import DateInput from './DateInput';
 import { capTone } from '../utils/capability';
 
 // เกณฑ์ Cp/Cpk มากับผลของแต่ละจุด (capabilityTarget) — ลูกค้าต่างกันเกณฑ์ต่างกัน จุด CTF ก็คนละชุด
@@ -28,7 +30,13 @@ const capStyle = (v, min) => {
 
 const fmtMin = (v) => (typeof v === 'number' ? v.toFixed(2) : '—');
 
-const emptyFilter = () => ({ from: '', to: '', mo_no: '', shift: '', inspector_id: '', machine_id: '' });
+// ⚠️ ค่าตั้งต้น = เดือนนี้ (วันที่ 1 ถึงวันนี้ ตามเวลาไทย) ไม่ใช่ "ทั้งหมด" — เดิมไม่มีวันที่ เปิดหน้า/เลือก item/
+//    ล้างตัวกรอง = ดึงทุกใบตั้งแต่วันแรกแล้วคำนวณ X̄-R ทุกจุด ยิ่งข้อมูลสะสมยิ่งช้า (ปัญหาเดียวกับ Dashboard)
+//    ดูทั้งหมดยังได้: ลบวันทั้งสองช่องแล้วกดค้นหา · ห้าม toISOString (UTC ช่วงเช้ามืดได้วันก่อนหน้า)
+const defaultFilter = () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+  return { from: `${today.slice(0, 8)}01`, to: today, mo_no: '', shift: '', inspector_id: '', machine_id: '' };
+};
 
 // ⚠️ ส่งเฉพาะช่องที่กรอกจริง — ค่าว่างคือไม่กรอง ไม่ใช่กรองด้วยค่าว่าง
 // และวันที่ต้องครบทั้ง from/to ถึงจะกรอง (ต้องตรงกับเงื่อนไขฝั่ง backend เป๊ะ
@@ -49,8 +57,8 @@ const ReportPage = () => {
   const [models, setModels] = useState([]);
   const [lookups, setLookups] = useState({ machines: [], inspectors: [] });
   const [modelId, setModelId] = useModelParam(false);
-  const [filter, setFilter] = useState(emptyFilter);
-  const [applied, setApplied] = useState(emptyFilter);
+  const [filter, setFilter] = useState(defaultFilter);
+  const [applied, setApplied] = useState(defaultFilter);
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -60,6 +68,8 @@ const ReportPage = () => {
   const [gridKey, setGridKey] = useState(0);
   // ใบที่เปิดกล่อง "แก้ค่าในใบเดิม" อยู่ (ต้อง login — กล่องจัดการเอง) · null = ปิด
   const [editingId, setEditingId] = useState(null);
+  // ปุ่มแก้ค่าขึ้นเฉพาะตอน login แล้ว (login ที่หน้า Master) — ตัวกั้นจริงคือ requireLogin ฝั่ง backend
+  const session = useSession();
   const [editMsg, setEditMsg] = useState(null);
 
   useEffect(() => {
@@ -68,21 +78,35 @@ const ReportPage = () => {
       .catch((e) => setError(e.message));
   }, []);
 
+  // ⚠️ reqRef กัน response เก่า — เปลี่ยน item A → B แล้ว A ตอบช้ากว่า รายงานของ A จะทับ B
+  //    แล้วค้างอยู่ใต้ชื่อ B (กฎเดียวกับ loadAll ของ Dashboard)
+  const reqRef = useRef(0);
   const load = useCallback(async (id, f) => {
-    if (!id) return setReport(null);
+    const my = ++reqRef.current;
+    if (!id) { setReport(null); setLoading(false); return; }
     setLoading(true);
     try {
       const data = await apiCall(`/reports/model/${id}${toQuery(f)}`);
+      if (my !== reqRef.current) return;
       // inspections ?? [] — กัน backend รุ่นเก่าที่ยังไม่ส่ง field นี้มา หน้าจะได้ไม่ขาว
       setReport({ ...data, charts: data.charts.map(normalizeChart), inspections: data.inspections ?? [] });
       setError(null);
     } catch (e) {
+      if (my !== reqRef.current) return;
       setError(e.message);
       setReport(null);
     } finally {
-      setLoading(false);
+      if (my === reqRef.current) setLoading(false);
     }
   }, []);
+
+  // เปลี่ยน item = ล้างของ item เดิมทันที (รายงาน · error · กล่องแก้ค่าที่เปิดค้างของใบจาก item เก่า)
+  useEffect(() => {
+    setReport(null);
+    setError(null);
+    setEditingId(null);
+    setEditMsg(null);
+  }, [modelId]);
 
   useEffect(() => { load(modelId, applied); }, [modelId, applied, load]);
 
@@ -148,11 +172,11 @@ const ReportPage = () => {
             </Col>
             <Col md={2}>
               <Form.Label className="small mb-1">ตั้งแต่วันที่</Form.Label>
-              <Form.Control type="date" {...field('from')} />
+              <DateInput value={filter.from} onChange={pick('from')} />
             </Col>
             <Col md={2}>
               <Form.Label className="small mb-1">ถึงวันที่</Form.Label>
-              <Form.Control type="date" {...field('to')} />
+              <DateInput value={filter.to} onChange={pick('to')} />
             </Col>
             <Col md={2}>
               <Form.Label className="small mb-1">MO No.</Form.Label>
@@ -195,7 +219,7 @@ const ReportPage = () => {
             </Col>
             <Col md="auto">
               <Button onClick={() => setApplied(filter)} disabled={!modelId}>ค้นหา</Button>
-              <Button variant="link" onClick={() => { setFilter(emptyFilter()); setApplied(emptyFilter()); }}>
+              <Button variant="link" onClick={() => { setFilter(defaultFilter()); setApplied(defaultFilter()); }}>
                 ล้างตัวกรอง
               </Button>
             </Col>
@@ -213,6 +237,11 @@ const ReportPage = () => {
                 <div className="small" style={{ color: 'var(--amber-text)' }}>
                   กรอกวันที่ให้ครบทั้งสองช่อง ไม่งั้นระบบจะไม่กรองวันที่ให้
                 </div>
+              </Col>
+            )}
+            {!dateIncomplete && !(applied.from && applied.to) && (
+              <Col>
+                <div className="small text-muted">แสดงทุกช่วงเวลา — ข้อมูลเยอะจะโหลดช้า</div>
               </Col>
             )}
           </Row>
@@ -381,7 +410,7 @@ const ReportPage = () => {
               <InspectionList
                 rows={report.inspections}
                 onChanged={() => { load(modelId, applied); setGridKey((k) => k + 1); }}
-                onEdit={(row) => { setEditMsg(null); setEditingId(row.id); }}
+                onEdit={session ? (row) => { setEditMsg(null); setEditingId(row.id); } : undefined}
                 emptyText="ไม่มีใบตรวจที่ตรงกับตัวกรองนี้"
               />
             </Card.Body>

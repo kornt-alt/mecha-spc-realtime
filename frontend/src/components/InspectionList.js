@@ -14,9 +14,9 @@ import React, { useState } from 'react';
 import { apiCall } from '../utils/api';
 import { useDialog } from '../utils/useDialog';
 import AppDialog from './AppDialog';
+import { fmtDateTime } from '../utils/dateFormat';
 
-const fmtTime = (v) =>
-  (v ? new Date(v).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }) : '—');
+const fmtTime = (v) => fmtDateTime(v);
 
 const InspectionList = ({ rows, onChanged, onReplace, onEdit, emptyText = 'ยังไม่มีใบตรวจ' }) => {
   const [busyId, setBusyId] = useState(null);

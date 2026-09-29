@@ -18,6 +18,20 @@ const { filterFrom } = require('./charts');
 
 const router = express.Router();
 
+// วันที่ใน Excel รูปเดียวกับหน้าเว็บ: dd/mm/yyyy HH:mm ค.ศ. เวลาไทย (frontend/src/utils/dateFormat.js)
+// ⚠️ ไม่ใช้ toLocaleString('th-TH') — ได้ พ.ศ. ไม่เติม 0 · ประกอบจาก formatToParts ไม่พึ่งตัวคั่นของ locale
+const DT_PARTS = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+const fmtDateTime = (v) => {
+  const d = v instanceof Date ? v : new Date(v);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = Object.fromEntries(DT_PARTS.formatToParts(d).map((x) => [x.type, x.value]));
+  return `${p.day}/${p.month}/${p.year} ${p.hour}:${p.minute}`;
+};
+const isoToDmy = (iso) => String(iso).split('-').reverse().join('/');
+
 const isIntLike = (v) => v !== null && v !== undefined && v !== '' && Number.isInteger(Number(v));
 
 // GET /api/reports/model/:modelId — สรุป + กราฟทุกจุดของรุ่น ในคำขอเดียว
@@ -36,19 +50,15 @@ router.get('/model/:modelId', wrap(async (req, res) => {
   if (!model) throw new AppError('ไม่พบรุ่นนี้', 404);
 
   const filter = filterFrom(req.query);
-  const [checkpoints, rowsByCheckpoint, baselinesByCheckpoint, targets] = await Promise.all([
-    fetchModelCheckpoints(modelId, { activeOnly: req.query.all !== '1' }),
-    fetchModelRows(modelId, filter),
-    fetchModelBaselines(modelId),
-    fetchModelTargets(modelId),
-  ]);
+  // ?lite=1 = Dashboard — ใช้แค่ charts ไม่ต้องการรายการใบตรวจ 500 ใบ (+ subquery นับ NG/แก้ไขทีละใบ)
+  const lite = req.query.lite === '1';
   // ⚠️ baseline แยกรายเครื่อง — ขอบเขตต้องตรงกับตัวกรองที่ใช้ดึงค่าวัดข้างบนเสมอ
   //    ไม่ตรงเมื่อไหร่คือเอาลิมิตของเครื่องหนึ่งไปวาดทับจุดของอีกเครื่อง
   const scope = scopeOf(filter);
 
   // สรุปหัวรายงาน — นับจากตาราง inspections ตรง ๆ (1 แถว = 1 ใบตรวจ)
   const { where, params } = buildInspectionFilter(filter);
-  const [[summary]] = await query(
+  const summaryQ = query(
     `SELECT COUNT(*) AS total_inspections,
             SUM(CASE WHEN i.overall_result = 'NG' THEN 1 ELSE 0 END) AS ng_inspections,
             MIN(i.inspected_at) AS first_at,
@@ -58,17 +68,14 @@ router.get('/model/:modelId', wrap(async (req, res) => {
     [Number(modelId), ...params]
   );
 
-  const total = Number(summary.total_inspections) || 0;
-  const ng = Number(summary.ng_inspections) || 0;
-
   // ── รายการใบตรวจ (โชว์ใบที่ยกเลิกด้วย) ────────────────────────────────
   //
   // ⚠️ handler นี้เรียก buildInspectionFilter สองครั้งด้วยคนละ option โดยตั้งใจ ห้ามยุบรวม
-  //    fetchModelRows ข้างบน (กราฟทุกจุดตรวจในหน้านี้) ต้อง **ไม่รวม** ใบที่ยกเลิก
+  //    fetchModelRows ข้างล่าง (กราฟทุกจุดตรวจในหน้านี้) ต้อง **ไม่รวม** ใบที่ยกเลิก
   //    ส่วนตารางข้างล่างต้อง **รวม** ไม่งั้นกดคืนค่าไม่ได้และคนจะนึกว่าลบจริงไปแล้ว
   //    ยุบเป็นครั้งเดียวเมื่อไหร่ ใบที่ยกเลิกจะไหลกลับเข้ากราฟเงียบ ๆ
   const { where: listWhere, params: listParams } = buildInspectionFilter(filter, { includeVoided: true });
-  const [inspections] = await query(
+  const listQ = lite ? Promise.resolve([[]]) : query(
     `SELECT i.id, i.mo_no, i.lot_no, i.shift, i.subgroup_no, i.inspected_at, i.overall_result,
             i.voided_at, i.voided_reason,
             mc.code AS machine_code, mc.name AS machine_name, ins.name AS inspector_name,
@@ -84,6 +91,19 @@ router.get('/model/:modelId', wrap(async (req, res) => {
       LIMIT 500`,
     [Number(modelId), ...listParams]
   );
+
+  // ทุก query ข้างบนไม่ขึ้นต่อกัน ยิงพร้อมกัน (pool มีหลาย connection)
+  const [checkpoints, rowsByCheckpoint, baselinesByCheckpoint, targets, [[summary]], [inspections]] = await Promise.all([
+    fetchModelCheckpoints(modelId, { activeOnly: req.query.all !== '1' }),
+    fetchModelRows(modelId, filter),
+    fetchModelBaselines(modelId),
+    fetchModelTargets(modelId),
+    summaryQ,
+    listQ,
+  ]);
+
+  const total = Number(summary.total_inspections) || 0;
+  const ng = Number(summary.ng_inspections) || 0;
 
   const charts = checkpoints.map((checkpoint) => {
     const rows = rowsByCheckpoint.get(checkpoint.id) ?? [];
@@ -134,7 +154,7 @@ router.get('/model/:modelId', wrap(async (req, res) => {
       outOfControlCheckpoints: charts.filter((c) => c.violations?.length > 0).length,
       // ⚠️ summary กับ charts ข้างบนไม่นับใบที่ยกเลิก แต่ inspections ข้างล่างรวมไว้ด้วย
       //    ตัวเลขนี้มีไว้ให้หน้าจออธิบายความต่างได้ ไม่งั้นคนนับแถวแล้วสงสัยว่าทำไมไม่ตรง
-      voidedInspections: inspections.filter((i) => i.voided_at).length,
+      voidedInspections: lite ? null : inspections.filter((i) => i.voided_at).length,
     },
     charts,
     inspections,
@@ -289,8 +309,8 @@ router.get('/model/:modelId/export', wrap(async (req, res) => {
   ws.addRow([`รายงานผลตรวจสอบ — ${model.item_no} ${model.item_name}`]);
   ws.getRow(1).font = { bold: true, size: 14 };
   ws.addRow([
-    `ช่วงวันที่: ${filter.from && filter.to ? `${filter.from} ถึง ${filter.to}` : 'ทั้งหมด'}`,
-    '', '', `ออกรายงานเมื่อ ${new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })}`,
+    `ช่วงวันที่: ${filter.from && filter.to ? `${isoToDmy(filter.from)} ถึง ${isoToDmy(filter.to)}` : 'ทั้งหมด'}`,
+    '', '', `ออกรายงานเมื่อ ${fmtDateTime(new Date())}`,
   ]);
   const g = targets.general;
   const c = targets.ctf;
@@ -312,7 +332,7 @@ router.get('/model/:modelId/export', wrap(async (req, res) => {
 
   for (const r of rows) {
     const row = ws.addRow([
-      new Date(r.inspected_at).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }),
+      fmtDateTime(r.inspected_at),
       r.mo_no, r.lot_no ?? '', r.shift, r.subgroup_no,
       `${r.machine_code} ${r.machine_name}`, r.inspector_name,
       r.seq_no, r.checkpoint_name, r.unit ?? '', r.piece_no,

@@ -11,17 +11,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Button, Form, Spinner } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
-import { getSession, onSessionChange } from '../utils/auth';
+import useSession from '../utils/useSession';
 import { judgeLocal, toNum } from '../utils/normalize';
 import { decimalsOf } from './SpecValue';
 import { LoginForm } from './RequireLogin';
+import { fmtDateTime } from '../utils/dateFormat';
 
 const keyOf = (r) => `${r.checkpoint_id}:${r.piece_no}`;
 
 // ทศนิยม max(ของสเปก, ของค่าจริง) — กฎเดียวกับ InputGrid ห้ามปัดค่าวัดทิ้ง
 const fmtValue = (r, v) => (v === null ? '' : v.toFixed(Math.max(decimalsOf(toNum(r.usl_used), toNum(r.lsl_used)), decimalsOf(v))));
 
-const fmtTime = (v) => (v ? new Date(v).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }) : '—');
+const fmtTime = (v) => fmtDateTime(v);
 
 const specText = (r) => {
   const U = toNum(r.usl_used);
@@ -34,14 +35,12 @@ const specText = (r) => {
 };
 
 const EditInspectionModal = ({ inspectionId, onHide, onSaved }) => {
-  const [session, setSess] = useState(getSession);
+  const session = useSession();
   const [data, setData] = useState(null);
   const [values, setValues] = useState({});
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-
-  useEffect(() => onSessionChange(setSess), []);
 
   useEffect(() => {
     if (!inspectionId) return undefined;

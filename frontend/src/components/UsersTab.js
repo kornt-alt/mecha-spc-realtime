@@ -8,12 +8,13 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Badge, Button, Card, Col, Form, Row, Table } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
 import { getSession } from '../utils/auth';
+import { fmtDateTime } from '../utils/dateFormat';
 
 const MIN_PASSWORD = 6; // เท่ากับ backend/routes/users.js
 const MIN_PASSKEY = 6;  // เท่ากับ backend/routes/users.js
 const blank = () => ({ username: '', display_name: '', password: '', confirm: '' });
 
-const fmtTime = (v) => (v ? new Date(v).toLocaleString('th-TH') : '—');
+const fmtTime = (v) => fmtDateTime(v);
 
 const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
   const [users, setUsers] = useState([]);

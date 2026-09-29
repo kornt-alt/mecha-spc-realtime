@@ -70,12 +70,14 @@ export const useUrlParam = (name) => {
 
   const setValue = useCallback(
     (next) => {
-      // ⚠️ ต้องใช้ updater แบบฟังก์ชัน — setSearchParams ถูกสร้างใหม่ทุกครั้งที่ location.search
-      //    เปลี่ยน ถ้าปิด searchParams ตัวเก่าไว้ใน closure จะเขียนทับ param ตัวอื่นที่เพิ่งตั้ง
-      //    (เคสจริงของกฎข้อนี้คือ Dashboard ที่มีทั้ง ?model= และ ?machine= อยู่พร้อมกัน)
+      // ⚠️ อ่านค่าปัจจุบันจาก window.location.search ไม่ใช่ `prev` ของ react-router —
+      //    react-router (7.6.2) ส่ง searchParams "ตัวใน closure" เข้า updater ไม่ใช่ค่าล่าสุด
+      //    เรียก setter สองตัวติดกัน (เช่น SC: setModelId(v); setCheckpointId('')) ตัวหลังจะสร้าง URL
+      //    จากค่าก่อนตัวแรก แล้วทับ ?model= ใหม่ทิ้ง = item เด้งกลับตัวเดิม · navigate ของ BrowserRouter
+      //    เขียน history แบบ synchronous window.location จึงเป็นค่าล่าสุดเสมอ
       setParams(
-        (prev) => {
-          const q = new URLSearchParams(prev);
+        () => {
+          const q = new URLSearchParams(window.location.search);
           if (next) q.set(name, String(next));
           else q.delete(name);
           return q;

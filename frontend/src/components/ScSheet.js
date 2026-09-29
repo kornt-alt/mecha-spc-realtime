@@ -12,6 +12,8 @@ import { Container, Row, Col, Alert, Button, Form, Spinner, Badge } from 'react-
 import SearchSelect from './SearchSelect';
 import SpecValue from './SpecValue';
 import AppDialog from './AppDialog';
+import EditInspectionModal from './EditInspectionModal';
+import useSession from '../utils/useSession';
 import XbarRCharts, { fmt, fmtCap, capClass } from './XbarRCharts';
 import { apiCall } from '../utils/api';
 import { on, joinModel, leaveModel } from '../utils/socket';
@@ -20,6 +22,7 @@ import { useModelParam, useUrlParam } from '../utils/useModelParam';
 import { RULE_BY_ID, RULE_SET_LABEL, chartLabel, rulesFor } from '../utils/spcRules';
 import { targetLabel } from '../utils/capability';
 import useDialog from '../utils/useDialog';
+import { fmtDate as fmtDateBase, fmtTime as fmtTimeBase } from '../utils/dateFormat';
 
 // ฟอร์มกระดาษมี 30 คอลัมน์ต่อแผ่น — เดือนที่มีมากกว่านี้ตัดเป็นหลายบล็อกต่อกันลงมา
 const COLS_PER_BLOCK = 30;
@@ -39,11 +42,12 @@ const monthRange = (ym) => {
   return { from: `${ym}-01`, to: `${ym}-${String(last).padStart(2, '0')}` };
 };
 
-const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-GB', { timeZone: TZ, day: '2-digit', month: '2-digit' }) : '');
-const fmtTime = (d) => (d ? new Date(d).toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' }) : '');
+const fmtDate = (d) => fmtDateBase(d, '');
+const fmtTime = (d) => fmtTimeBase(d, '');
+// ชื่อเดือนไทย ปี ค.ศ. ("กันยายน 2026") ให้ตรงกับวันที่ dd/mm/yyyy ค.ศ. ทั้งระบบ
 const monthLabel = (ym) => {
   const [y, m] = ym.split('-').map(Number);
-  return new Date(y, m - 1, 1).toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
+  return new Date(y, m - 1, 1).toLocaleDateString('th-TH-u-ca-gregory', { month: 'long', year: 'numeric' });
 };
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -76,6 +80,11 @@ const ScSheet = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const { dialog, showAlert, showForm, closeDialog } = useDialog();
+  // ใบที่เปิดกล่อง "แก้ค่าในใบเดิม" อยู่ (ต้อง login — กล่องจัดการเอง) · null = ปิด
+  // ⚠️ แก้ในใบเดิมเท่านั้น (จุดอยู่ที่เดิมบนฟอร์ม) — "แก้เป็นใบใหม่" อยู่ที่หน้าใบตรวจ
+  const [editingId, setEditingId] = useState(null);
+  // ปุ่มแก้ค่าขึ้นเฉพาะตอน login แล้ว (login ที่หน้า Master) — ตัวกั้นจริงคือ requireLogin ฝั่ง backend
+  const session = useSession();
 
   // ── master ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -88,18 +97,24 @@ const ScSheet = () => {
   }, []);
 
   // จุดตรวจของ item — เฉพาะ variable เพราะจุด attribute ไม่มีค่าตัวเลข วาด control chart ไม่ได้
+  //
+  // ⚠️ เปลี่ยน item = ล้างของเดิมทันที ก่อนรอผล — ไม่งั้นระหว่างรอ ?checkpoint= เดิมยังเจอในลิสต์จุดตรวจเก่า
+  //    แล้ว loadData โหลดกราฟของ item เก่ามาโชว์ใต้ชื่อ item ใหม่ · modelReqRef กัน response เก่าทับของใหม่
+  const modelReqRef = useRef(0);
   const loadModel = useCallback(async (id) => {
-    if (!id) {
-      setModel(null);
-      setCheckpoints([]);
-      return;
-    }
+    const my = ++modelReqRef.current;
+    setModel(null);
+    setCheckpoints([]);
+    setEditingId(null);
+    setError(null);
+    if (!id) return;
     try {
       const data = await apiCall(`/master/models/${id}`);
+      if (my !== modelReqRef.current) return;
       setModel(normalizeRows([data.model])[0]);
       setCheckpoints(normalizeCheckpoints(data.checkpoints).filter((c) => c.char_type === 'variable'));
     } catch (e) {
-      setError(e.message);
+      if (my === modelReqRef.current) setError(e.message);
     }
   }, []);
   useEffect(() => { loadModel(modelId); }, [modelId, loadModel]);
@@ -124,6 +139,14 @@ const ScSheet = () => {
   );
   const machine = machines.find((mc) => String(mc.id) === String(machineId)) ?? null;
 
+  // ⚠️ ?machine= ที่ไม่อยู่ใน division ของ item (ลิงก์/บุ๊กมาร์กเก่า) → ล้าง ไม่งั้นกราฟว่างโดยไม่บอกว่าทำไม
+  //    (กฎเดียวกับ Dashboard) · เช็คหลังโหลดทั้ง item และลิสต์เครื่องเสร็จเท่านั้น
+  useEffect(() => {
+    if (!model || !machineId || machines.length === 0) return;
+    const picked = machines.find((mc) => String(mc.id) === String(machineId));
+    if (!picked || picked.division_id !== model.division_id) setMachineId('');
+  }, [model, machineId, machines, setMachineId]);
+
   // ── กราฟ + Event Log ─────────────────────────────────────────────────
   const query = useMemo(() => {
     const q = new URLSearchParams(monthRange(month));
@@ -131,10 +154,15 @@ const ScSheet = () => {
     return q.toString();
   }, [month, machineId]);
 
+  // ⚠️ dataReqRef กัน response เก่า — สลับจุด/เครื่อง/เดือนเร็ว ๆ แล้วคำขอก่อนหน้าตอบทีหลัง จะทับของใหม่
+  //    (loadData ถูกเรียกจาก socket และหลังแก้ค่าด้วย ไม่ใช่แค่ effect จึงใช้ ref ไม่ใช่ cancelled)
+  const dataReqRef = useRef(0);
   const loadData = useCallback(async () => {
+    const my = ++dataReqRef.current;
     if (!cp) {
       setChart(null);
       setEvents([]);
+      setLoading(false);
       return;
     }
     setLoading(true);
@@ -143,13 +171,17 @@ const ScSheet = () => {
         apiCall(`/charts/${cp.id}?${query}`),
         apiCall(`/events?checkpoint_id=${cp.id}&${query}`),
       ]);
+      if (my !== dataReqRef.current) return;
       setChart(normalizeChart(c));
       setEvents(Array.isArray(ev) ? ev : []);
       setError(null);
     } catch (e) {
+      if (my !== dataReqRef.current) return;
+      setChart(null);
+      setEvents([]);
       setError(e.message);
     } finally {
-      setLoading(false);
+      if (my === dataReqRef.current) setLoading(false);
     }
     // cp เปลี่ยน object ทุกครั้งที่โหลดจุดตรวจใหม่ ผูกกับ id พอ
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -245,7 +277,13 @@ const ScSheet = () => {
           <SearchSelect
             id="sc-model"
             value={modelId}
-            onChange={(v) => { setModelId(v); setCheckpointId(''); }}
+            onChange={(v) => {
+              // เปลี่ยน item = จุดตรวจเดิมใช้ไม่ได้แน่ · เครื่องใช้ต่อได้เฉพาะ division เดียวกัน
+              setModelId(v);
+              setCheckpointId('');
+              const next = models.find((m) => String(m.id) === String(v));
+              if (machine && next && machine.division_id !== next.division_id) setMachineId('');
+            }}
             placeholder="— เลือก item —"
             emptyText="ไม่พบ item ที่ค้นหา"
             options={models
@@ -386,7 +424,11 @@ const ScSheet = () => {
                     <tbody>
                       <tr>
                         <th colSpan={2}>Date</th>
-                        {block.map((p) => <td key={p.index}>{fmtDate(p.meta?.inspectedAt)}</td>)}
+                        {/* dd/mm/yyyy เต็ม แต่ตัดบรรทัดหลัง dd/mm/ ได้ — 30 คอลัมน์ต้องพอดี A4 แนวนอน */}
+                        {block.map((p) => {
+                          const d = fmtDate(p.meta?.inspectedAt);
+                          return <td key={p.index} className="sc-grid__date">{d.slice(0, 6)}<wbr />{d.slice(6)}</td>;
+                        })}
                       </tr>
                       <tr>
                         <th colSpan={2}>Time</th>
@@ -424,6 +466,23 @@ const ScSheet = () => {
                           </td>
                         ))}
                       </tr>
+
+                      {/* ── แก้ค่าในใบเดิม — ปุ่มแยกแถว ไม่ทำให้เซลล์ตัวเลขคลิกได้ (คลิกพลาดแล้วเด้งกล่อง) ── */}
+                      {session && (
+                      <tr className="no-print sc-grid__edit">
+                        <th colSpan={2}>แก้ค่า</th>
+                        {block.map((p) => (
+                          <td key={p.index}>
+                            <button type="button" className="btn btn-link btn-sm p-0"
+                              title={`แก้ค่าใบ subgroup #${p.subgroupNo} (ต้อง login)`}
+                              aria-label={`แก้ค่าใบ subgroup ${p.subgroupNo}`}
+                              onClick={() => setEditingId(p.inspectionId)}>
+                              ✎
+                            </button>
+                          </td>
+                        ))}
+                      </tr>
+                      )}
 
                       {/* ── OCS: ● ที่จุดที่ครบเงื่อนไขของกฎ ── */}
                       {/* แถวตามกฎที่ใช้จริงของลูกค้า (chart.ocs) — กฎ 5-8 มีแค่กราฟบน */}
@@ -512,6 +571,14 @@ const ScSheet = () => {
                                 onClick={() => openEvent(v.point, v.chart, v.rules)}>
                                 {e ? 'แก้' : 'บันทึก'}
                               </Button>
+                              {/* จุดที่ผิดกฎคือจุดที่มีโอกาสพิมพ์ผิดสูงสุด — แก้ค่าจากตรงนี้ได้เลย */}
+                              {session && (
+                                <Button size="sm" variant="outline-secondary" className="ms-1"
+                                  title="แก้ค่าในใบตรวจนี้"
+                                  onClick={() => setEditingId(v.point.inspectionId)}>
+                                  แก้ค่า
+                                </Button>
+                              )}
                             </td>
                           </tr>
                         );
@@ -531,6 +598,22 @@ const ScSheet = () => {
       )}
 
       <AppDialog dialog={dialog} onHide={closeDialog} />
+      <EditInspectionModal
+        inspectionId={editingId}
+        onHide={() => setEditingId(null)}
+        onSaved={(res) => {
+          setEditingId(null);
+          loadData();
+          // ⚠️ baseline freeze ไว้ — แก้ค่าในช่วงที่ล็อกแล้ว เส้น control limit ยังมาจากค่าเดิม
+          showAlert(res.staleBaselines?.length
+            ? {
+              title: 'แก้แล้ว — ต้อง Re-baseline',
+              body: `แก้ ${res.changed} ค่า · ใบนี้อยู่ในช่วง baseline ที่ล็อกไว้\n\n` +
+                `จุดตรวจที่กระทบ: ${res.staleBaselines.join(', ')}\n\nให้ไปกด Re-baseline ที่หน้าตั้งค่า Master`,
+            }
+            : { title: 'แก้แล้ว', body: `แก้ ${res.changed} ค่า · ผลรวมใบนี้ ${res.overall_result}` });
+        }}
+      />
     </Container>
   );
 };

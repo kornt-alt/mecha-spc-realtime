@@ -13,6 +13,7 @@ import { Spinner } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
 import { normalizeCheckpoints } from '../utils/normalize';
 import SpecValue, { decimalsOf } from './SpecValue';
+import { fmtDate, fmtTime } from '../utils/dateFormat';
 
 // "2 pcs / shift" — หัวชีต Input เขียนแบบนี้
 export const freqLabel = (cp) =>
@@ -87,7 +88,7 @@ export const GridHead = ({ checkpoints, leftCols, stats = null, colClass = () =>
 };
 
 const LEFT_COLS = [
-  { key: 'date', label: 'Date', width: 4.2 },
+  { key: 'date', label: 'Date', width: 6 },
   { key: 'time', label: 'Time', width: 3.4 },
   { key: 'mo', label: 'WOS (MO)', width: 7.5 },
   { key: 'mc', label: 'M/C', width: 4.5 },
@@ -96,9 +97,6 @@ const LEFT_COLS = [
   { key: 'piece', label: 'No.', width: 2.6 },
 ];
 
-const TZ = 'Asia/Bangkok';
-const fmtDate = (d) => new Date(d).toLocaleDateString('en-GB', { timeZone: TZ, day: '2-digit', month: '2-digit' });
-const fmtTime = (d) => new Date(d).toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
 
 const cellText = (cp, cell) => {
   if (!cell) return '';

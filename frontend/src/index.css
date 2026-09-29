@@ -771,6 +771,12 @@ code {
   white-space: nowrap;
 }
 
+/* วันที่ dd/mm/yyyy ตัดบรรทัดที่ <wbr> หลัง dd/mm/ ได้ — คอลัมน์ไม่กว้างขึ้น 30 ช่องยังพอดี A4 */
+.sc-grid td.sc-grid__date {
+  white-space: normal;
+  line-height: 1.15;
+}
+
 .sc-grid tr:first-child td,
 .sc-grid tr:nth-child(2) td,
 .sc-grid tr:nth-child(3) td {
@@ -1253,4 +1259,11 @@ code {
 .cell-edited {
   background: var(--blue-tint);
   box-shadow: inset 3px 0 0 var(--blue);
+}
+
+/* แถวปุ่ม ✎ แก้ค่าในใบเดิม ใต้ตาราง subgroup ของหน้า SC (ไม่พิมพ์ออก — .no-print) */
+.sc-grid__edit td {
+  text-align: center;
+  padding-top: 0;
+  padding-bottom: 0;
 }
