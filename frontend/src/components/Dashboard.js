@@ -374,10 +374,10 @@ const Dashboard = () => {
         </Col>
         {range === 'custom' && (
           <Col md="auto" className="d-flex align-items-center gap-1">
-            <DateInput size="sm" style={{ width: '7.5rem' }} aria-label="ตั้งแต่วันที่" value={from}
+            <DateInput size="sm" style={{ width: '10rem' }} aria-label="ตั้งแต่วันที่" value={from}
               onChange={(v) => setRange({ range, from: v, to })} />
             <span className="small text-muted">ถึง</span>
-            <DateInput size="sm" style={{ width: '7.5rem' }} aria-label="ถึงวันที่" value={to}
+            <DateInput size="sm" style={{ width: '10rem' }} aria-label="ถึงวันที่" value={to}
               onChange={(v) => setRange({ range, from, to: v })} />
           </Col>
         )}
