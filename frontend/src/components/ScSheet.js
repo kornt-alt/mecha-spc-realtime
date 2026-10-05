@@ -8,7 +8,7 @@
 // ⚠️ URL คือสเตตของหน้า (?model= &checkpoint= &machine= &month=YYYY-MM) — ลิงก์จากการ์ดกราฟ
 //    บน Dashboard / รายงาน พามาตรงจุดได้ และพิมพ์/บุ๊กมาร์กได้
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Container, Row, Col, Alert, Button, Form, Spinner, Badge } from 'react-bootstrap';
+import { Container, Row, Col, Alert, Button, Form, Spinner, Badge, Overlay, Tooltip } from 'react-bootstrap';
 import SearchSelect from './SearchSelect';
 import SpecValue from './SpecValue';
 import AppDialog from './AppDialog';
@@ -21,6 +21,7 @@ import { normalizeRows, normalizeCheckpoints, normalizeChart } from '../utils/no
 import { useModelParam, useUrlParam } from '../utils/useModelParam';
 import { RULE_BY_ID, RULE_SET_LABEL, chartLabel, rulesFor } from '../utils/spcRules';
 import { targetLabel } from '../utils/capability';
+import { explain } from '../utils/scExplain';
 import useDialog from '../utils/useDialog';
 import { fmtDate as fmtDateBase, fmtTime as fmtTimeBase } from '../utils/dateFormat';
 
@@ -51,6 +52,9 @@ const monthLabel = (ym) => {
 };
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+
+// คอลัมน์ของตารางค่าคงที่ — ชื่อ key ตรงกับ CONSTANTS ใน backend/services/spcConstants.js
+const CONST_COLS = [['A2', 'A2'], ['D3', 'D3'], ['D4', 'D4'], ['d2', 'd₂']];
 const FREQ_TEXT = { shift: 'ทุกกะ', day: 'ทุกวัน' };
 
 // ช่องของ Event Log — ชื่อ name ต้องตรงคอลัมน์ ocs_events เป๊ะ (routes/events.js TEXT_FIELDS)
@@ -83,6 +87,9 @@ const ScSheet = () => {
   // ใบที่เปิดกล่อง "แก้ค่าในใบเดิม" อยู่ (ต้อง login — กล่องจัดการเอง) · null = ปิด
   // ⚠️ แก้ในใบเดิมเท่านั้น (จุดอยู่ที่เดิมบนฟอร์ม) — "แก้เป็นใบใหม่" อยู่ที่หน้าใบตรวจ
   const [editingId, setEditingId] = useState(null);
+  // ช่องที่ชี้อยู่ { key, el } — ล้างเมื่อกราฟโหลดใหม่ (element เดิมอาจหายไปแล้ว)
+  const [hot, setHot] = useState(null);
+  useEffect(() => setHot(null), [chart]);
   // ปุ่มแก้ค่าขึ้นเฉพาะตอน login แล้ว (login ที่หน้า Master) — ตัวกั้นจริงคือ requireLogin ฝั่ง backend
   const session = useSession();
 
@@ -261,6 +268,18 @@ const ScSheet = () => {
   const target = chart?.capabilityTarget ?? null;
   const inspectors = [...new Set(points.map((p) => p.meta?.inspector).filter(Boolean))];
 
+  // ── ชี้ช่องที่คำนวณ → tooltip สูตรแทนค่า + ไฮไลต์ช่องต้นทาง (utils/scExplain.js) ──
+  // Overlay ตัวเดียวเกาะ element ที่ชี้อยู่ ไม่ห่อ OverlayTrigger ทีละช่อง (หลายร้อยช่องต่อหน้า)
+  const info = hot ? explain(hot.key, { chart, cp }) : null;
+  const sourceKeys = new Set(info?.sources ?? []);
+  const hl = (key) =>
+    `${sourceKeys.has(key) ? ' sc-cell--src' : ''}${hot?.key === key ? ' sc-cell--active' : ''}`;
+  const pointAt = (key) => {
+    const show = (e) => setHot({ key, el: e.currentTarget });
+    const hide = () => setHot((h) => (h?.key === key ? null : h));
+    return { tabIndex: 0, onMouseEnter: show, onFocus: show, onMouseLeave: hide, onBlur: hide };
+  };
+
   const outOfSpec = (v) => isNum(v) && ((isNum(cp?.usl) && v > cp.usl) || (isNum(cp?.lsl) && v < cp.lsl));
 
   return (
@@ -357,7 +376,7 @@ const ScSheet = () => {
                 <th>Part Name</th><td>{model?.item_name}</td>
                 <th>Part No.</th><td className="num">{model?.item_no}</td>
                 <th rowSpan={2} className="sc-head__group">Specification</th>
-                <th>Max.</th><td className="num">{cp.usl ?? '—'}</td>
+                <th>Max.</th><td className={`num${hl('spec:usl')}`}>{cp.usl ?? '—'}</td>
                 <th className="sc-head__group">Chart</th>
                 <th>{isImr ? 'I Chart' : 'X̄ Chart'}</th>
                 <th>{isImr ? 'MR Chart' : 'R Chart'}</th>
@@ -374,8 +393,8 @@ const ScSheet = () => {
                 </td>
                 <th>Aver.</th><td className="num">{isNum(specMid) ? specMid : '—'}</td>
                 <th>UCL</th>
-                <td className="num">{fmt(limits?.ucl)}</td>
-                <td className="num">{fmt(limits?.rangeUcl)}</td>
+                <td className={`num sc-calc${hl('lim:ucl')}`} {...pointAt('lim:ucl')}>{fmt(limits?.ucl)}</td>
+                <td className={`num sc-calc${hl('lim:rucl')}`} {...pointAt('lim:rucl')}>{fmt(limits?.rangeUcl)}</td>
                 <th>Inspector</th><td>{inspectors.join(', ') || '—'}</td>
                 <th>Chart no.</th><td className="num">{cp.seq_no}</td>
               </tr>
@@ -383,10 +402,10 @@ const ScSheet = () => {
                 <th>Gage name</th><td>{cp.gauge || '—'}</td>
                 <th>Unit</th><td>{cp.unit || '—'}</td>
                 <th />
-                <th>Min.</th><td className="num">{cp.lsl ?? '—'}</td>
+                <th>Min.</th><td className={`num${hl('spec:lsl')}`}>{cp.lsl ?? '—'}</td>
                 <th>CL</th>
-                <td className="num">{fmt(limits?.center)}</td>
-                <td className="num">{fmt(limits?.rangeCenter)}</td>
+                <td className={`num sc-calc${hl('lim:cl')}`} {...pointAt('lim:cl')}>{fmt(limits?.center)}</td>
+                <td className={`num sc-calc${hl('lim:rcl')}`} {...pointAt('lim:rcl')}>{fmt(limits?.rangeCenter)}</td>
                 <th>Sample size</th><td className="num">{n} pcs / {FREQ_TEXT[cp.frequency] ?? 'ทุกกะ'}</td>
                 <th>Confirm by</th><td className="sc-head__sign" />
               </tr>
@@ -403,8 +422,8 @@ const ScSheet = () => {
                   )}
                 </th>
                 <th>LCL</th>
-                <td className="num">{fmt(limits?.lcl)}</td>
-                <td className="num">{fmt(limits?.rangeLcl)}</td>
+                <td className={`num sc-calc${hl('lim:lcl')}`} {...pointAt('lim:lcl')}>{fmt(limits?.lcl)}</td>
+                <td className={`num sc-calc${hl('lim:rlcl')}`} {...pointAt('lim:rlcl')}>{fmt(limits?.rangeLcl)}</td>
                 <td colSpan={4} />
               </tr>
             </tbody>
@@ -445,7 +464,7 @@ const ScSheet = () => {
                           {block.map((p) => {
                             const v = p.values?.[k];
                             return (
-                              <td key={p.index} className={`num${outOfSpec(v) ? ' sc-cell--ng' : ''}`}>
+                              <td key={p.index} className={`num${outOfSpec(v) ? ' sc-cell--ng' : ''}${hl(`v:${p.index}:${k}`)}`}>
                                 {isNum(v) ? v : ''}
                               </td>
                             );
@@ -455,13 +474,15 @@ const ScSheet = () => {
                       <tr className="sc-grid__stat">
                         <th colSpan={2}>{isImr ? 'X' : 'X̄'}</th>
                         {block.map((p) => (
-                          <td key={p.index} className={`num${p.rules?.length ? ' sc-cell--ocs' : ''}`}>{fmt(p.xbar)}</td>
+                          <td key={p.index} className={`num sc-calc${p.rules?.length ? ' sc-cell--ocs' : ''}${hl(`x:${p.index}`)}`}
+                            {...pointAt(`x:${p.index}`)}>{fmt(p.xbar)}</td>
                         ))}
                       </tr>
                       <tr className="sc-grid__stat">
                         <th colSpan={2}>{isImr ? 'MR' : 'R'}</th>
                         {block.map((p) => (
-                          <td key={p.index} className={`num${p.rangeRules?.length ? ' sc-cell--ocs' : ''}`}>
+                          <td key={p.index} className={`num sc-calc${p.rangeRules?.length ? ' sc-cell--ocs' : ''}${hl(`r:${p.index}`)}`}
+                            {...pointAt(`r:${p.index}`)}>
                             {isNum(p.range) ? fmt(p.range) : ''}
                           </td>
                         ))}
@@ -515,24 +536,77 @@ const ScSheet = () => {
                   <div className="sc-caption">{isImr ? 'I Chart' : 'X̄ Chart'} / {isImr ? 'MR Chart' : 'R Chart'}</div>
                   <XbarRCharts chart={chart} height={240} />
                 </div>
+                <div className="sc-body__side">
                 <table className="sc-stats">
                   <tbody>
-                    <tr><th>n (ค่าวัด)</th><td className="num">{stats.count ?? '—'}</td></tr>
-                    <tr><th>Subgroup</th><td className="num">{stats.subgroups ?? points.length}</td></tr>
-                    <tr><th>Max</th><td className="num">{fmt(stats.max)}</td></tr>
-                    <tr><th>Min</th><td className="num">{fmt(stats.min)}</td></tr>
-                    <tr><th>σ (R̄/d₂)</th><td className="num">{fmt(cap.sigmaWithin, 5)}</td></tr>
-                    <tr><th>x̿</th><td className="num">{fmt(stats.xbarbar)}</td></tr>
-                    <tr><th>{isImr ? 'M̄R' : 'R̄'}</th><td className="num">{fmt(stats.rbar)}</td></tr>
-                    <tr><th>Cp</th><td className={`num ${capClass(cap.cp, target?.minCp)}`}>{fmtCap(cap.cp)}</td></tr>
-                    <tr><th>Cpu</th><td className="num">{fmtCap(cap.cpu)}</td></tr>
-                    <tr><th>Cpl</th><td className="num">{fmtCap(cap.cpl)}</td></tr>
-                    <tr><th>Cpk</th><td className={`num fw-bold ${capClass(cap.cpk, target?.minCpk)}`}>{fmtCap(cap.cpk)}</td></tr>
-                    <tr className="text-muted"><th>Pp / Ppk</th><td className="num">{fmtCap(cap.pp)} / {fmtCap(cap.ppk)}</td></tr>
+                    {/* n = ชิ้นต่อ subgroup ตาม Excel (COUNT(D9:D13)) — ตัวเดียวกับที่เปิดตาราง A2/D3/D4/d₂ */}
+                    {[
+                      ['n', 'n', n],
+                      ['count', 'ค่าวัดทั้งหมด', stats.count ?? '—'],
+                      ['subgroups', 'Subgroup', stats.subgroups ?? points.length],
+                      ['max', 'Max', fmt(stats.max)],
+                      ['min', 'Min', fmt(stats.min)],
+                      ['sigma', 'σ (R̄/d₂)', fmt(cap.sigmaWithin, 5)],
+                      ['xbarbar', 'x̿', fmt(stats.xbarbar)],
+                      ['rbar', isImr ? 'M̄R' : 'R̄', fmt(stats.rbar)],
+                      ['cp', 'Cp', fmtCap(cap.cp), capClass(cap.cp, target?.minCp)],
+                      ['cpu', 'Cpu', fmtCap(cap.cpu)],
+                      ['cpl', 'Cpl', fmtCap(cap.cpl)],
+                      ['cpk', 'Cpk', fmtCap(cap.cpk), `fw-bold ${capClass(cap.cpk, target?.minCpk)}`],
+                      ['pp', 'Pp / Ppk', `${fmtCap(cap.pp)} / ${fmtCap(cap.ppk)}`, '', 'text-muted'],
+                    ].map(([id, label, value, tdClass = '', trClass]) => (
+                      <tr key={id} className={trClass}>
+                        <th>{label}</th>
+                        <td className={`num sc-calc ${tdClass}${hl(`stat:${id}`)}`} {...pointAt(`stat:${id}`)}>{value}</td>
+                      </tr>
+                    ))}
                     {target && <tr><td colSpan={2} className="sc-stats__note">{targetLabel(target)}</td></tr>}
                   </tbody>
                 </table>
+
+                {/* ── ตารางค่าคงที่ (มาจาก server) — แถว n ที่ใช้อยู่เน้นไว้ · ชี้ σ/UCL/LCL แล้วช่องที่ใช้สว่าง ── */}
+                {/* ไม่มีตาราง = backend ยังเป็นเวอร์ชันเก่า (ไม่ restart) — บอกตรง ๆ ห้ามหายเงียบ */}
+                {!chart.constantsTable && (
+                  <div className="sc-stats__note no-print">ตารางค่าคงที่ยังไม่มา — backend ต้องรีสตาร์ตเป็นเวอร์ชันใหม่</div>
+                )}
+                {chart.constantsTable && (
+                  <table className="sc-const">
+                    <caption>ค่าคงที่ control chart</caption>
+                    <thead>
+                      <tr><th>n</th>{CONST_COLS.map(([, label]) => <th key={label}>{label}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {chart.constantsTable.rows.map((row) => (
+                        <tr key={row.n} className={row.n === (isImr ? 2 : n) ? 'sc-const__current' : ''}>
+                          <th>{row.n}</th>
+                          {CONST_COLS.map(([col]) => (
+                            <td key={col} className={`num${hl(`k:${row.n}:${col}`)}`}>{row[col].toFixed(3)}</td>
+                          ))}
+                        </tr>
+                      ))}
+                      <tr className={isImr ? 'sc-const__current' : ''}>
+                        <td colSpan={CONST_COLS.length + 1} className={`sc-const__imr${hl('k:imr:E2')}`}>
+                          I-MR (n = 1): E2 = {chart.constantsTable.imr.E2.toFixed(3)} · d₂/D3/D4 ใช้แถว n = 2
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                )}
+                </div>
               </div>
+
+              <Overlay target={hot?.el} show={Boolean(info && hot?.el)} placement="top">
+                {(props) => (
+                  <Tooltip {...props} className="sc-tip">
+                    {info && (
+                      <>
+                        <div className="sc-tip__title">{info.title}</div>
+                        {info.lines.map((line, j) => <div key={j}>{line}</div>)}
+                      </>
+                    )}
+                  </Tooltip>
+                )}
+              </Overlay>
 
               {/* ── Event Log ── */}
               <h2 className="sc-section">Event Log / Corrective Action</h2>

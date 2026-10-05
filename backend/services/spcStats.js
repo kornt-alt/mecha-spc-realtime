@@ -149,6 +149,8 @@ const xbarRLimits = (subgroups, n, baseline) => {
     sigmaWithin: rbar / d2,
     xbarbar,
     rbar,
+    // ค่าคงที่ที่ใช้จริง — หน้า SC เอาไปแทนค่าใน tooltip สูตร (client ห้ามถือตารางนี้เอง)
+    constants: { A2, D3, D4, d2 },
   };
 };
 
@@ -185,6 +187,7 @@ const individualsLimits = (subgroups, baseline) => {
     movingRanges,
     xbarbar: center,
     rbar: mrbar,
+    constants: { E2: IMR.E2, D3: IMR.D3, D4: IMR.D4, d2: IMR.d2 },
   };
 };
 

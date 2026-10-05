@@ -11,6 +11,12 @@ const {
 } = require('../db/queries');
 const { targetFor } = require('../services/capabilityTarget');
 const { analyze } = require('../services/spcStats');
+const { CONSTANTS, IMR } = require('../services/spcConstants');
+
+const CONSTANTS_TABLE = {
+  rows: Object.entries(CONSTANTS).map(([size, row]) => ({ n: Number(size), ...row })),
+  imr: { ...IMR },
+};
 const {
   computeBaseline, setBaseline, clearBaseline, baselineOf, pickBaseline, scopeOf,
 } = require('../services/baseline');
@@ -80,6 +86,9 @@ router.get('/:checkpointId', wrap(async (req, res) => {
     baselineScope: scopeOf(filter),
     // เกณฑ์ Cp/Cpk ขั้นต่ำของจุดนี้ (ลูกค้า/override/ค่าระบบ เลือกแล้วที่ server) — client แค่เอาไปเทียบสี
     capabilityTarget: targetFor(checkpoint, targets),
+    // ตารางค่าคงที่ทั้งชุด — หน้า SC วาดเป็นตารางอ้างอิงเหมือนชีต SC ของ Excel
+    // ส่งจาก server เพราะ client ห้ามถือตารางนี้เอง · ใส่เฉพาะ route นี้ ไม่ติดไปทุกการ์ดของ Dashboard
+    constantsTable: CONSTANTS_TABLE,
     ...result,
   });
 }));
