@@ -6,7 +6,7 @@ const { query, execute, withTransaction } = require('../db/pool');
 const { fetchModelCheckpoints, fetchModelBaselines } = require('../db/queries');
 const { baselineOf } = require('../services/baseline');
 const { AppError, wrap } = require('../middleware/errorHandler');
-const { requireLogin, requireLoginUnless } = require('../middleware/requireLogin');
+const { requireAdmin, requireLoginUnless } = require('../middleware/requireLogin');
 
 const router = express.Router();
 
@@ -62,15 +62,17 @@ router.get('/lookups', wrap(async (req, res) => {
   const activeOnly = req.query.all !== '1';
   const flag = activeOnly ? ' WHERE is_active = 1' : '';
 
-  const [[divisions], [machines], [inspectors], [customers]] = await Promise.all([
+  const [[divisions], [machines], [inspectors], [customers], [categories]] = await Promise.all([
     // ipbass_dept ต้องมาด้วย — ฝั่ง client ใช้เลือก dept ตอนยิง MOPLAN
     query('SELECT id, name, ipbass_dept FROM divisions ORDER BY name'),
     query(`SELECT id, division_id, code, name, is_active FROM machines${flag} ORDER BY code`),
     query(`SELECT id, emp_code, name, division_id, is_active FROM inspectors${flag} ORDER BY name`),
     query(`SELECT id, name, min_cp, min_cpk, min_cp_ctf, min_cpk_ctf, ocs_rule_set, is_active FROM customers${flag} ORDER BY name`),
+    // หมวดการตรวจ (id 1 = ตรวจตามรอบ) — ตัวกรอง ?category= ของ Dashboard/SC/รายงาน และหน้า Set up ใช้
+    query(`SELECT id, code, name, has_workflow, sort_order, is_active FROM check_categories${flag} ORDER BY sort_order, id`),
   ]);
 
-  res.json({ divisions, machines, inspectors, customers });
+  res.json({ divisions, machines, inspectors, customers, categories });
 }));
 
 router.get('/models', wrap(async (req, res) => {
@@ -117,9 +119,16 @@ router.get('/models/:id', wrap(async (req, res) => {
 
   // ⚠️ baseline ไม่ได้อยู่บนแถว checkpoint แล้ว (แยกรายเครื่องไปอยู่ checkpoint_baselines)
   //    ต้องแนบมาด้วย ไม่งั้นหน้า Master Setup จะโชว์ว่า "ยังไม่ล็อก" ทุกจุดทั้งที่ล็อกไว้แล้ว
-  const [checkpoints, baselinesByCheckpoint] = await Promise.all([
+  const [checkpoints, baselinesByCheckpoint, [settings]] = await Promise.all([
     fetchModelCheckpoints(req.params.id, { activeOnly: req.query.all !== '1' }),
     fetchModelBaselines(req.params.id),
+    query(
+      `SELECT s.checkpoint_id, s.category_id, s.stage, s.sample_qty
+         FROM checkpoint_category_settings s
+         JOIN checkpoints c ON c.id = s.checkpoint_id
+        WHERE c.model_id = ?`,
+      [Number(req.params.id)]
+    ),
   ]);
 
   res.json({
@@ -127,13 +136,17 @@ router.get('/models/:id', wrap(async (req, res) => {
     checkpoints: checkpoints.map((cp) => ({
       ...cp,
       baselines: (baselinesByCheckpoint.get(cp.id) ?? []).map(baselineOf),
+      // จุดนี้ต้องตรวจในหมวด/ขั้นไหนบ้าง (Set up PD / Set up QC / Last Piece …) — ไม่มีแถว = ไม่ต้องตรวจ
+      category_settings: settings
+        .filter((x) => x.checkpoint_id === cp.id)
+        .map(({ category_id, stage, sample_qty }) => ({ category_id, stage, sample_qty })),
     })),
   });
 }));
 
 // ── เขียน (generic CRUD) ──────────────────────────────────────────────────
 
-router.post('/add', requireLoginUnless(isAddInspector), wrap(async (req, res) => {
+router.post('/add', requireLoginUnless(isAddInspector, requireAdmin), wrap(async (req, res) => {
   const { table, data } = req.body;
   if (!allowedTables.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
 
@@ -149,7 +162,7 @@ router.post('/add', requireLoginUnless(isAddInspector), wrap(async (req, res) =>
   res.json({ success: true, id: result.insertId });
 }));
 
-router.put('/update', requireLogin, wrap(async (req, res) => {
+router.put('/update', requireAdmin, wrap(async (req, res) => {
   const { table, id, data } = req.body;
   if (!allowedTables.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
   if (!isIntLike(id)) throw new AppError('id ไม่ถูกต้อง', 400);
@@ -170,7 +183,7 @@ router.put('/update', requireLogin, wrap(async (req, res) => {
   res.json({ success: true, baselineMayBeStale: affectsBaseline });
 }));
 
-router.delete('/delete', requireLogin, wrap(async (req, res) => {
+router.delete('/delete', requireAdmin, wrap(async (req, res) => {
   const { table, id } = req.body;
   if (!allowedTables.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
   if (!isIntLike(id)) throw new AppError('id ไม่ถูกต้อง', 400);
@@ -226,7 +239,49 @@ router.delete('/delete', requireLogin, wrap(async (req, res) => {
 //
 // ⚠️ ต้องทำใน transaction และพักค่าไว้ที่เลขชั่วคราวก่อน เพราะมี UNIQUE(model_id, seq_no)
 //    ถ้า UPDATE ตรง ๆ ทีละแถวจะชนกันเองกลางคัน
-router.put('/checkpoints/:id/move', requireLogin, wrap(async (req, res) => {
+// ตั้งว่าจุดตรวจนี้ต้องตรวจในหมวด/ขั้นไหน กี่ชิ้น — แทนที่ทั้งชุดของจุดนี้
+// body: { settings: [{ category_id, stage: 'pd'|'qc', sample_qty }] }  (array ว่าง = ไม่ตรวจในหมวดไหนเลย)
+// ⚠️ ไม่ผ่าน generic CRUD (ตารางนี้ไม่มี id ที่หน้าเว็บถือไว้ และต้องแทนทั้งชุดใน transaction เดียว)
+// ⚠️ หมวด 1 (ตรวจตามรอบ) ไม่ใช้ตารางนี้ — ใช้ checkpoints.sample_size ตามเดิม จึงปฏิเสธ
+router.put('/checkpoints/:id/categories', requireAdmin, wrap(async (req, res) => {
+  if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const id = Number(req.params.id);
+  const list = Array.isArray(req.body?.settings) ? req.body.settings : null;
+  if (!list) throw new AppError('settings ต้องเป็น array', 400);
+
+  const [[cp]] = await query('SELECT id FROM checkpoints WHERE id = ?', [id]);
+  if (!cp) throw new AppError('ไม่พบจุดตรวจนี้', 404);
+  const [cats] = await query('SELECT id, name, has_workflow FROM check_categories');
+  const catById = new Map(cats.map((c) => [c.id, c]));
+
+  const seen = new Set();
+  const rows = list.map((x) => {
+    const cat = catById.get(Number(x.category_id));
+    if (!cat || !Number(cat.has_workflow)) throw new AppError(`หมวด id=${x.category_id} ตั้งรายจุดไม่ได้`, 400);
+    if (x.stage !== 'pd' && x.stage !== 'qc') throw new AppError('stage ต้องเป็น pd หรือ qc', 400);
+    const qty = Number(x.sample_qty);
+    if (!Number.isInteger(qty) || qty < 1 || qty > 10) throw new AppError(`จำนวนชิ้นของ ${cat.name} ต้องเป็น 1-10`, 400);
+    const key = `${cat.id}:${x.stage}`;
+    if (seen.has(key)) throw new AppError(`ส่ง ${cat.name} (${x.stage}) ซ้ำ`, 400);
+    seen.add(key);
+    return [id, cat.id, x.stage, qty];
+  });
+
+  await withTransaction(async (conn) => {
+    await conn.execute('DELETE FROM checkpoint_category_settings WHERE checkpoint_id = ?', [id]);
+    if (rows.length) {
+      await conn.query(
+        'INSERT INTO checkpoint_category_settings (checkpoint_id, category_id, stage, sample_qty) VALUES ?',
+        [rows]
+      );
+    }
+  });
+  logWrite(req, 'ตั้งหมวดการตรวจของ', 'checkpoints', id);
+  notifyMasterChanged(req);
+  res.json({ success: true, count: rows.length });
+}));
+
+router.put('/checkpoints/:id/move', requireAdmin, wrap(async (req, res) => {
   const { id } = req.params;
   const { direction } = req.body;
   if (!isIntLike(id)) throw new AppError('id ไม่ถูกต้อง', 400);

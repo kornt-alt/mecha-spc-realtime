@@ -28,16 +28,25 @@ const makeRequireLogin = ({ secret, findUser }) => async (req, res, next) => {
     const user = await findUser(payload.sub);
     if (!user || !Number(user.is_active)) throw new AppError(NEED_LOGIN, 401);
 
-    req.user = { id: user.id, username: user.username, display_name: user.display_name };
+    req.user = {
+      id: user.id,
+      username: user.username,
+      display_name: user.display_name,
+      roles: rolesOf(user.role),
+      inspector_id: user.inspector_id ?? null,
+    };
     next();
   } catch (err) {
     next(err);
   }
 };
 
+// users.role เป็น SET → mysql2 คืน string 'ADMIN,QC' · แตกเป็น array ที่เดียว
+const rolesOf = (v) => String(v ?? '').split(',').map((r) => r.trim()).filter(Boolean);
+
 const findUser = async (id) => {
   const [rows] = await query(
-    'SELECT id, username, display_name, is_active FROM users WHERE id = ?',
+    'SELECT id, username, display_name, is_active, role, inspector_id FROM users WHERE id = ?',
     [Number(id)]
   );
   return rows[0] ?? null;
@@ -50,4 +59,24 @@ const requireLogin = makeRequireLogin({ secret: () => env.AUTH_SECRET, findUser 
 const requireLoginUnless = (pred, guard = requireLogin) => (req, res, next) =>
   (pred(req) ? next() : guard(req, res, next));
 
-module.exports = { requireLogin, requireLoginUnless, makeRequireLogin, tokenOf, NEED_LOGIN };
+// login แล้ว + ต้องมีอย่างน้อยหนึ่ง role ในลิสต์ — ไม่มี = 403 (ไม่ใช่ 401: login ถูกแล้วแต่ไม่มีสิทธิ์
+// ฝั่ง client 401 = ล้าง session · 403 ต้องไม่ล้าง ไม่งั้น QC กดเข้า Master แล้วหลุดออกจากหน้า Set up ด้วย)
+//
+// ⚠️ ทุกเส้นที่เคยเป็น requireLogin (แก้ master / baseline / ล้างใบ / แก้ค่า / users) ต้องเป็น
+//    requireRole('ADMIN') — บัญชี PD/QC ที่เพิ่มมาเพื่อหน้า Set up ห้ามเข้าไปแก้ Master ได้
+//    กั้นที่ server จริง ไม่ใช่ซ่อนปุ่มฝั่ง client อย่างเดียว
+const makeRequireRole = (guard) => (...roles) => (req, res, next) =>
+  guard(req, res, (err) => {
+    if (err) return next(err);
+    if (!req.user.roles.some((r) => roles.includes(r))) {
+      return next(new AppError(`บัญชีนี้ไม่มีสิทธิ์ (ต้องเป็น ${roles.join(' หรือ ')})`, 403));
+    }
+    next();
+  });
+const requireRole = makeRequireRole(requireLogin);
+const requireAdmin = requireRole('ADMIN');
+
+module.exports = {
+  requireLogin, requireLoginUnless, requireRole, requireAdmin, makeRequireLogin, makeRequireRole,
+  rolesOf, tokenOf, NEED_LOGIN,
+};

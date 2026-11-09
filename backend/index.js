@@ -68,6 +68,8 @@ app.use(`${API}/inspections`, require('./routes/inspections'));
 app.use(`${API}/charts`, require('./routes/charts'));
 app.use(`${API}/reports`, require('./routes/reports'));
 app.use(`${API}/events`, require('./routes/events'));
+// งานส่งต่อ PD → QC (Set up / Last Piece) — ต้อง login ทั้ง router · แจ้งคิวด้วย io.emit('check_job_updated')
+app.use(`${API}/check-jobs`, require('./routes/checkJobs'));
 
 // ต้องอยู่หลัง route ทั้งหมด — เส้นที่ไม่มีจริงใต้ /api ตอบ JSON ไม่ใช่ HTML
 app.use(API, notFoundApi);

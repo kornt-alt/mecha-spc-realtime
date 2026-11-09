@@ -449,3 +449,101 @@ ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS characteristic VARCHAR(64) NULL
 
 -- ชุดกฎ OCS ต่อลูกค้า (basic = กฎ 1-4 · full = ครบ 8 กฎ) — ลูกค้าเดิมทั้งหมดได้ basic
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS ocs_rule_set ENUM('basic','full') NOT NULL DEFAULT 'basic' AFTER min_cpk_ctf;
+
+-- ── หมวดการตรวจ (Routine / Set up / Last Piece …) + งานส่งต่อ PD → QC ──────────
+--
+-- เดิมระบบมีการตรวจแบบเดียว (ตรวจตามรอบ → กราฟ SPC) ตอนนี้แยกเป็นหมวด เพิ่มได้ในอนาคต
+-- ⚠️ เป็นตาราง ไม่ใช่ ENUM โดยตั้งใจ — เพิ่มหมวดใหม่ = INSERT แถวเดียว ไม่ต้อง ALTER ตารางใบตรวจบน production
+-- ⚠️ id = 1 คือ 'routine' ตายตัว — inspections.category_id DEFAULT 1 และ buildInspectionFilter()
+--    กรองหมวด 1 เป็นค่าตั้งต้น ห้ามเปลี่ยนเลขนี้
+-- has_workflow = 1 → ต้องผ่านงานส่งต่อ (check_jobs) PD ตรวจก่อน → คิว QC → QC ยืนยัน
+CREATE TABLE IF NOT EXISTS check_categories (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  code          VARCHAR(30)  NOT NULL,
+  name          VARCHAR(100) NOT NULL,
+  has_workflow  TINYINT(1)   NOT NULL DEFAULT 0,
+  sort_order    INT          NOT NULL DEFAULT 0,
+  is_active     TINYINT(1)   NOT NULL DEFAULT 1,
+  UNIQUE KEY uq_check_categories_code (code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO check_categories (id, code, name, has_workflow, sort_order) VALUES
+  (1, 'routine',    'ตรวจตามรอบ',  0, 1),
+  (2, 'setup',      'Set up',      1, 2),
+  (3, 'last_piece', 'Last Piece',  1, 3);
+
+-- จุดตรวจไหนต้องตรวจในหมวด/ขั้นไหน กี่ชิ้น (ชีต SET UP: "5 pcs." ต่อจุด แยก Production Check / QC Confirm)
+-- ไม่มีแถว = จุดนั้นไม่ต้องตรวจในขั้นนั้น · หมวด routine ไม่ใช้ตารางนี้ (ใช้ checkpoints.sample_size ตามเดิม)
+-- ⚠️ ไม่ผ่าน generic CRUD — แก้ที่ PUT /master/checkpoints/:id/categories (ADMIN)
+CREATE TABLE IF NOT EXISTS checkpoint_category_settings (
+  id             INT AUTO_INCREMENT PRIMARY KEY,
+  checkpoint_id  INT NOT NULL,
+  category_id    INT NOT NULL,
+  stage          ENUM('pd','qc') NOT NULL,
+  sample_qty     TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  UNIQUE KEY uq_ccs (checkpoint_id, category_id, stage),
+  CONSTRAINT fk_ccs_checkpoint
+    FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE CASCADE,
+  CONSTRAINT fk_ccs_category
+    FOREIGN KEY (category_id) REFERENCES check_categories(id) ON DELETE RESTRICT,
+  CONSTRAINT ck_ccs_sample_qty CHECK (sample_qty BETWEEN 1 AND 10)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- งาน 1 ใบ = 1 หมวด × 1 WOS × 1 เครื่อง · status เก็บแค่ "ตอนนี้อยู่ขั้นไหน"
+--   pd_checking → waiting_qc → qc_checking → passed
+--                                         └→ (QC ไม่ผ่าน) กลับ pd_checking + round_no+1
+--   cancelled ได้จากทุกขั้นที่ยังไม่ passed
+-- ⚠️ เวลาทุกขั้นอยู่ที่ check_job_events ไม่ใช่คอลัมน์ที่นี่ — รอบ 2 หลัง QC ตีกลับจะเขียนทับรอบแรก
+CREATE TABLE IF NOT EXISTS check_jobs (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  category_id   INT NOT NULL,
+  model_id      INT NOT NULL,
+  machine_id    INT NOT NULL,
+  mo_no         VARCHAR(50) NOT NULL,
+  lot_no        VARCHAR(50) NULL,
+  shift         ENUM('M','N','A','B','C','D') NOT NULL,
+  -- สิ่งที่ IPBASS ตอบมาตอนเปิดงาน (audit trail เหมือน inspections.mo_* · NULL ปกติ) ส่งต่อลงใบตรวจทุกใบของงาน
+  mo_item_no    VARCHAR(50)  NULL,
+  mo_item_name  VARCHAR(150) NULL,
+  mo_draw       VARCHAR(100) NULL,
+  round_no      INT NOT NULL DEFAULT 1,
+  status        ENUM('pd_checking','waiting_qc','qc_checking','passed','cancelled') NOT NULL DEFAULT 'pd_checking',
+  result        ENUM('pass','fail') NULL,
+  opened_by     INT NOT NULL,
+  opened_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  closed_at     DATETIME NULL,
+  KEY ix_check_jobs_status (status, opened_at),
+  KEY ix_check_jobs_mo (mo_no),
+  CONSTRAINT fk_check_jobs_category FOREIGN KEY (category_id) REFERENCES check_categories(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_check_jobs_model    FOREIGN KEY (model_id)    REFERENCES models(id)    ON DELETE RESTRICT,
+  CONSTRAINT fk_check_jobs_machine  FOREIGN KEY (machine_id)  REFERENCES machines(id)  ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- timeline ของงาน — append-only ห้ามแก้/ลบ (หลักฐานว่าใครส่ง/รับ/ยืนยันเมื่อไหร่)
+-- user_name เป็น snapshot · user_id ไม่มี FK (users ไม่มีการลบ เหมือน inspection_result_edits)
+CREATE TABLE IF NOT EXISTS check_job_events (
+  id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+  job_id         INT NOT NULL,
+  round_no       INT NOT NULL,
+  action         ENUM('open','pd_submit','qc_accept','qc_pass','qc_reject','cancel') NOT NULL,
+  user_id        INT NOT NULL,
+  user_name      VARCHAR(100) NOT NULL,
+  note           VARCHAR(255) NULL,
+  inspection_id  INT NULL,
+  at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_cje_job (job_id, at),
+  CONSTRAINT fk_cje_job FOREIGN KEY (job_id) REFERENCES check_jobs(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ⚠️ DEFAULT 1 (routine) — backend ตัวเก่าที่ยังรันอยู่ INSERT โดยไม่รู้จักคอลัมน์นี้ ต้องยังบันทึกได้ตามเดิม
+-- ไม่มี FK ไป check_categories โดยตั้งใจ (ไม่ต้องล็อกตารางใบตรวจทั้งก้อนตอนเพิ่ม constraint บน production)
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS category_id INT NOT NULL DEFAULT 1;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS job_id      INT NULL;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS stage       ENUM('pd','qc') NULL;
+ALTER TABLE inspections ADD INDEX IF NOT EXISTS ix_inspections_job (job_id);
+
+-- role ของบัญชี — บัญชีเดิมทั้งหมดได้ ADMIN (= สิทธิ์เดิมของคน login หน้า Master)
+-- inspector_id = ผู้ตรวจที่บัญชีนี้เป็น (PD/QC ต้องผูก ใบตรวจยังอ้าง inspectors เหมือนเดิม)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role SET('ADMIN','PD','QC') NOT NULL DEFAULT 'ADMIN';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS inspector_id INT NULL;

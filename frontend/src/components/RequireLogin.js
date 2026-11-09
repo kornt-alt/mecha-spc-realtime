@@ -9,7 +9,7 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Card, Container, Form, Modal, Spinner } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
-import { clearSession, getSession, onSessionChange, setSession } from '../utils/auth';
+import { clearSession, getSession, hasRole, onSessionChange, setSession } from '../utils/auth';
 
 // เข้าได้ 2 ทาง: passkey ช่องเดียว หรือ ชื่อผู้ใช้ + รหัสผ่าน — แยกเป็นสองฟอร์มคนละปุ่ม
 // ไม่รวมเป็นฟอร์มเดียวที่ "เดาเอา" ว่าคนตั้งใจใช้ทางไหนจากช่องที่กรอก
@@ -71,7 +71,9 @@ export const LoginForm = ({ onDone, idPrefix = 'login' }) => {
   );
 };
 
-const RequireLogin = ({ children }) => {
+// roles = role ที่เข้าหน้านี้ได้ (มีตัวใดตัวหนึ่งพอ) · title = หัวการ์ด login
+// ⚠️ ไม่มีสิทธิ์ ≠ ยังไม่ login — ไม่ล้าง session (QC ที่หลงเข้าหน้า Master ต้องยังอยู่ในระบบหน้า Set up)
+const RequireLogin = ({ children, roles = ['ADMIN'], title = 'เข้าสู่ระบบเพื่อแก้ไขข้อมูล Master' }) => {
   const [session, setSessionState] = useState(getSession);
   // เคยเข้าหน้าได้แล้วในรอบนี้ไหม — ตัดสินว่า session หายแล้วจะโชว์ฟอร์มเต็มหน้าหรือกล่องทับ
   const [entered, setEntered] = useState(() => Boolean(getSession()));
@@ -83,8 +85,13 @@ const RequireLogin = ({ children }) => {
 
   // token ที่จำไว้อาจใช้ไม่ได้แล้ว (บัญชีถูกปิด / server เปลี่ยน AUTH_SECRET) — เช็คครั้งเดียวตอนเข้า
   // ไม่ผ่าน apiCall ล้าง session ให้เอง แล้วกล่อง login จะเด้งขึ้นมาก่อนคนเริ่มกรอกอะไร
+  // ⚠️ ผลของ /me เขียนกลับลง session ด้วย — role/ผู้ตรวจที่ ADMIN เพิ่งแก้ให้ต้องมีผลโดยไม่ต้อง login ใหม่
+  //    และ session ที่ login ไว้ก่อนระบบมี role (ไม่มี roles) จะได้ role ติดมา
   useEffect(() => {
-    if (getSession()) apiCall('/auth/me').catch(() => {});
+    if (!getSession()) return;
+    apiCall('/auth/me')
+      .then((r) => { const s = getSession(); if (s && r?.user) setSession({ ...s, user: r.user }); })
+      .catch(() => {});
   }, []);
 
   const logout = () => {
@@ -96,12 +103,28 @@ const RequireLogin = ({ children }) => {
     return (
       <Container className="page" style={{ maxWidth: 380 }}>
         <Card className="mt-4">
-          <Card.Header>เข้าสู่ระบบเพื่อแก้ไขข้อมูล Master</Card.Header>
+          <Card.Header>{title}</Card.Header>
           <Card.Body>
             <LoginForm idPrefix="login-page" />
             <div className="small text-muted mt-3">
               หน้าใบตรวจ Dashboard และรายงานใช้งานได้โดยไม่ต้องเข้าสู่ระบบ
             </div>
+          </Card.Body>
+        </Card>
+      </Container>
+    );
+  }
+
+  if (session && !hasRole(session, ...roles)) {
+    return (
+      <Container className="page" style={{ maxWidth: 420 }}>
+        <Card className="mt-4">
+          <Card.Header>บัญชีนี้ไม่มีสิทธิ์เข้าหน้านี้</Card.Header>
+          <Card.Body className="small">
+            <div>เข้าสู่ระบบเป็น <b>{session.user?.display_name || session.user?.username}</b>
+              {' '}(สิทธิ์: {(session.user?.roles ?? []).join(', ') || 'ไม่มี'})</div>
+            <div className="text-muted mt-1">หน้านี้ต้องเป็น {roles.join(' หรือ ')} — ให้ ADMIN ตั้งที่ Master › ผู้ใช้</div>
+            <Button size="sm" variant="outline-secondary" className="mt-3" onClick={logout}>เปลี่ยนบัญชี</Button>
           </Card.Body>
         </Card>
       </Container>

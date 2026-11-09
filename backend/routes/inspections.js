@@ -3,11 +3,12 @@
 
 const express = require('express');
 const { query, execute, withTransaction } = require('../db/pool');
-const { fetchModelCheckpoints, fetchDoneCheckpointIds } = require('../db/queries');
+const { fetchModelCheckpoints, fetchDoneCheckpointIds, ROUTINE_CATEGORY } = require('../db/queries');
+const { insertInspection } = require('../db/inspectionWrite');
 const { evaluateCheckpoint, summarize, validateSubmission, isShift, judge } = require('../services/judgment');
 const { toNum } = require('../services/spcStats');
 const { AppError, wrap } = require('../middleware/errorHandler');
-const { requireLogin } = require('../middleware/requireLogin');
+const { requireAdmin } = require('../middleware/requireLogin');
 
 const router = express.Router();
 
@@ -83,12 +84,14 @@ router.post('/', wrap(async (req, res) => {
     const replaceReason = String(b.replace_reason ?? '').trim();
     if (!replaceReason) throw new AppError('ต้องระบุเหตุผลที่แก้ใบเดิม', 400);
     const [[old]] = await query(
-      'SELECT id, model_id, machine_id, subgroup_no, mo_no, voided_at FROM inspections WHERE id = ?',
+      'SELECT id, model_id, machine_id, subgroup_no, mo_no, voided_at, category_id FROM inspections WHERE id = ?',
       [Number(b.replaces_id)]
     );
     if (!old) throw new AppError('ไม่พบใบเดิมที่จะแก้ — อาจถูกล้างทิ้งไปแล้ว', 404);
     if (old.voided_at) throw new AppError(`ใบ #${old.id} ถูกยกเลิกไปแล้ว แก้ซ้ำไม่ได้`, 400);
     if (Number(old.model_id) !== Number(b.model_id)) throw new AppError('ใบเดิมเป็นคนละ item กับใบนี้', 400);
+    // ใบ Set up / Last Piece แทนจากหน้าใบตรวจตามรอบไม่ได้ — ใบแทนจะกลายเป็นหมวดตรวจตามรอบ
+    if (Number(old.category_id) !== ROUTINE_CATEGORY) throw new AppError(`ใบ #${old.id} ไม่ใช่ใบตรวจตามรอบ แก้จากหน้านี้ไม่ได้`, 400);
     replaced = {
       ...old,
       reason: replaceReason,
@@ -132,48 +135,13 @@ router.post('/', wrap(async (req, res) => {
   const overall = summarize(allLines);
 
   const saved = await withTransaction(async (conn) => {
-    // ⚠️ subgroup_no ให้ server แจกเองเสมอ ห้ามรับจาก client
-    // สองคนตรวจ MO เดียวกันพร้อมกันแล้วเลขชน = ทุกจุดบนกราฟหลังจากนั้นผิดหมด
-    // FOR UPDATE ล็อกช่วงไว้จนกว่าจะ commit · UNIQUE(model_id, mo_no, subgroup_no) เป็นตาข่ายชั้นสอง
-    const [[next]] = await conn.query(
-      `SELECT COALESCE(MAX(subgroup_no), 0) + 1 AS n
-         FROM inspections WHERE model_id = ? AND mo_no = ? FOR UPDATE`,
-      [Number(b.model_id), moNo]
-    );
-    const subgroupNo = next.n;
-
-    const [header] = await conn.execute(
-      `INSERT INTO inspections
-         (model_id, machine_id, inspector_id, mo_no, lot_no, shift, subgroup_no, remark, overall_result,
-          mo_item_no, mo_item_name, mo_draw, mo_model_group)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        Number(b.model_id), Number(b.machine_id), Number(b.inspector_id),
-        moNo, textOrNull(b.lot_no), shift, subgroupNo,
-        textOrNull(b.remark), overall,
-        moItemNo, moItemName, moDraw, moModelGroup,
-      ]
-    );
-    const inspectionId = header.insertId;
-
-    // insert บรรทัดผลทั้งหมดในคำสั่งเดียว
-    const values = [];
-    const params = [];
-    for (const { checkpoint, lines } of linesByCheckpoint) {
-      for (const l of lines) {
-        values.push('(?, ?, ?, ?, ?, ?, ?, ?, ?)');
-        params.push(
-          inspectionId, checkpoint.id, l.piece_no, l.value,
-          l.judgment, l.ng_reason, l.usl_used, l.lsl_used, l.n_used
-        );
-      }
-    }
-    await conn.query(
-      `INSERT INTO inspection_results
-         (inspection_id, checkpoint_id, piece_no, value, judgment, ng_reason, usl_used, lsl_used, n_used)
-       VALUES ${values.join(', ')}`,
-      params
-    );
+    // ⚠️ ตรวจตามรอบ = category 1 เสมอ — เส้นนี้ไม่รับหมวดจาก client (Set up ไปทาง routes/checkJobs.js)
+    const { inspectionId, subgroupNo } = await insertInspection(conn, {
+      model_id: b.model_id, machine_id: b.machine_id, inspector_id: b.inspector_id,
+      mo_no: moNo, lot_no: textOrNull(b.lot_no), shift, remark: textOrNull(b.remark), overall,
+      mo_item_no: moItemNo, mo_item_name: moItemName, mo_draw: moDraw, mo_model_group: moModelGroup,
+      category_id: ROUTINE_CATEGORY,
+    }, linesByCheckpoint);
 
     if (replaced) {
       // voided_at IS NULL ในเงื่อนไข — มีคนยกเลิกใบเดิมไประหว่างนี้ = rollback ทั้งใบใหม่ด้วย
@@ -195,6 +163,8 @@ router.post('/', wrap(async (req, res) => {
   req.app.get('io')?.to(`model:${Number(b.model_id)}`).emit('inspection_saved', {
     inspectionId: saved.inspectionId,
     modelId: Number(b.model_id),
+    // ⚠️ Dashboard ข้าม event ที่ไม่ใช่หมวด 1 (ตรวจตามรอบ) — ใบ Set up ห้ามขึ้นแถบ "ใบตรวจล่าสุด"
+    categoryId: ROUTINE_CATEGORY,
     // ⚠️ Dashboard กรองตามเครื่องได้ (?machine=) — ไม่มี machineId มาด้วยจะแยกไม่ออกว่าใบนี้
     //    เป็นของเครื่องที่กำลังดูอยู่ไหม แล้วต้องโหลดกราฟใหม่ทุกครั้งที่เครื่องไหนก็ได้บันทึก
     //    ส่งแค่ id ไม่ส่งชื่อ — client มีลิสต์เครื่องจาก /master/lookups อยู่แล้ว
@@ -289,7 +259,7 @@ router.put('/:id/void', wrap(async (req, res) => {
   if (voided && !reason) throw new AppError('ต้องระบุเหตุผลที่ยกเลิก', 400);
 
   const [[inspection]] = await query(
-    'SELECT id, model_id, machine_id, mo_no, subgroup_no, voided_at FROM inspections WHERE id = ?',
+    'SELECT id, model_id, machine_id, mo_no, subgroup_no, voided_at, category_id FROM inspections WHERE id = ?',
     [id]
   );
   // ใบนี้อาจถูกล้างทิ้งจริงไปแล้วโดยคนอื่น (ชั้น 2) ขณะที่หน้าจอเรายังค้างปุ่มคืนค่าอยู่
@@ -310,6 +280,7 @@ router.put('/:id/void', wrap(async (req, res) => {
   req.app.get('io')?.to(`model:${inspection.model_id}`).emit('inspection_saved', {
     inspectionId: id,
     modelId: inspection.model_id,
+    categoryId: inspection.category_id,
     machineId: inspection.machine_id,
     subgroupNo: inspection.subgroup_no,
     moNo: inspection.mo_no,
@@ -331,7 +302,7 @@ router.put('/:id/void', wrap(async (req, res) => {
 // ⚠️ แก้ได้เฉพาะแถวที่มีอยู่ ไม่เพิ่ม/ลบจุดหรือชิ้น — จำนวนชิ้นต่อจุดต้องเท่า n_used เสมอ
 // ⚠️ ทุกค่าที่เปลี่ยนต้องลง inspection_result_edits (ค่าเดิม + ค่าใหม่ + เหตุผล + คนแก้)
 //    ไม่มีประวัติ = ใบที่ถูกแก้ใช้เป็นหลักฐานไม่ได้
-router.put('/:id/results', requireLogin, wrap(async (req, res) => {
+router.put('/:id/results', requireAdmin, wrap(async (req, res) => {
   if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
   const id = Number(req.params.id);
   const reason = String(req.body?.reason ?? '').trim();
@@ -340,7 +311,7 @@ router.put('/:id/results', requireLogin, wrap(async (req, res) => {
   if (submitted.length === 0) throw new AppError('ไม่มีค่าที่จะแก้', 400);
 
   const [[inspection]] = await query(
-    'SELECT id, model_id, machine_id, mo_no, subgroup_no, voided_at FROM inspections WHERE id = ?',
+    'SELECT id, model_id, machine_id, mo_no, subgroup_no, voided_at, category_id FROM inspections WHERE id = ?',
     [id]
   );
   if (!inspection) throw new AppError('ไม่พบใบตรวจนี้', 404);
@@ -416,6 +387,7 @@ router.put('/:id/results', requireLogin, wrap(async (req, res) => {
   req.app.get('io')?.to(`model:${inspection.model_id}`).emit('inspection_saved', {
     inspectionId: id,
     modelId: inspection.model_id,
+    categoryId: inspection.category_id,
     machineId: inspection.machine_id,
     subgroupNo: inspection.subgroup_no,
     moNo: inspection.mo_no,
@@ -435,7 +407,7 @@ router.put('/:id/results', requireLogin, wrap(async (req, res) => {
 // รับ model_id ใน body ให้เข้ารูปเดียวกับ DELETE /master/delete
 // ⚠️ ต้อง login — ลบหลักฐานออกจาก DB จริง กู้คืนไม่ได้ (กดจากหน้า Master)
 //    ต่างจาก PUT /:id/void ข้างบนที่ยังเปิดอยู่ เพราะยกเลิกคืนค่าได้ และมี voided_reason บังคับ
-router.delete('/voided', requireLogin, wrap(async (req, res) => {
+router.delete('/voided', requireAdmin, wrap(async (req, res) => {
   const { model_id: modelId } = req.body;
   if (!isIntLike(modelId)) throw new AppError('model_id ไม่ถูกต้อง', 400);
 
@@ -486,6 +458,8 @@ router.get('/', wrap(async (req, res) => {
 
   const where = [];
   const params = [];
+  // ตารางประวัติใต้ใบตรวจตามรอบ — โชว์เฉพาะหมวดที่ขอ (default ตรวจตามรอบ) ไม่ปนใบ Set up
+  where.push('i.category_id = ?'); params.push(Number(req.query.category) || ROUTINE_CATEGORY);
   if (modelId) { where.push('i.model_id = ?'); params.push(Number(modelId)); }
   if (moNo) { where.push('i.mo_no = ?'); params.push(String(moNo)); }
   // กรองวันที่เมื่อครบทั้งคู่เท่านั้น — ต้องตรงกับเงื่อนไขฝั่ง client เป๊ะ

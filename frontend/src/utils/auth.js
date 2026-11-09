@@ -51,3 +51,8 @@ export const onSessionChange = (fn) => {
   listeners.add(fn);
   return () => listeners.delete(fn);
 };
+
+// role ของ session (ADMIN / PD / QC) — ใช้ซ่อน/โชว์ของบนจอเท่านั้น ตัวกั้นจริงคือ requireRole ฝั่ง backend
+// session เก่าที่ login ก่อนมี role ไม่มี roles → ถือว่าไม่มีสิทธิ์อะไร (RequireLogin เรียก /auth/me เติมให้)
+export const rolesOf = (session) => (Array.isArray(session?.user?.roles) ? session.user.roles : []);
+export const hasRole = (session, ...roles) => rolesOf(session).some((r) => roles.includes(r));

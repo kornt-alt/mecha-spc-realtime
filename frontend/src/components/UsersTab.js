@@ -12,7 +12,22 @@ import { fmtDateTime } from '../utils/dateFormat';
 
 const MIN_PASSWORD = 6; // เท่ากับ backend/routes/users.js
 const MIN_PASSKEY = 6;  // เท่ากับ backend/routes/users.js
-const blank = () => ({ username: '', display_name: '', password: '', confirm: '' });
+const blank = () => ({ username: '', display_name: '', password: '', confirm: '', role: 'ADMIN', inspector_id: '' });
+
+// role ของบัญชี (users.role เป็น SET) — ADMIN = แก้ Master · PD / QC = หน้า Set up / Last Piece
+// ⚠️ ตัวกั้นจริงคือ requireRole ฝั่ง backend · ลิสต์นี้เป็นแค่ตัวเลือกบนจอ
+// ใช้ dropdown ครบทุกชุดแทน checkbox — กล่อง showForm มีแต่ช่อง text/select
+// ⚠️ value ต้องเรียงตามนิยาม SET ('ADMIN','PD','QC') — MariaDB คืนค่าเรียงแบบนั้น ไม่ตรง = ช่องว่าง
+export const ROLE_OPTIONS = [
+  { value: 'ADMIN', label: 'ADMIN (ตั้งค่า Master)' },
+  { value: 'PD', label: 'PD (Production Check)' },
+  { value: 'QC', label: 'QC (QC Confirm)' },
+  { value: 'PD,QC', label: 'PD + QC' },
+  { value: 'ADMIN,PD', label: 'ADMIN + PD' },
+  { value: 'ADMIN,QC', label: 'ADMIN + QC' },
+  { value: 'ADMIN,PD,QC', label: 'ADMIN + PD + QC' },
+];
+const roleLabel = (r) => String(r ?? '').split(',').filter(Boolean).join(' + ') || '—';
 
 const fmtTime = (v) => fmtDateTime(v);
 
@@ -20,6 +35,11 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState(blank);
   const me = getSession()?.user?.id;
+  const [inspectors, setInspectors] = useState([]);
+  useEffect(() => {
+    apiCall('/master/lookups').then((lk) => setInspectors(lk.inspectors ?? [])).catch(() => {});
+  }, []);
+  const inspectorOptions = inspectors.map((i) => ({ value: String(i.id), label: `${i.emp_code} ${i.name}` }));
 
   const load = useCallback(async () => {
     try { setUsers(await apiCall('/users')); } catch (e) { fail(e); }
@@ -46,7 +66,10 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
     try {
       await apiCall('/users', {
         method: 'POST',
-        body: { username: form.username.trim(), display_name: form.display_name, password: form.password },
+        body: {
+          username: form.username.trim(), display_name: form.display_name, password: form.password,
+          role: form.role, inspector_id: form.inspector_id || null,
+        },
       });
       say('success', `เพิ่มบัญชี ${form.username.trim()} แล้ว — แจ้งรหัสผ่านให้เจ้าของบัญชี แล้วให้เขาเปลี่ยนเอง`);
       setForm(blank());
@@ -120,6 +143,25 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
     },
   });
 
+  // PD/QC ต้องผูกผู้ตรวจ — ใบตรวจอ้าง inspectors เหมือนเดิม ไม่ผูก = ส่งผลตรวจไม่ได้ (server ตอบ 400)
+  const editRole = (u) => showForm({
+    title: `สิทธิ์ / ผู้ตรวจ ของ ${u.username}`,
+    body: 'PD / QC ต้องผูกกับรายชื่อผู้ตรวจ — ชื่อนี้จะไปอยู่บนใบตรวจ Set up / Last Piece',
+    confirmLabel: 'บันทึก',
+    fields: [
+      { name: 'role', label: 'สิทธิ์', options: ROLE_OPTIONS, required: true, defaultValue: u.role ?? 'ADMIN' },
+      { name: 'inspector_id', label: 'ผู้ตรวจ', options: inspectorOptions, placeholder: '— ไม่ผูก —',
+        defaultValue: u.inspector_id ? String(u.inspector_id) : '' },
+    ],
+    onConfirm: async ({ role, inspector_id: inspectorId }) => {
+      try {
+        await apiCall(`/users/${u.id}`, { method: 'PUT', body: { role, inspector_id: inspectorId || null } });
+        say('success', `แก้สิทธิ์ของ ${u.username} แล้ว — มีผลครั้งถัดไปที่เปิดหน้า`);
+        await load();
+      } catch (err) { fail(err); }
+    },
+  });
+
   const setActive = async (u, active) => {
     try {
       await apiCall(`/users/${u.id}`, { method: 'PUT', body: { is_active: active } });
@@ -156,6 +198,19 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
               <Form.Label className="small mb-1">พิมพ์รหัสผ่านซ้ำ</Form.Label>
               <Form.Control type="password" autoComplete="new-password" {...field('confirm')} />
             </Form.Group>
+            <Form.Group as={Col} md={2} controlId="user-role">
+              <Form.Label className="small mb-1">สิทธิ์</Form.Label>
+              <Form.Select {...field('role')}>
+                {ROLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </Form.Select>
+            </Form.Group>
+            <Form.Group as={Col} md={3} controlId="user-inspector">
+              <Form.Label className="small mb-1">ผู้ตรวจ (PD/QC ต้องเลือก)</Form.Label>
+              <Form.Select {...field('inspector_id')}>
+                <option value="">— ไม่ผูก —</option>
+                {inspectorOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </Form.Select>
+            </Form.Group>
             <Col md="auto">
               <Button type="submit">เพิ่มผู้ใช้</Button>
             </Col>
@@ -165,7 +220,7 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
         <Table striped bordered hover responsive size="sm" className="mb-0">
           <thead className="table-dark">
             <tr>
-              <th>ชื่อผู้ใช้</th><th>ชื่อที่แสดง</th><th>สถานะ</th><th>Passkey</th><th>login ล่าสุด</th>
+              <th>ชื่อผู้ใช้</th><th>ชื่อที่แสดง</th><th>สิทธิ์</th><th>ผู้ตรวจ</th><th>สถานะ</th><th>Passkey</th><th>login ล่าสุด</th>
               <th style={{ width: 380 }}>จัดการ</th>
             </tr>
           </thead>
@@ -177,11 +232,14 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
                 <tr key={u.id} className={active ? '' : 'text-muted'}>
                   <td>{u.username}{isMe && <Badge bg="light" text="dark" className="ms-1">คุณ</Badge>}</td>
                   <td>{u.display_name ?? '—'}</td>
+                  <td>{roleLabel(u.role)}</td>
+                  <td>{u.inspector_name ? `${u.inspector_code ?? ''} ${u.inspector_name}` : '—'}</td>
                   <td>{active ? 'ใช้งาน' : 'ปิดใช้งาน'}</td>
                   <td>{Number(u.has_passkey) ? 'ตั้งแล้ว' : '—'}</td>
                   <td className="num">{fmtTime(u.last_login_at)}</td>
                   <td>
                     <Button size="sm" variant="outline-primary" className="me-1" onClick={() => rename(u)}>แก้ชื่อ</Button>
+                    <Button size="sm" variant="outline-primary" className="me-1" onClick={() => editRole(u)}>สิทธิ์ / ผู้ตรวจ</Button>
                     <Button size="sm" variant="outline-primary" className="me-1" onClick={() => resetPassword(u)}>
                       ตั้งรหัสผ่านใหม่
                     </Button>

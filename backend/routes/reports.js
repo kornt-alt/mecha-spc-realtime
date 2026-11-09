@@ -55,6 +55,7 @@ router.get('/model/:modelId', wrap(async (req, res) => {
   // ⚠️ baseline แยกรายเครื่อง — ขอบเขตต้องตรงกับตัวกรองที่ใช้ดึงค่าวัดข้างบนเสมอ
   //    ไม่ตรงเมื่อไหร่คือเอาลิมิตของเครื่องหนึ่งไปวาดทับจุดของอีกเครื่อง
   const scope = scopeOf(filter);
+  const isRoutine = !filter.category_id || Number(filter.category_id) === 1;
 
   // สรุปหัวรายงาน — นับจากตาราง inspections ตรง ๆ (1 แถว = 1 ใบตรวจ)
   const { where, params } = buildInspectionFilter(filter);
@@ -122,7 +123,8 @@ router.get('/model/:modelId', wrap(async (req, res) => {
     }
 
     const baselineRows = baselinesByCheckpoint.get(checkpoint.id) ?? [];
-    const baseline = baselineOf(pickBaseline(baselineRows, scope));
+    // หมวดอื่นที่ไม่ใช่ตรวจตามรอบ = provisional เสมอ (เหตุผลเดียวกับ routes/charts.js)
+    const baseline = isRoutine ? baselineOf(pickBaseline(baselineRows, scope)) : null;
 
     const result = analyze(rows, { usl: checkpoint.usl, lsl: checkpoint.lsl, baseline, ruleSet: targets.ruleSet });
     const ngCount = rows.filter((r) => r.judgment === 'NG').length;

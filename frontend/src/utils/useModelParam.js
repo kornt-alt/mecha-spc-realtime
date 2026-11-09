@@ -42,12 +42,14 @@ export const masterHref = ({ modelId = '', item = null, divisionId = null } = {}
 };
 
 // ลิงก์ไปหน้า SC Chart (ฟอร์ม SP-QC-214C) ของจุดตรวจหนึ่งจุด — ?machine= / ?month= ว่าง = รวมทุกเครื่อง / เดือนนี้
-export const scHref = ({ modelId, checkpointId, machineId = '', month = '' }) => {
+export const scHref = ({ modelId, checkpointId, machineId = '', month = '', category = '' }) => {
   const q = new URLSearchParams();
   if (modelId) q.set('model', String(modelId));
   if (checkpointId) q.set('checkpoint', String(checkpointId));
   if (machineId) q.set('machine', String(machineId));
   if (month) q.set('month', month);
+  // หมวดการตรวจ — ว่าง/1 = ตรวจตามรอบ (ไม่ใส่)
+  if (category && String(category) !== '1') q.set('category', String(category));
   return `/sc?${q.toString()}`;
 };
 

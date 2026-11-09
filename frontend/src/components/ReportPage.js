@@ -15,6 +15,7 @@ import InputGrid from './InputGrid';
 import InspectionList from './InspectionList';
 import EditInspectionModal from './EditInspectionModal';
 import useSession from '../utils/useSession';
+import { hasRole } from '../utils/auth';
 import SpecValue from './SpecValue';
 import DateInput from './DateInput';
 import { capTone } from '../utils/capability';
@@ -35,7 +36,7 @@ const fmtMin = (v) => (typeof v === 'number' ? v.toFixed(2) : '—');
 //    ดูทั้งหมดยังได้: ลบวันทั้งสองช่องแล้วกดค้นหา · ห้าม toISOString (UTC ช่วงเช้ามืดได้วันก่อนหน้า)
 const defaultFilter = () => {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
-  return { from: `${today.slice(0, 8)}01`, to: today, mo_no: '', shift: '', inspector_id: '', machine_id: '' };
+  return { from: `${today.slice(0, 8)}01`, to: today, mo_no: '', shift: '', inspector_id: '', machine_id: '', category: '' };
 };
 
 // ⚠️ ส่งเฉพาะช่องที่กรอกจริง — ค่าว่างคือไม่กรอง ไม่ใช่กรองด้วยค่าว่าง
@@ -47,6 +48,8 @@ const toQuery = (f) => {
   for (const k of ['mo_no', 'shift', 'inspector_id', 'machine_id']) {
     if (f[k]) p.set(k, f[k]);
   }
+  // หมวดการตรวจ — ว่าง/1 = ตรวจตามรอบ ไม่ส่ง (backend ตั้ง default เอง) · Set up / Last Piece ต้องส่งชัด ๆ
+  if (f.category && f.category !== '1') p.set('category', f.category);
   const s = p.toString();
   return s ? `?${s}` : '';
 };
@@ -69,7 +72,8 @@ const ReportPage = () => {
   // ใบที่เปิดกล่อง "แก้ค่าในใบเดิม" อยู่ (ต้อง login — กล่องจัดการเอง) · null = ปิด
   const [editingId, setEditingId] = useState(null);
   // ปุ่มแก้ค่าขึ้นเฉพาะตอน login แล้ว (login ที่หน้า Master) — ตัวกั้นจริงคือ requireLogin ฝั่ง backend
-  const session = useSession();
+  // ปุ่มแก้ค่าในใบเดิม = เฉพาะ ADMIN (PUT /inspections/:id/results เป็น requireAdmin) — บัญชี PD/QC ไม่เห็นปุ่ม
+  const session = hasRole(useSession(), 'ADMIN');
   const [editMsg, setEditMsg] = useState(null);
 
   useEffect(() => {
@@ -189,6 +193,15 @@ const ReportPage = () => {
                 {SHIFTS.map((x) => <option key={x.code} value={x.code}>{x.code}</option>)}
               </Form.Select>
             </Col>
+            {(lookups.categories ?? []).length > 1 && (
+              <Col md={2}>
+                <Form.Label htmlFor="report-category" className="small mb-1">หมวดการตรวจ</Form.Label>
+                <Form.Select id="report-category" value={filter.category || '1'}
+                  onChange={(e) => setFilter((f) => ({ ...f, category: e.target.value === '1' ? '' : e.target.value }))}>
+                  {lookups.categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                </Form.Select>
+              </Col>
+            )}
             <Col md={2}>
               <Form.Label htmlFor="report-inspector" className="small mb-1">ผู้ตรวจ</Form.Label>
               <SearchSelect
@@ -348,7 +361,7 @@ const ReportPage = () => {
                           )}
                           {cp.gauge && <span className="sheet__gauge">{cp.gauge}</span>}
                           {!isAttr && (
-                            <Link className="sheet__gauge" to={scHref({ modelId: cp.model_id, checkpointId: cp.id, machineId: applied.machine_id })}>
+                            <Link className="sheet__gauge" to={scHref({ modelId: cp.model_id, checkpointId: cp.id, machineId: applied.machine_id, category: applied.category })}>
                               ฟอร์ม SC →
                             </Link>
                           )}

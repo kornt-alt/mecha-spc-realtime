@@ -8,7 +8,7 @@ const express = require('express');
 const env = require('../config/env');
 const { query, execute } = require('../db/pool');
 const { hashPassword, verifyPassword, hashPasskey, signToken } = require('../services/auth');
-const { requireLogin } = require('../middleware/requireLogin');
+const { requireLogin, rolesOf } = require('../middleware/requireLogin');
 const { rateLimit } = require('../middleware/rateLimit');
 const { AppError, wrap } = require('../middleware/errorHandler');
 
@@ -44,7 +44,15 @@ const BAD_LOGIN = 'ชื่อผู้ใช้หรือรหัสผ่�
 // (ค่ามั่ว ๆ จะถูกตีกลับทันทีโดยไม่ hash ซึ่งเร็วกว่าเคสที่มี user อยู่จริงจนจับเวลาได้)
 const DUMMY_HASH = hashPassword('no-such-user');
 
-const publicUser = (u) => ({ id: u.id, username: u.username, display_name: u.display_name ?? null });
+// roles/inspector_id ไปกับ session — หน้า Set up ใช้แยกมุมมอง PD/QC (ตัวกั้นจริงคือ requireRole ฝั่ง server)
+// ⚠️ รูปต้องตรงกับ req.user ของ requireLogin (GET /me คืนตัวนั้น)
+const publicUser = (u) => ({
+  id: u.id,
+  username: u.username,
+  display_name: u.display_name ?? null,
+  roles: rolesOf(u.role),
+  inspector_id: u.inspector_id ?? null,
+});
 
 // login ได้ 2 ทาง: { passkey } ช่องเดียว หรือ { username, password }
 router.post('/login', pickLimiter, wrap(async (req, res) => {
@@ -53,7 +61,7 @@ router.post('/login', pickLimiter, wrap(async (req, res) => {
     const passkey = String(req.body.passkey ?? '');
     if (!passkey) throw new AppError('กรอก passkey', 400);
     [[user]] = await query(
-      'SELECT id, username, display_name, is_active FROM users WHERE passkey_hash = ?',
+      'SELECT id, username, display_name, is_active, role, inspector_id FROM users WHERE passkey_hash = ?',
       [await hashPasskey(passkey)]
     );
     if (!user) throw new AppError('passkey ไม่ถูกต้อง', 401);
@@ -63,7 +71,7 @@ router.post('/login', pickLimiter, wrap(async (req, res) => {
     if (!username || !password) throw new AppError('กรอกชื่อผู้ใช้และรหัสผ่าน', 400);
 
     [[user]] = await query(
-      'SELECT id, username, display_name, password_hash, is_active FROM users WHERE username = ?',
+      'SELECT id, username, display_name, password_hash, is_active, role, inspector_id FROM users WHERE username = ?',
       [username]
     );
     // ไม่พบ user ก็ยังเสียเวลา verify เท่ากัน — ไม่งั้นความเร็วของคำตอบบอกได้ว่า username มีจริงไหม

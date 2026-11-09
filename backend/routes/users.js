@@ -10,11 +10,11 @@
 const express = require('express');
 const { query, execute } = require('../db/pool');
 const { hashPassword, hashPasskey } = require('../services/auth');
-const { requireLogin } = require('../middleware/requireLogin');
+const { requireAdmin } = require('../middleware/requireLogin');
 const { AppError, wrap } = require('../middleware/errorHandler');
 
 const router = express.Router();
-router.use(requireLogin);
+router.use(requireAdmin);
 
 const MIN_PASSWORD = 6; // เท่ากับ scripts/user.js
 // passkey ใช้เข้าได้ด้วยช่องเดียว (ไม่มี username ช่วย) จึงสั้นกว่านี้ไม่ได้
@@ -35,10 +35,40 @@ const displayNameOf = (v) => {
   return s || null;
 };
 
+const ROLES = ['ADMIN', 'PD', 'QC'];
+// รับ array หรือ 'ADMIN,QC' → string สำหรับคอลัมน์ SET · ว่าง = ไม่มีสิทธิ์อะไรเลย ไม่ยอม
+const roleOf = (v) => {
+  const list = (Array.isArray(v) ? v : String(v ?? '').split(','))
+    .map((r) => String(r).trim().toUpperCase()).filter(Boolean);
+  const bad = list.filter((r) => !ROLES.includes(r));
+  if (bad.length) throw new AppError(`role "${bad.join(', ')}" ไม่มีในระบบ (มี ${ROLES.join(' / ')})`, 400);
+  if (!list.length) throw new AppError('ต้องเลือก role อย่างน้อย 1 อย่าง', 400);
+  return [...new Set(list)].join(',');
+};
+
+// ผู้ตรวจที่บัญชีนี้เป็น — ว่าง = ไม่ผูก (ADMIN ล้วนไม่ต้องผูก · PD/QC ไม่ผูกจะส่งผลตรวจไม่ได้)
+const inspectorIdOf = async (v) => {
+  if (v === null || v === undefined || v === '') return null;
+  if (!isIntLike(v)) throw new AppError('inspector_id ไม่ถูกต้อง', 400);
+  const [[ins]] = await query('SELECT id FROM inspectors WHERE id = ?', [Number(v)]);
+  if (!ins) throw new AppError('ไม่พบผู้ตรวจที่เลือก', 400);
+  return Number(v);
+};
+
+// ⚠️ ต้องเหลือ ADMIN ที่ใช้งานได้อย่างน้อย 1 บัญชีเสมอ (ไม่ใช่แค่ "บัญชีไหนก็ได้")
+//    เหลือแต่ PD/QC = ไม่มีใครเข้า Master ได้อีก ต้องไปรันสคริปต์บนเครื่อง server
+const assertOtherAdmin = async (exceptId) => {
+  const [[{ n }]] = await query(
+    "SELECT COUNT(*) AS n FROM users WHERE is_active = 1 AND FIND_IN_SET('ADMIN', role) > 0 AND id <> ?",
+    [exceptId]
+  );
+  if (Number(n) === 0) throw new AppError('ต้องเหลือบัญชี ADMIN ที่ใช้งานได้อย่างน้อย 1 บัญชี', 400);
+};
+
 const log = (req, action, username) => console.log(`[users] ${req.user.username} ${action} ${username}`);
 
 const findById = async (id) => {
-  const [[u]] = await query('SELECT id, username, is_active FROM users WHERE id = ?', [Number(id)]);
+  const [[u]] = await query('SELECT id, username, is_active, role FROM users WHERE id = ?', [Number(id)]);
   if (!u) throw new AppError('ไม่พบบัญชีนี้', 404);
   return u;
 };
@@ -46,9 +76,12 @@ const findById = async (id) => {
 // ⚠️ ไม่มี password_hash ในผลลัพธ์ — SELECT ระบุคอลัมน์เอง ห้ามเปลี่ยนเป็น SELECT *
 router.get('/', wrap(async (req, res) => {
   const [rows] = await query(
-    `SELECT id, username, display_name, is_active, last_login_at, created_at,
-            (passkey_hash IS NOT NULL) AS has_passkey
-       FROM users ORDER BY username`
+    `SELECT u.id, u.username, u.display_name, u.is_active, u.last_login_at, u.created_at,
+            (u.passkey_hash IS NOT NULL) AS has_passkey,
+            u.role, u.inspector_id, ins.name AS inspector_name, ins.emp_code AS inspector_code
+       FROM users u
+       LEFT JOIN inspectors ins ON ins.id = u.inspector_id
+      ORDER BY u.username`
   );
   res.json(rows);
 }));
@@ -60,14 +93,17 @@ router.post('/', wrap(async (req, res) => {
   }
   checkPassword(req.body?.password);
   const displayName = displayNameOf(req.body?.display_name);
+  // บัญชีเดิมทุกบัญชีเป็น ADMIN — ไม่ส่ง role มาจึงได้ ADMIN เหมือนพฤติกรรมเดิมของแท็บนี้
+  const role = req.body?.role === undefined ? 'ADMIN' : roleOf(req.body.role);
+  const inspectorId = await inspectorIdOf(req.body?.inspector_id);
 
   // เช็คก่อนให้ได้ข้อความตรงจุด (UNIQUE ดักอีกชั้น → ER_DUP_ENTRY ใน errorHandler)
   const [[exists]] = await query('SELECT id FROM users WHERE username = ?', [username]);
   if (exists) throw new AppError(`มีบัญชี ${username} อยู่แล้ว`, 409);
 
   const [r] = await execute(
-    'INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)',
-    [username, await hashPassword(req.body.password), displayName]
+    'INSERT INTO users (username, password_hash, display_name, role, inspector_id) VALUES (?, ?, ?, ?, ?)',
+    [username, await hashPassword(req.body.password), displayName, role, inspectorId]
   );
   log(req, 'เพิ่มบัญชี', username);
   res.json({ success: true, id: r.insertId });
@@ -89,12 +125,24 @@ router.put('/:id', wrap(async (req, res) => {
     if (!active) {
       // ⚠️ ปิดตัวเองไม่ได้ — กดพลาดแล้วหลุดทันทีและอาจไม่เหลือใครเปิดคืนให้
       if (target.id === req.user.id) throw new AppError('ปิดบัญชีของตัวเองไม่ได้', 400);
-      // ⚠️ ต้องเหลือบัญชีที่ใช้งานได้อย่างน้อย 1 บัญชีเสมอ ไม่งั้นต้องไปรันสคริปต์บนเครื่อง server
-      const [[{ n }]] = await query('SELECT COUNT(*) AS n FROM users WHERE is_active = 1 AND id <> ?', [target.id]);
-      if (Number(n) === 0) throw new AppError('ต้องเหลือบัญชีที่ใช้งานได้อย่างน้อย 1 บัญชี', 400);
+      await assertOtherAdmin(target.id);
     }
     sets.push('is_active = ?');
     params.push(active);
+  }
+  if ('role' in (req.body ?? {})) {
+    const role = roleOf(req.body.role);
+    if (!role.split(',').includes('ADMIN') && String(target.role ?? '').split(',').includes('ADMIN')) {
+      // ⚠️ ถอด ADMIN ตัวเองไม่ได้ — กดพลาดแล้วหลุดจากหน้านี้ทันที (เหตุผลเดียวกับปิดบัญชีตัวเอง)
+      if (target.id === req.user.id) throw new AppError('ถอดสิทธิ์ ADMIN ของตัวเองไม่ได้', 400);
+      await assertOtherAdmin(target.id);
+    }
+    sets.push('role = ?');
+    params.push(role);
+  }
+  if ('inspector_id' in (req.body ?? {})) {
+    sets.push('inspector_id = ?');
+    params.push(await inspectorIdOf(req.body.inspector_id));
   }
   if (!sets.length) throw new AppError('ไม่มีข้อมูลให้แก้ไข', 400);
 

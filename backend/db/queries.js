@@ -17,11 +17,25 @@ const { resolveTargets } = require('../services/capabilityTarget');
 //    default เป็นแบบปลอดภัยโดยตั้งใจ: คนเขียนโค้ดใหม่ต้อง "ตั้งใจ" ส่ง includeVoided: true
 //    ถึงจะดึงใบที่ยกเลิกออกมา ไม่ใช่ "ลืม" แล้วมันหลุดเข้ากราฟไปเอง
 //    ที่เดียวที่ opt-out คือการดึงรายการมาโชว์ให้คนกดคืนค่า (routes/reports.js)
+//
+// ⚠️ หมวดการตรวจ (check_categories) กรองเป็น default เหมือนกัน — ไม่ส่ง category_id = หมวด 1 (ตรวจตามรอบ)
+//    ใบ Set up / Last Piece อยู่ตารางเดียวกันแต่ห้ามไหลเข้ากราฟ SPC / baseline / รายงานของงานตามรอบ
+//    (คนละ sample_qty → buildSubgroups ปฏิเสธทั้งกราฟ · คนละความหมาย → เส้นลิมิตเพี้ยน)
+//    จะดูหมวดอื่นต้องส่ง ?category= มาเองเท่านั้น · stage ('pd'|'qc') กรองเมื่อส่งมา
+const ROUTINE_CATEGORY = 1;
+
 const buildInspectionFilter = (f = {}, { includeVoided = false } = {}) => {
   const where = [];
   const params = [];
 
   if (!includeVoided) where.push('i.voided_at IS NULL');
+
+  where.push('i.category_id = ?');
+  params.push(Number(f.category_id) || ROUTINE_CATEGORY);
+  if (f.stage === 'pd' || f.stage === 'qc') {
+    where.push('i.stage = ?');
+    params.push(f.stage);
+  }
 
   // ความหมายเท่ากับ DATE(i.inspected_at) BETWEEN from AND to เป๊ะ แต่ไม่ห่อคอลัมน์ด้วยฟังก์ชัน
   // index (model_id, inspected_at) จึงใช้ช่วงเวลาได้ — ห่อ DATE() เมื่อไหร่ต้องสแกนทุกใบของ item
@@ -149,6 +163,8 @@ const fetchModelBaselines = async (modelId) => {
 // ⚠️ กะดึกข้ามเที่ยงคืน → จุด 'day' กลับมาถึงรอบอีกครั้งหลัง 00:00 ในกะเดียวกัน
 //    ผลคือวัดเกินหนึ่งรอบ ไม่ใช่ขาด — ยอมรับไว้ก่อน (ไม่มีข้อมูลเวลาเริ่ม/จบของแต่ละกะในระบบ)
 // ⚠️ ใบที่ยกเลิกไม่นับ — ยกเลิกใบแรกของกะแล้วจุดพวกนั้นต้องกลับมาถึงรอบ
+// ⚠️ นับเฉพาะหมวดตรวจตามรอบ (category_id = 1) — ใบ Set up ของกะนี้ไม่ใช่การตรวจตามรอบ
+//    นับรวมเมื่อไหร่ ตรวจ Set up เสร็จแล้วจุดตามรอบจะกลายเป็น "ทำแล้ว" แล้ว operator ข้ามไปเงียบ ๆ
 const fetchDoneCheckpointIds = async ({ modelId, machineId, shift }) => {
   const [rows] = await query(
     `SELECT DISTINCT r.checkpoint_id
@@ -156,6 +172,7 @@ const fetchDoneCheckpointIds = async ({ modelId, machineId, shift }) => {
        JOIN inspections i ON i.id = r.inspection_id
        JOIN checkpoints c ON c.id = r.checkpoint_id
       WHERE i.model_id = ? AND i.machine_id = ? AND i.voided_at IS NULL
+        AND i.category_id = ${ROUTINE_CATEGORY}
         AND (
           (c.frequency = 'shift' AND i.shift = ? AND i.inspected_at >= NOW() - INTERVAL 12 HOUR)
           OR (c.frequency = 'day' AND DATE(i.inspected_at) = CURDATE())
@@ -186,6 +203,7 @@ const fetchModelTargets = async (modelId) => {
 };
 
 module.exports = {
+  ROUTINE_CATEGORY,
   fetchModelTargets,
   buildInspectionFilter,
   fetchCheckpointRows,

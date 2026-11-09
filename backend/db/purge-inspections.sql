@@ -5,6 +5,7 @@
 -- ลบอะไรบ้าง
 --   inspection_results / inspections  — ผลตรวจทั้งหมดทั้งระบบ
 --   checkpoint_baselines              — baseline ทุกชุดทุกเครื่อง ดูเหตุผลข้างล่าง
+--   check_jobs / check_job_events     — งาน Set up / Last Piece (ใบตรวจของงานพวกนี้หายไปกับบรรทัดบนแล้ว)
 --
 -- ไม่แตะอะไรบ้าง
 --   models / checkpoints / machines / inspectors / divisions — master ที่ตั้งไว้ต้องอยู่ครบ
@@ -17,6 +18,11 @@ SET NAMES utf8mb4;
 
 DELETE FROM inspection_results;
 DELETE FROM inspections;
+
+-- งานส่งต่อ PD → QC อ้างใบตรวจที่เพิ่งลบไป (inspections.job_id) — ค้างไว้ = timeline ชี้ใบที่ไม่มีอยู่
+-- check_job_events หายตาม CASCADE แต่เขียนให้ชัด
+DELETE FROM check_job_events;
+DELETE FROM check_jobs;
 
 -- เริ่มนับ id ใหม่ — ไม่มีอะไรอ้างถึงเลขเก่าแล้ว
 ALTER TABLE inspections AUTO_INCREMENT = 1;

@@ -339,6 +339,43 @@ const MasterSetup = () => {
     },
   });
 
+  // ── หมวดการตรวจของจุดนี้ (Set up / Last Piece × PD / QC) ─────────────────
+  //
+  // 1 ช่อง = จำนวนชิ้นของหมวด × ขั้น · เว้นว่าง = ขั้นนั้นไม่ตรวจจุดนี้ (PD กับ QC เช็คคนละจุดได้)
+  // ⚠️ ไม่ผ่าน generic CRUD — PUT /master/checkpoints/:id/categories แทนทั้งชุดของจุดนี้ในทีเดียว
+  // ⚠️ หมวด "ตรวจตามรอบ" ไม่อยู่ในกล่องนี้ — ใช้ n / ความถี่ ของจุดตรวจตามเดิม
+  const workflowCategories = (lookups.categories ?? []).filter((c) => Number(c.has_workflow));
+  const editCategories = (cp) => {
+    const current = (c, stage) => cp.category_settings?.find((x) => x.category_id === c.id && x.stage === stage);
+    const isAttr = cp.char_type === 'attribute';
+    showForm({
+      title: `หมวดการตรวจของ "${cp.name}"`,
+      body: isAttr
+        ? 'จุดตรวจด้วยตา: ใส่ 1 = ตรวจในขั้นนั้น · เว้นว่าง = ไม่ตรวจ'
+        : `ใส่จำนวนชิ้นที่ต้องวัด (1-10) · เว้นว่าง = ขั้นนั้นไม่ตรวจจุดนี้ (ตรวจตามรอบใช้ n = ${cp.sample_size})`,
+      confirmLabel: 'บันทึก',
+      fields: workflowCategories.flatMap((c) => ['pd', 'qc'].map((stage) => ({
+        name: `${c.id}_${stage}`,
+        label: `${c.name} — ${stage === 'pd' ? 'Production Check (PD)' : 'QC Confirm (QC)'}`,
+        type: 'number',
+        defaultValue: current(c, stage) ? String(current(c, stage).sample_qty) : '',
+      }))),
+      onConfirm: async (data) => {
+        const settings = Object.entries(data)
+          .filter(([, v]) => v !== '')
+          .map(([k, v]) => {
+            const [categoryId, stage] = k.split('_');
+            return { category_id: Number(categoryId), stage, sample_qty: isAttr ? 1 : Number(v) };
+          });
+        try {
+          await apiCall(`/master/checkpoints/${cp.id}/categories`, { method: 'PUT', body: { settings } });
+          say('success', `ตั้งหมวดการตรวจของ "${cp.name}" แล้ว`);
+          await loadCheckpoints(selectedModel);
+        } catch (e) { fail(e); }
+      },
+    });
+  };
+
   return (
     <Container fluid className="page">
       <div className="page-head">
@@ -369,6 +406,7 @@ const MasterSetup = () => {
           checkpoints={checkpoints}
           onSave={save} onRemove={remove} onMove={moveCheckpoint} onPurgeVoided={purgeVoided}
           onPreviewBaseline={previewBaseline} onClearBaseline={clearBaseline}
+          onEditCategories={editCategories} categories={workflowCategories}
           scopeName={scopeName}
           onAlert={showAlert}
         />
@@ -569,6 +607,7 @@ const ModelsTab = ({
   specMode, setSpecMode, tolForm, setTolForm,
   models, divisions, customers, selectedModel, setSelectedModel, checkpoints,
   onSave, onRemove, onMove, onPurgeVoided, onPreviewBaseline, onClearBaseline,
+  onEditCategories, categories = [],
   scopeName,
   onAlert,
 }) => {
@@ -1019,12 +1058,13 @@ const ModelsTab = ({
               <thead className="table-dark">
                 <tr>
                   <th style={{ width: 70 }}>ลำดับ</th><th>จุดตรวจ</th><th>ชนิด</th>
-                  <th>LSL ~ USL</th><th>n / ความถี่</th><th>Control limit</th><th style={{ width: 200 }}>จัดการ</th>
+                  <th>LSL ~ USL</th><th>n / ความถี่</th><th>Control limit</th>
+                  <th>Set up / Last Piece</th><th style={{ width: 260 }}>จัดการ</th>
                 </tr>
               </thead>
               <tbody>
                 {checkpoints.length === 0
-                  ? <tr><td colSpan="7" className="text-center text-muted">ยังไม่มีจุดตรวจ</td></tr>
+                  ? <tr><td colSpan="8" className="text-center text-muted">ยังไม่มีจุดตรวจ</td></tr>
                   : checkpoints.map((cp, i) => (
                     <tr
                       key={cp.id}
@@ -1080,8 +1120,26 @@ const ModelsTab = ({
                             )
                             : <Badge bg="warning">provisional</Badge>}
                       </td>
+                      <td className="small text-nowrap">
+                        {/* PD 5 · QC 5 ต่อหมวด — ว่าง = ไม่ตรวจในหมวดนั้น */}
+                        {categories.map((c) => {
+                          const pd = cp.category_settings?.find((x) => x.category_id === c.id && x.stage === 'pd');
+                          const qc = cp.category_settings?.find((x) => x.category_id === c.id && x.stage === 'qc');
+                          if (!pd && !qc) return null;
+                          return (
+                            <div key={c.id}>
+                              {c.name}: {pd ? `PD ${pd.sample_qty}` : 'PD —'} · {qc ? `QC ${qc.sample_qty}` : 'QC —'}
+                            </div>
+                          );
+                        })}
+                        {!cp.category_settings?.length && <span className="text-muted">—</span>}
+                      </td>
                       <td>
                         <Button size="sm" variant="primary" className="me-1" onClick={() => startEditCp(cp)}>แก้</Button>
+                        {categories.length > 0 && (
+                          <Button size="sm" variant="outline-primary" className="me-1"
+                            onClick={() => onEditCategories(cp)}>หมวด</Button>
+                        )}
                         {/* ⚠️ ปุ่มเดียวเสมอ ไม่สลับเป็น "ล้าง" อีกแล้ว — จุดหนึ่งมี baseline ได้
                             หลายชุด กล่องที่เปิดขึ้นมาเป็นที่เลือกเองว่าจะล็อกของขอบเขตไหน
                             (ปุ่มล้างของแต่ละชุดอยู่ในช่อง Control limit) */}

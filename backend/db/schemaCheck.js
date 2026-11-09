@@ -17,7 +17,7 @@ const REQUIRED = {
   divisions: ['id', 'name', 'ipbass_dept'],
   machines: ['id', 'division_id', 'code', 'name', 'is_active'],
   inspectors: ['id', 'emp_code', 'name', 'is_active'],
-  users: ['id', 'username', 'password_hash', 'display_name', 'is_active', 'passkey_hash'],
+  users: ['id', 'username', 'password_hash', 'display_name', 'is_active', 'passkey_hash', 'role', 'inspector_id'],
   customers: ['id', 'name', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf', 'ocs_rule_set', 'is_active'],
   models: [
     'id', 'division_id', 'item_no', 'item_name', 'is_active',
@@ -36,7 +36,7 @@ const REQUIRED = {
     'id', 'model_id', 'machine_id', 'inspector_id',
     'mo_no', 'shift', 'subgroup_no', 'inspected_at', 'overall_result',
     'mo_item_no', 'mo_item_name', 'mo_draw', 'mo_model_group',
-    'voided_at', 'voided_reason',
+    'voided_at', 'voided_reason', 'category_id', 'job_id', 'stage',
   ],
   inspection_results: [
     'id', 'inspection_id', 'checkpoint_id', 'piece_no',
@@ -46,6 +46,13 @@ const REQUIRED = {
     'id', 'checkpoint_id', 'inspection_id', 'chart', 'rules', 'man_pd', 'man_qc',
     'machine_note', 'method', 'material', 'measurement', 'corrective_action', 'recorded_by',
   ],
+  check_categories: ['id', 'code', 'name', 'has_workflow', 'sort_order', 'is_active'],
+  checkpoint_category_settings: ['id', 'checkpoint_id', 'category_id', 'stage', 'sample_qty'],
+  check_jobs: [
+    'id', 'category_id', 'model_id', 'machine_id', 'mo_no', 'lot_no', 'shift',
+    'round_no', 'status', 'result', 'opened_by', 'opened_at', 'closed_at',
+  ],
+  check_job_events: ['id', 'job_id', 'round_no', 'action', 'user_id', 'user_name', 'note', 'inspection_id', 'at'],
   inspection_result_edits: [
     'id', 'inspection_id', 'checkpoint_id', 'piece_no', 'old_value', 'new_value',
     'old_judgment', 'new_judgment', 'reason', 'edited_by', 'edited_by_name', 'edited_at',

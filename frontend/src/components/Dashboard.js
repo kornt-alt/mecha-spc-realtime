@@ -77,9 +77,11 @@ const rangeQuery = (range, from, to) => {
 //    backend อ่านเป็น falsy แล้วไม่กรองให้อยู่ดี แต่ URL จะโกหกว่ากรองอยู่ (กฎเดียวกับ ReportPage)
 // ⚠️ loadAll กับ reloadCheckpoints (socket) ต้องใช้ตัวนี้ตัวเดียวกัน ไม่งั้นกราฟที่โหลดซ้ำ
 //    จะเป็นคนละช่วง/คนละเครื่องกับกราฟข้าง ๆ โดยไม่มีอะไรบอก
-const viewQuery = (machine, { range, from, to }, extra = []) => {
+// ⚠️ category (หมวดการตรวจ) ไปกับตัวนี้ด้วยเหตุผลเดียวกับเครื่อง — ค่าว่าง/1 = ตรวจตามรอบ (ไม่ส่ง)
+const viewQuery = (machine, { range, from, to, category }, extra = []) => {
   const q = [...extra, ...rangeQuery(range, from, to)];
   if (machine) q.push(`machine_id=${encodeURIComponent(machine)}`);
+  if (category && category !== '1') q.push(`category=${encodeURIComponent(category)}`);
   return q.length ? `?${q.join('&')}` : '';
 };
 
@@ -104,6 +106,9 @@ const Dashboard = () => {
   const [machines, setMachines] = useState([]);
   const [modelId, setModelId] = useModelParam();
   const [machineId, setMachineId] = useUrlParam('machine');
+  // หมวดการตรวจ (?category=) — ว่าง = ตรวจตามรอบ · Set up / Last Piece ดูแยก ไม่ปนกันในกราฟเดียว
+  const [category, setCategory] = useUrlParam('category');
+  const [categories, setCategories] = useState([]);
   // มุมมองอยู่ใน URL — จอหน้าไลน์บุ๊กมาร์กแบบที่ต้องการได้ (ค่าว่าง = ตารางสถานะ)
   const [view, setView] = useUrlParam('view');
   const [params, setParams] = useSearchParams();
@@ -139,8 +144,8 @@ const Dashboard = () => {
   modelIdRef.current = modelId;
   const machineIdRef = useRef('');
   machineIdRef.current = machineId;
-  const rangeRef = useRef({ range: RANGE_DEFAULT, from: '', to: '' });
-  rangeRef.current = { range, from, to };
+  const rangeRef = useRef({ range: RANGE_DEFAULT, from: '', to: '', category: '' });
+  rangeRef.current = { range, from, to, category };
 
   // ⚠️ ดึงด้วย ?all=1 โดยตั้งใจ — ลิงก์จากหน้ารายงานพา ?model= ของรุ่นที่ถูกปิดใช้งานมาได้
   //    ถ้าดึงเฉพาะรุ่นที่ active ช่องเลือกจะว่างทั้งที่กราฟโหลดขึ้น อธิบายตัวเองไม่ได้เลย
@@ -149,6 +154,7 @@ const Dashboard = () => {
       .then(([ms, lk]) => {
         setModels(normalizeRows(ms));
         setMachines(normalizeRows(lk?.machines ?? []));
+        setCategories(lk?.categories ?? []);
       })
       .catch((e) => setError(e.message));
   }, []);
@@ -241,8 +247,8 @@ const Dashboard = () => {
   // ช่วงกำหนดเองที่ยังไม่ครบ = ไม่โหลด (ดู customIssue) · กราฟเดิมถูกล้างไม่ให้ค้างเป็นของช่วงอื่น
   useEffect(() => {
     if (rangeIssue) { reqRef.current += 1; setCharts([]); setLoading(false); return; }
-    loadAll(modelId, machineId, { range, from, to });
-  }, [modelId, machineId, range, from, to, rangeIssue, loadAll]);
+    loadAll(modelId, machineId, { range, from, to, category });
+  }, [modelId, machineId, range, from, to, category, rangeIssue, loadAll]);
 
   // เข้า/ออก room ตามรุ่นที่ดูอยู่
   useEffect(() => {
@@ -254,6 +260,9 @@ const Dashboard = () => {
   useEffect(() => on('inspection_saved', (payload) => {
     if (String(payload.modelId) !== String(modelIdRef.current)) return;
     if (!affectsView(payload, machineIdRef.current)) return;
+    // ⚠️ ใบของหมวดอื่น (Set up / Last Piece) ห้ามขึ้นแถบ "ใบตรวจล่าสุด" ของจอที่ดูตรวจตามรอบ
+    //    payload จาก backend รุ่นเก่าไม่มี categoryId = ตรวจตามรอบ
+    if (String(payload.categoryId ?? 1) !== String(rangeRef.current.category || 1)) return;
 
     reloadCheckpoints(payload.checkpointIds);
     setAlerts((prev) => [{
@@ -360,6 +369,15 @@ const Dashboard = () => {
             ]}
           />
         </Col>
+
+        {categories.length > 1 && (
+          <Col md="auto">
+            <Form.Select size="sm" aria-label="หมวดการตรวจ" value={category || '1'} disabled={!modelId}
+              onChange={(e) => setCategory(e.target.value === '1' ? '' : e.target.value)}>
+              {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+            </Form.Select>
+          </Col>
+        )}
 
         {/* ช่วงมี 4 ตัวจบ — Form.Select ธรรมดา (เหตุผลเดียวกับช่องกะ) */}
         <Col md="auto">

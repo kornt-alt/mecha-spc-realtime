@@ -23,7 +23,7 @@ const {
 const { AppError, wrap } = require('../middleware/errorHandler');
 // ตั้ง/ล้าง baseline = เปลี่ยนเส้น control limit ที่ทุกจอใช้ตัดสิน — ต้อง login (กดจากหน้า Master)
 // preview ยังเปิดอยู่ อ่านอย่างเดียวไม่เขียนอะไร
-const { requireLogin } = require('../middleware/requireLogin');
+const { requireAdmin } = require('../middleware/requireLogin');
 
 const router = express.Router();
 
@@ -38,7 +38,20 @@ const filterFrom = (q) => ({
   shift: q.shift || null,
   inspector_id: q.inspector_id || null,
   machine_id: q.machine_id || null,
+  // หมวดการตรวจ — ว่าง = ตรวจตามรอบ (buildInspectionFilter ตั้ง default ให้)
+  // หมวดที่มีขั้น PD/QC ไม่ส่ง stage มา = ดูผล QC (ค่าที่ยืนยันแล้ว) · ส่ง 'pd' มาถึงเห็นของ PD
+  category_id: q.category || q.category_id || null,
+  stage: (q.category || q.category_id) && Number(q.category || q.category_id) !== 1
+    ? (q.stage === 'pd' ? 'pd' : 'qc')
+    : null,
 });
+
+// ⚠️ baseline ล็อกได้เฉพาะหมวดตรวจตามรอบ — ข้อมูล Set up ห้ามกลายเป็นเส้น control limit ของงานจริง
+const assertRoutine = (f) => {
+  if (f.category_id && Number(f.category_id) !== 1) {
+    throw new AppError('ล็อก baseline ได้เฉพาะข้อมูลตรวจตามรอบ', 400);
+  }
+};
 
 // GET /api/charts/:checkpointId — จุด + ลิมิต + Cp/Cpk + จุดที่ผิดกฎ OCS (ทั้ง X̄ และ R) ในก้อนเดียว
 router.get('/:checkpointId', wrap(async (req, res) => {
@@ -74,7 +87,10 @@ router.get('/:checkpointId', wrap(async (req, res) => {
     fetchCheckpointBaselines(checkpointId),
     fetchModelTargets(checkpoint.model_id),
   ]);
-  const baseline = baselineOf(pickBaseline(baselineRows, scopeOf(filter)));
+  // หมวดอื่นที่ไม่ใช่ตรวจตามรอบ ไม่มี baseline ของตัวเอง (ล็อกไม่ได้ ดู assertRoutine) และห้ามยืมของงานตามรอบ
+  //   → ลิมิต provisional คำนวณสดจากข้อมูลหมวดนั้นเสมอ
+  const isRoutine = !filter.category_id || Number(filter.category_id) === 1;
+  const baseline = isRoutine ? baselineOf(pickBaseline(baselineRows, scopeOf(filter))) : null;
 
   const result = analyze(rows, { usl: checkpoint.usl, lsl: checkpoint.lsl, baseline, ruleSet: targets.ruleSet });
 
@@ -96,7 +112,9 @@ router.get('/:checkpointId', wrap(async (req, res) => {
 // GET /api/charts/:checkpointId/baseline/preview — ลองดูว่าจะได้ baseline เท่าไร ยังไม่บันทึก
 router.get('/:checkpointId/baseline/preview', wrap(async (req, res) => {
   if (!isIntLike(req.params.checkpointId)) throw new AppError('checkpoint id ไม่ถูกต้อง', 400);
-  const r = await computeBaseline(req.params.checkpointId, filterFrom(req.query));
+  const f = filterFrom(req.query);
+  assertRoutine(f);
+  const r = await computeBaseline(req.params.checkpointId, f);
   res.json({
     machineId: r.machineId,
     n: r.n,
@@ -112,10 +130,12 @@ router.get('/:checkpointId/baseline/preview', wrap(async (req, res) => {
 }));
 
 // POST /api/charts/:checkpointId/baseline — freeze ลิมิตจากช่วงที่เลือก
-router.post('/:checkpointId/baseline', requireLogin, wrap(async (req, res) => {
+router.post('/:checkpointId/baseline', requireAdmin, wrap(async (req, res) => {
   if (!isIntLike(req.params.checkpointId)) throw new AppError('checkpoint id ไม่ถูกต้อง', 400);
 
-  const r = await setBaseline(req.params.checkpointId, filterFrom(req.body ?? {}));
+  const f = filterFrom(req.body ?? {});
+  assertRoutine(f);
+  const r = await setBaseline(req.params.checkpointId, f);
   // machineId ไปกับ event ด้วย — Dashboard ที่กรองอยู่คนละเครื่องจะได้ไม่ต้องโหลดกราฟใหม่เปล่า ๆ
   // (0 = ชุดรวม กระทบเฉพาะจอที่ดู "ทุกเครื่อง" อยู่)
   req.app.get('io')?.to(`model:${r.checkpoint.model_id}`).emit('baseline_updated', {
@@ -137,7 +157,7 @@ router.post('/:checkpointId/baseline', requireLogin, wrap(async (req, res) => {
 }));
 
 // DELETE /api/charts/:checkpointId/baseline — กลับไปเป็น provisional
-router.delete('/:checkpointId/baseline', requireLogin, wrap(async (req, res) => {
+router.delete('/:checkpointId/baseline', requireAdmin, wrap(async (req, res) => {
   if (!isIntLike(req.params.checkpointId)) throw new AppError('checkpoint id ไม่ถูกต้อง', 400);
 
   const checkpoint = await fetchCheckpoint(req.params.checkpointId);

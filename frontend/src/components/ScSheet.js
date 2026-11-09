@@ -14,6 +14,7 @@ import SpecValue from './SpecValue';
 import AppDialog from './AppDialog';
 import EditInspectionModal from './EditInspectionModal';
 import useSession from '../utils/useSession';
+import { hasRole } from '../utils/auth';
 import XbarRCharts, { fmt, fmtCap, capClass } from './XbarRCharts';
 import { apiCall } from '../utils/api';
 import { on, joinModel, leaveModel } from '../utils/socket';
@@ -73,6 +74,9 @@ const ScSheet = () => {
   const [checkpointId, setCheckpointId] = useUrlParam('checkpoint');
   const [machineId, setMachineId] = useUrlParam('machine');
   const [monthParam, setMonth] = useUrlParam('month');
+  // หมวดการตรวจ (?category=) — ว่าง = ตรวจตามรอบ (กฎเดียวกับ Dashboard)
+  const [category, setCategory] = useUrlParam('category');
+  const [categories, setCategories] = useState([]);
   const month = /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : thisMonth();
 
   const [models, setModels] = useState([]);
@@ -91,7 +95,8 @@ const ScSheet = () => {
   const [hot, setHot] = useState(null);
   useEffect(() => setHot(null), [chart]);
   // ปุ่มแก้ค่าขึ้นเฉพาะตอน login แล้ว (login ที่หน้า Master) — ตัวกั้นจริงคือ requireLogin ฝั่ง backend
-  const session = useSession();
+  // ปุ่มแก้ค่าในใบเดิม = เฉพาะ ADMIN (PUT /inspections/:id/results เป็น requireAdmin) — บัญชี PD/QC ไม่เห็นปุ่ม
+  const session = hasRole(useSession(), 'ADMIN');
 
   // ── master ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -99,6 +104,7 @@ const ScSheet = () => {
       .then(([ms, lk]) => {
         setModels(normalizeRows(ms));
         setMachines(normalizeRows(lk?.machines ?? []));
+        setCategories(lk?.categories ?? []);
       })
       .catch((e) => setError(e.message));
   }, []);
@@ -158,8 +164,9 @@ const ScSheet = () => {
   const query = useMemo(() => {
     const q = new URLSearchParams(monthRange(month));
     if (machineId) q.set('machine_id', machineId);
+    if (category && category !== '1') q.set('category', category);
     return q.toString();
-  }, [month, machineId]);
+  }, [month, machineId, category]);
 
   // ⚠️ dataReqRef กัน response เก่า — สลับจุด/เครื่อง/เดือนเร็ว ๆ แล้วคำขอก่อนหน้าตอบทีหลัง จะทับของใหม่
   //    (loadData ถูกเรียกจาก socket และหลังแก้ค่าด้วย ไม่ใช่แค่ effect จึงใช้ ref ไม่ใช่ cancelled)
@@ -199,7 +206,7 @@ const ScSheet = () => {
   const loadRef = useRef(loadData);
   loadRef.current = loadData;
   const watchRef = useRef({});
-  watchRef.current = { checkpointId: cp?.id, machineId };
+  watchRef.current = { checkpointId: cp?.id, machineId, category };
   useEffect(() => {
     if (!modelId) return undefined;
     joinModel(modelId);
@@ -208,6 +215,8 @@ const ScSheet = () => {
   useEffect(() => {
     const relevant = (p) => {
       const w = watchRef.current;
+      // payload จาก backend รุ่นเก่าไม่มี categoryId = ตรวจตามรอบ
+      if (String(p?.categoryId ?? 1) !== String(w.category || 1)) return false;
       if (w.machineId && p?.machineId !== null && p?.machineId !== undefined
         && String(p.machineId) !== String(w.machineId) && Number(p.machineId) !== 0) return false;
       return !p?.checkpointIds || p.checkpointIds.map(String).includes(String(w.checkpointId));
@@ -347,6 +356,15 @@ const ScSheet = () => {
             options={[ALL_MACHINES, ...visibleMachines.map((mc) => ({ value: String(mc.id), label: `${mc.code} — ${mc.name}` }))]}
           />
         </Col>
+        {categories.length > 1 && (
+          <Col xs={6} md={3} lg={2}>
+            <Form.Label className="small mb-1 text-muted" htmlFor="sc-category">หมวดการตรวจ</Form.Label>
+            <Form.Select id="sc-category" value={category || '1'} disabled={!modelId}
+              onChange={(e) => setCategory(e.target.value === '1' ? '' : e.target.value)}>
+              {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+            </Form.Select>
+          </Col>
+        )}
         <Col xs={6} md={3} lg={2}>
           <Form.Label className="small mb-1 text-muted" htmlFor="sc-month">เดือน</Form.Label>
           <Form.Control id="sc-month" type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
