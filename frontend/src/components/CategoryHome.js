@@ -19,6 +19,14 @@ import { on } from '../utils/socket';
 import { readStation } from '../utils/station';
 import { modelHref } from '../utils/useModelParam';
 import Icon from './layout/Icon';
+import useMenuAccess, { MENU } from '../utils/useMenuAccess';
+
+// ใครตรวจของหมวด (check_categories.flow · ตั้งที่ Master › หมวดการตรวจ)
+const FLOW_TEXT = {
+  pd_qc: 'PD ตรวจ แล้วส่งให้ QC ยืนยันผ่าน / ไม่ผ่าน',
+  pd: 'PD ตรวจแล้วตัดสินผ่าน / ไม่ผ่านเอง',
+  qc: 'QC ตรวจแล้วตัดสินผ่าน / ไม่ผ่าน',
+};
 
 // ชื่อ/คำอธิบายบนการ์ดตาม code ของหมวด — หมวดที่ไม่รู้จักใช้ชื่อจาก DB + คำอธิบายกลาง ๆ
 const VIEW = {
@@ -56,6 +64,7 @@ const CategoryHome = () => {
   const session = useSession();
   const [cats, setCats] = useState(null);
   const [counts, setCounts] = useState(null);
+  const access = useMenuAccess();
   const isQC = hasRole(session, 'QC');
   const isPD = hasRole(session, 'PD');
 
@@ -77,7 +86,9 @@ const CategoryHome = () => {
   if (SHEET_PARAMS.some((k) => params.has(k))) return <Navigate to={`/inspect${search}`} replace />;
 
   const modelId = readStation().modelId;
-  const list = cats ?? [];
+  // การ์ดตามสิทธิ์เมนู — login แล้วเห็นเฉพาะหมวดที่ใช้ได้ · ยังไม่ login เห็นทุกใบ (กดแล้วไปเจอกล่อง login)
+  const menuOf = (c) => (Number(c.has_workflow) ? MENU.setup : MENU.inspect);
+  const list = (cats ?? []).filter((c) => !session || !access.loaded || access.can(menuOf(c)));
 
   const hrefOf = (c) => (Number(c.has_workflow) ? `/setup?cat=${c.id}` : modelHref('/inspect', modelId));
   const waitingOf = (c) => {
@@ -97,7 +108,12 @@ const CategoryHome = () => {
       ) : (
         <Row className="g-3 g-lg-4">
           {list.map((c) => {
-            const v = VIEW[c.code] ?? { title: c.name, sub: '', desc: 'งานตรวจที่ PD ตรวจแล้วส่งให้ QC ยืนยัน', icon: 'clipboard' };
+            const base = VIEW[c.code] ?? { title: c.name, sub: '', icon: 'clipboard' };
+            // คำอธิบาย: ที่ตั้งใน Master ชนะ · หมวดส่งต่อไม่มีคำอธิบาย = บอกว่าใครตรวจ
+            const v = {
+              ...base,
+              desc: c.description || (Number(c.has_workflow) ? FLOW_TEXT[c.flow] ?? FLOW_TEXT.pd_qc : base.desc),
+            };
             const waiting = waitingOf(c);
             return (
               <Col key={c.id} sm={6} xl={4}>

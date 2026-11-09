@@ -8,7 +8,8 @@ const express = require('express');
 const env = require('../config/env');
 const { query, execute } = require('../db/pool');
 const { hashPassword, verifyPassword, hashPasskey, signToken } = require('../services/auth');
-const { requireLogin, rolesOf } = require('../middleware/requireLogin');
+const { requireLogin, optionalUser, rolesOf } = require('../middleware/requireLogin');
+const { loadPermissions, allowedKeys } = require('../services/menuAccess');
 const { rateLimit } = require('../middleware/rateLimit');
 const { AppError, wrap } = require('../middleware/errorHandler');
 
@@ -91,5 +92,14 @@ router.post('/login', pickLimiter, wrap(async (req, res) => {
 
 // หน้าเว็บใช้เช็คว่า token ที่เก็บไว้ยังใช้ได้ (ยังไม่หมดอายุ + บัญชียังไม่ถูกปิด)
 router.get('/me', requireLogin, (req, res) => res.json({ user: req.user }));
+
+// เมนูที่คนนี้ (หรือคนที่ไม่ได้ login) ใช้ได้ — header / การ์ดหน้าแรก / route ฝั่งหน้าเว็บซ่อนตามนี้
+// ⚠️ ไม่ต้อง login · token เสีย/หมดอายุ = คำตอบของ GUEST (ไม่ 401 — หน้าแรกต้องเปิดได้เสมอ)
+router.get('/menu', wrap(async (req, res) => {
+  const user = await optionalUser(req);
+  const perms = await loadPermissions();
+  // guestKeys = เมนูที่เปิดให้คนไม่ login — หน้าเว็บใช้ตัดสินว่าหน้านั้นต้องขึ้นกล่อง login ไหม
+  res.json({ keys: allowedKeys(perms, user), guestKeys: allowedKeys(perms, null), userId: user?.id ?? null });
+}));
 
 module.exports = router;

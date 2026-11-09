@@ -17,10 +17,28 @@ import SpecValue from './SpecValue';
 import AppDialog from './AppDialog';
 import UsersTab from './UsersTab';
 import CategoryMatrix from './master/CategoryMatrix';
+import CategoriesTab from './master/CategoriesTab';
+import PermissionsTab from './master/PermissionsTab';
+import useMenuAccess, { MENU } from '../utils/useMenuAccess';
+import { useUrlParam } from '../utils/useModelParam';
 import SearchSelect from './SearchSelect';
 import { useDataTable, FilterBar } from './table/useDataTable';
 import Pager, { usePager } from './table/Pager';
 import { useDialog } from '../utils/useDialog';
+
+// แท็บของหน้า Master ↔ สิทธิ์เมนู (backend/services/menuAccess.js) — ข้อมูลพื้นฐาน 4 ตารางรวมเป็นแท็บเดียว มีแท็บย่อย
+const MASTER_TABS = [
+  { key: 'models', label: 'Item & จุดตรวจ', menu: MENU.masterItems },
+  { key: 'categories', label: 'หมวดการตรวจ', menu: MENU.masterCategories },
+  { key: 'base', label: 'ข้อมูลพื้นฐาน', menu: MENU.masterBase },
+  { key: 'users', label: 'ผู้ใช้ & สิทธิ์', menu: MENU.masterUsers },
+];
+const BASE_TABS = [
+  { key: 'divisions', label: 'Division' },
+  { key: 'machines', label: 'เครื่อง' },
+  { key: 'inspectors', label: 'ผู้ตรวจ' },
+  { key: 'customers', label: 'ลูกค้า' },
+];
 
 const CHAR_TYPES = [
   { value: 'variable', label: 'วัดค่า (variable)' },
@@ -143,7 +161,15 @@ const MasterSetup = () => {
   const [specMode, setSpecMode] = useState('limits');
   const [tolForm, setTolForm] = useState(EMPTY_TOL);
 
-  const [tab, setTab] = useState('models');
+  // แท็บตามสิทธิ์เมนู — ไม่มีสิทธิ์แท็บไหนก็ไม่ขึ้น (server กั้นเส้นเขียนของแต่ละแท็บอีกชั้น)
+  const access = useMenuAccess();
+  const visibleTabs = MASTER_TABS.filter((t) => !access.loaded || access.can(t.menu));
+  const [tabParam, setTabParam] = useUrlParam('tab');
+  const tab = visibleTabs.some((t) => t.key === tabParam) ? tabParam : (visibleTabs[0]?.key ?? 'models');
+  const setTab = (k) => setTabParam(k === MASTER_TABS[0].key ? '' : k);
+  const [baseTabParam, setBaseTabParam] = useUrlParam('sub');
+  const baseTab = BASE_TABS.some((t) => t.key === baseTabParam) ? baseTabParam : BASE_TABS[0].key;
+  const setBaseTab = (k) => setBaseTabParam(k === BASE_TABS[0].key ? '' : k);
   const [lookups, setLookups] = useState({ divisions: [], machines: [], inspectors: [] });
   const [models, setModels] = useState([]);
   // ?model= = item ที่หน้าใบตรวจอยากให้เปิดค้างไว้ (ชื่อ param เดียวกับ Dashboard/ReportPage)
@@ -357,14 +383,19 @@ const MasterSetup = () => {
       </div>
       {msg && <Alert variant={msg.variant} dismissible onClose={() => setMsg(null)}>{msg.text}</Alert>}
 
+      {/* 4 แท็บตามสิทธิ์เมนู (Master › ผู้ใช้ & สิทธิ์) — แท็บที่ไม่มีสิทธิ์ไม่ขึ้น · แท็บที่เปิดอยู่จำใน ?tab= */}
       <Nav variant="tabs" activeKey={tab} onSelect={setTab} className="mb-3">
-        <Nav.Item><Nav.Link eventKey="models">รุ่น &amp; จุดตรวจ</Nav.Link></Nav.Item>
-        <Nav.Item><Nav.Link eventKey="divisions">Division</Nav.Link></Nav.Item>
-        <Nav.Item><Nav.Link eventKey="machines">เครื่อง</Nav.Link></Nav.Item>
-        <Nav.Item><Nav.Link eventKey="inspectors">ผู้ตรวจ</Nav.Link></Nav.Item>
-        <Nav.Item><Nav.Link eventKey="customers">ลูกค้า</Nav.Link></Nav.Item>
-        <Nav.Item><Nav.Link eventKey="users">ผู้ใช้</Nav.Link></Nav.Item>
+        {visibleTabs.map((t) => (
+          <Nav.Item key={t.key}><Nav.Link eventKey={t.key}>{t.label}</Nav.Link></Nav.Item>
+        ))}
       </Nav>
+      {tab === 'base' && (
+        <Nav variant="pills" activeKey={baseTab} onSelect={setBaseTab} className="mb-3 master-subtabs">
+          {BASE_TABS.map((t) => (
+            <Nav.Item key={t.key}><Nav.Link eventKey={t.key}>{t.label}</Nav.Link></Nav.Item>
+          ))}
+        </Nav>
+      )}
 
       {tab === 'models' && (
         <ModelsTab
@@ -385,7 +416,7 @@ const MasterSetup = () => {
           onAlert={showAlert}
         />
       )}
-      {tab === 'divisions' && (
+      {tab === 'base' && baseTab === 'divisions' && (
         <SimpleTab
           title="Division" table="divisions" rows={lookups.divisions}
           columns={[
@@ -396,7 +427,7 @@ const MasterSetup = () => {
           onSave={save} onRemove={remove} onAlert={showAlert} labelOf={(r) => r.name}
         />
       )}
-      {tab === 'machines' && (
+      {tab === 'base' && baseTab === 'machines' && (
         <SimpleTab
           title="เครื่อง" table="machines" rows={lookups.machines}
           columns={[
@@ -408,7 +439,7 @@ const MasterSetup = () => {
           onSave={save} onRemove={remove} onAlert={showAlert} labelOf={(r) => `${r.code} — ${r.name}`}
         />
       )}
-      {tab === 'inspectors' && (
+      {tab === 'base' && baseTab === 'inspectors' && (
         <SimpleTab
           title="ผู้ตรวจ" table="inspectors" rows={lookups.inspectors}
           columns={[
@@ -420,7 +451,7 @@ const MasterSetup = () => {
           onSave={save} onRemove={remove} onAlert={showAlert} labelOf={(r) => r.name}
         />
       )}
-      {tab === 'customers' && (
+      {tab === 'base' && baseTab === 'customers' && (
         // เกณฑ์ตั้งต้นของลูกค้า — item ที่ผูกลูกค้านี้และเว้นช่องเกณฑ์ไว้จะใช้ค่าชุดนี้
         // จุด CTF (is_critical) ใช้อีกชุดเพราะลูกค้ามักกำหนดจุดวิกฤตสูงกว่า
         <SimpleTab
@@ -438,9 +469,15 @@ const MasterSetup = () => {
           onSave={save} onRemove={remove} onAlert={showAlert} labelOf={(r) => r.name}
         />
       )}
+      {tab === 'categories' && (
+        <CategoriesTab showForm={showForm} say={say} fail={fail} />
+      )}
       {tab === 'users' && (
-        // บัญชี login หน้า Master — ไม่มีหน้าสมัครสาธารณะ คนที่ login อยู่เพิ่มให้คนอื่น (ดู UsersTab.js)
-        <UsersTab say={say} fail={fail} showForm={showForm} showConfirm={showConfirm} onAlert={showAlert} />
+        // บัญชี login — ไม่มีหน้าสมัครสาธารณะ คนที่มีสิทธิ์เมนูนี้เพิ่มให้คนอื่น (ดู UsersTab.js) + ตารางสิทธิ์เมนู
+        <>
+          <UsersTab say={say} fail={fail} showForm={showForm} showConfirm={showConfirm} onAlert={showAlert} />
+          <PermissionsTab say={say} fail={fail} />
+        </>
       )}
 
       <BaselineModal

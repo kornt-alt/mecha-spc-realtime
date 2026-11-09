@@ -14,6 +14,7 @@ const { buildInspectionFilter } = require('../db/queries');
 const { analyze } = require('../services/spcStats');
 const { baselineOf, pickBaseline, scopeOf } = require('../services/baseline');
 const { AppError, wrap } = require('../middleware/errorHandler');
+const { requireMenu } = require('../middleware/requireLogin');
 const { filterFrom } = require('./charts');
 
 const router = express.Router();
@@ -277,7 +278,7 @@ router.get('/model/:modelId/grid', wrap(async (req, res) => {
 //
 // สร้างไฟล์ฝั่ง server แล้วเขียนลง res ตรง ๆ (แพตเทิร์นเดียวกับที่ MECHA_TIME_IN ใช้)
 // จะได้ไม่ต้องยัดไลบรารี xlsx ลง bundle ของหน้าเว็บ
-router.get('/model/:modelId/export', wrap(async (req, res) => {
+router.get('/model/:modelId/export', requireMenu('report'), wrap(async (req, res) => {
   const { modelId } = req.params;
   if (!isIntLike(modelId)) throw new AppError('model id ไม่ถูกต้อง', 400);
 

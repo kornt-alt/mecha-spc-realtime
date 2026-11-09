@@ -8,7 +8,7 @@ const { insertInspection } = require('../db/inspectionWrite');
 const { evaluateCheckpoint, summarize, validateSubmission, isShift, judge } = require('../services/judgment');
 const { toNum } = require('../services/spcStats');
 const { AppError, wrap } = require('../middleware/errorHandler');
-const { requireAdmin } = require('../middleware/requireLogin');
+const { requireMenu } = require('../middleware/requireLogin');
 
 const router = express.Router();
 
@@ -29,7 +29,7 @@ const isIntLike = (v) => v !== null && v !== undefined && v !== '' && Number.isI
 //     { checkpoint_id, judgment: 'OK'|'NG', ng_reason? }  // attribute
 //   ]
 // }
-router.post('/', wrap(async (req, res) => {
+router.post('/', requireMenu('inspect'), wrap(async (req, res) => {
   const b = req.body ?? {};
 
   for (const [key, label] of [['model_id', 'item'], ['machine_id', 'เครื่อง'], ['inspector_id', 'ผู้ตรวจ']]) {
@@ -250,7 +250,7 @@ const resultCheckpointIds = async (inspectionId) => {
   return rows.map((r) => r.checkpoint_id);
 };
 
-router.put('/:id/void', wrap(async (req, res) => {
+router.put('/:id/void', requireMenu('inspect'), wrap(async (req, res) => {
   if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
   const id = Number(req.params.id);
   const voided = req.body?.voided !== false;
@@ -303,7 +303,7 @@ router.put('/:id/void', wrap(async (req, res) => {
 // ⚠️ แก้ได้เฉพาะแถวที่มีอยู่ ไม่เพิ่ม/ลบจุดหรือชิ้น — จำนวนชิ้นต่อจุดต้องเท่า n_used เสมอ
 // ⚠️ ทุกค่าที่เปลี่ยนต้องลง inspection_result_edits (ค่าเดิม + ค่าใหม่ + เหตุผล + คนแก้)
 //    ไม่มีประวัติ = ใบที่ถูกแก้ใช้เป็นหลักฐานไม่ได้
-router.put('/:id/results', requireAdmin, wrap(async (req, res) => {
+router.put('/:id/results', requireMenu('master.items'), wrap(async (req, res) => {
   if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
   const id = Number(req.params.id);
   const reason = String(req.body?.reason ?? '').trim();
@@ -408,7 +408,7 @@ router.put('/:id/results', requireAdmin, wrap(async (req, res) => {
 // รับ model_id ใน body ให้เข้ารูปเดียวกับ DELETE /master/delete
 // ⚠️ ต้อง login — ลบหลักฐานออกจาก DB จริง กู้คืนไม่ได้ (กดจากหน้า Master)
 //    ต่างจาก PUT /:id/void ข้างบนที่ยังเปิดอยู่ เพราะยกเลิกคืนค่าได้ และมี voided_reason บังคับ
-router.delete('/voided', requireAdmin, wrap(async (req, res) => {
+router.delete('/voided', requireMenu('master.items'), wrap(async (req, res) => {
   const { model_id: modelId } = req.body;
   if (!isIntLike(modelId)) throw new AppError('model_id ไม่ถูกต้อง', 400);
 

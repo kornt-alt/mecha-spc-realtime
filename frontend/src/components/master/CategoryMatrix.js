@@ -20,6 +20,8 @@ import SpecValue from '../SpecValue';
 const ROUTINE = 1;
 const ROUTINE_KEY = 'routine';
 const STAGES = [{ key: 'pd', label: 'Production Check' }, { key: 'qc', label: 'QC Confirm' }];
+// ขั้นที่หมวดใช้ตาม flow (Master › หมวดการตรวจ) — ขั้นที่ไม่ใช้ไม่โชว์ (ค่าเดิมใน DB ไม่ถูกลบ ส่งกลับไปตามเดิม)
+const FLOW_STAGES = { pd_qc: ['pd', 'qc'], pd: ['pd'], qc: ['qc'] };
 const MIN_SLOTS = 6; // ช่อง 1–6 ตามฟอร์ม (ขยายเองถ้ามีจุดที่ตั้งเกิน 6)
 const keyOf = (catId, stage) => `${catId}:${stage}`;
 
@@ -126,7 +128,9 @@ const CategoryMatrix = ({ modelId, checkpoints, categories, onSaved, onEditPoint
   // กลุ่มคอลัมน์ตามฟอร์ม: Inspection Record · <หมวด> Production Check / QC Confirm
   const groups = [
     ...(routineCat ? [{ key: ROUTINE_KEY, cat: 'Inspection Record', sub: 'ตรวจตามรอบ' }] : []),
-    ...flowCats.flatMap((c) => STAGES.map((st) => ({ key: keyOf(c.id, st.key), cat: c.name, sub: st.label }))),
+    ...flowCats.flatMap((c) => STAGES
+      .filter((st) => (FLOW_STAGES[c.flow] ?? FLOW_STAGES.pd_qc).includes(st.key))
+      .map((st) => ({ key: keyOf(c.id, st.key), cat: c.name, sub: st.label }))),
   ];
   const slotsOf = (g) => Math.max(MIN_SLOTS, ...points.map((cp) => qtyOf(draft[cp.id] ?? {}, g.key)));
   const widthOf = (g) => slotsOf(g) + (g.key === ROUTINE_KEY ? 1 : 0); // ตามรอบมีคอลัมน์ความถี่เพิ่ม

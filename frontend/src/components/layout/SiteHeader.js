@@ -5,7 +5,7 @@
 // เลื่อนลง → mc-header--compact (แถบบนพับ) · ต้องอยู่ใน <Router>
 //
 // ⚠️ เมนูพา ?model= ที่กำลังดูข้ามหน้าไปด้วย (ไม่มีใน URL = รุ่นของสถานีที่เครื่องนี้จำไว้) — ของเดิมก่อนธีมใหม่ก็ทำแบบนี้
-// ⚠️ "ตั้งค่า Master" ซ่อนเฉพาะคนที่ login แล้วแต่ไม่ใช่ ADMIN — ยังไม่ login ต้องเห็น เพราะกล่อง login ของ ADMIN อยู่ที่หน้านั้น
+// ⚠️ เมนูซ่อนตามสิทธิ์ที่ ADMIN ตั้ง (useMenuAccess) เฉพาะคนที่ login แล้ว — ยังไม่ login ต้องเห็นทุกเมนู เพราะกล่อง login อยู่ที่หน้านั้น
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { Navbar, Nav, Container, NavDropdown } from 'react-bootstrap';
@@ -19,6 +19,7 @@ import useSession from '../../utils/useSession';
 import { on } from '../../utils/socket';
 import { readStation } from '../../utils/station';
 import { modelHref } from '../../utils/useModelParam';
+import useMenuAccess, { MENU, MASTER_KEYS } from '../../utils/useMenuAccess';
 
 // ⚠️ เกณฑ์ย่อ/คลายต่างกัน (hysteresis) — แถบบนพับแล้วหน้าเตี้ยลง ถ้าใช้เกณฑ์เดียว scroll ที่ขยับตามจะสลับไปมาจนกระพริบ
 const COMPACT_AT = 80;
@@ -80,7 +81,10 @@ const SiteHeader = () => {
   const modelId = params.get('model') || readStation().modelId;
   const user = session?.user;
   const roles = rolesOf(session);
-  const showMaster = !session || hasRole(session, 'ADMIN');
+  // เมนูตามสิทธิ์ที่ ADMIN ตั้ง · ยังไม่ login = เห็นทุกเมนู (กล่อง login อยู่ที่หน้านั้น ซ่อนไว้ = หาทางเข้าไม่เจอ)
+  const access = useMenuAccess();
+  const see = (keys) => !session || !access.loaded || access.can(keys);
+  const showMaster = see(MASTER_KEYS);
 
   const inspectActive = ['/', '/inspect', '/setup'].includes(pathname);
   const analyseActive = ['/dashboard', '/sc', '/report'].includes(pathname);
@@ -122,14 +126,20 @@ const SiteHeader = () => {
                   title={<>ตรวจ{setupBadge}</>}
                 >
                   <MenuItem to="/" title="เลือกหมวดที่จะตรวจ" desc="Inspection Record · Set up · Last Piece" active={pathname === '/'} />
-                  <MenuItem to={modelHref('/inspect', modelId)} title="Inspection Record" desc="ตรวจตามรอบ — สแกน MO แล้วกรอกค่าวัด" active={pathname === '/inspect'} />
-                  <MenuItem to="/setup?cat=2" title="Set up / Last Piece" desc="PD ตรวจ → ส่ง QC ยืนยัน" active={pathname === '/setup'} badge={setupBadge} />
+                  {see(MENU.inspect) && (
+                    <MenuItem to={modelHref('/inspect', modelId)} title="Inspection Record" desc="ตรวจตามรอบ — สแกน MO แล้วกรอกค่าวัด" active={pathname === '/inspect'} />
+                  )}
+                  {see(MENU.setup) && (
+                    <MenuItem to="/setup" title="Set up / Last Piece" desc="งานตรวจส่งต่อ PD → QC" active={pathname === '/setup'} badge={setupBadge} />
+                  )}
                 </NavDropdown>
-                <NavDropdown id="mc-nav-analyse" title="วิเคราะห์" className={analyseActive ? 'mc-active' : ''}>
-                  <MenuItem to={modelHref('/dashboard', modelId)} title="Dashboard" desc="สถานะทุกจุดตรวจของ item" active={pathname === '/dashboard'} />
-                  <MenuItem to={modelHref('/sc', modelId)} title="SC Chart" desc="ฟอร์ม SC ราย 1 จุด × เดือน + Event Log" active={pathname === '/sc'} />
-                  <MenuItem to={modelHref('/report', modelId)} title="รายงาน" desc="สรุป Cp/Cpk · ตาราง Input · Excel" active={pathname === '/report'} />
-                </NavDropdown>
+                {see([MENU.dashboard, MENU.sc, MENU.report]) && (
+                  <NavDropdown id="mc-nav-analyse" title="วิเคราะห์" className={analyseActive ? 'mc-active' : ''}>
+                    {see(MENU.dashboard) && <MenuItem to={modelHref('/dashboard', modelId)} title="Dashboard" desc="สถานะทุกจุดตรวจของ item" active={pathname === '/dashboard'} />}
+                    {see(MENU.sc) && <MenuItem to={modelHref('/sc', modelId)} title="SC Chart" desc="ฟอร์ม SC ราย 1 จุด × เดือน + Event Log" active={pathname === '/sc'} />}
+                    {see(MENU.report) && <MenuItem to={modelHref('/report', modelId)} title="รายงาน" desc="สรุป Cp/Cpk · ตาราง Input · Excel" active={pathname === '/report'} />}
+                  </NavDropdown>
+                )}
                 {showMaster && (
                   <Nav.Link as={Link} to="/master" className={pathname === '/master' ? 'mc-active' : ''}>ตั้งค่า Master</Nav.Link>
                 )}

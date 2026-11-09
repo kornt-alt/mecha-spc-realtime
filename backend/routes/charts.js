@@ -23,7 +23,7 @@ const {
 const { AppError, wrap } = require('../middleware/errorHandler');
 // ตั้ง/ล้าง baseline = เปลี่ยนเส้น control limit ที่ทุกจอใช้ตัดสิน — ต้อง login (กดจากหน้า Master)
 // preview ยังเปิดอยู่ อ่านอย่างเดียวไม่เขียนอะไร
-const { requireAdmin } = require('../middleware/requireLogin');
+const { requireMenu } = require('../middleware/requireLogin');
 
 const router = express.Router();
 
@@ -130,7 +130,7 @@ router.get('/:checkpointId/baseline/preview', wrap(async (req, res) => {
 }));
 
 // POST /api/charts/:checkpointId/baseline — freeze ลิมิตจากช่วงที่เลือก
-router.post('/:checkpointId/baseline', requireAdmin, wrap(async (req, res) => {
+router.post('/:checkpointId/baseline', requireMenu('master.items'), wrap(async (req, res) => {
   if (!isIntLike(req.params.checkpointId)) throw new AppError('checkpoint id ไม่ถูกต้อง', 400);
 
   const f = filterFrom(req.body ?? {});
@@ -157,7 +157,7 @@ router.post('/:checkpointId/baseline', requireAdmin, wrap(async (req, res) => {
 }));
 
 // DELETE /api/charts/:checkpointId/baseline — กลับไปเป็น provisional
-router.delete('/:checkpointId/baseline', requireAdmin, wrap(async (req, res) => {
+router.delete('/:checkpointId/baseline', requireMenu('master.items'), wrap(async (req, res) => {
   if (!isIntLike(req.params.checkpointId)) throw new AppError('checkpoint id ไม่ถูกต้อง', 400);
 
   const checkpoint = await fetchCheckpoint(req.params.checkpointId);

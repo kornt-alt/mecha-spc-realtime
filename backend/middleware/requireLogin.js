@@ -76,7 +76,43 @@ const makeRequireRole = (guard) => (...roles) => (req, res, next) =>
 const requireRole = makeRequireRole(requireLogin);
 const requireAdmin = requireRole('ADMIN');
 
+// ── สิทธิ์ตามเมนู (ADMIN ตั้งที่ Master › ผู้ใช้ & สิทธิ์ · services/menuAccess.js) ────────────────
+//
+// อ่าน user จาก token ถ้ามี (ไม่มี/หมดอายุ = GUEST — ไม่ 401 ทันที เพราะเมนูที่เปิด GUEST ต้องใช้ได้)
+// GUEST เข้าเมนูนี้ได้ → ผ่าน (req.user มีถ้า login อยู่) · ไม่ได้ login → 401 · login แล้วแต่ role ไม่มีสิทธิ์ → 403
+// key เป็นฟังก์ชันได้ (req) => key — master/add|update|delete เลือกเมนูตามตาราง
+const optionalUser = async (req) => {
+  const payload = verifyToken(tokenOf(req), env.AUTH_SECRET);
+  if (!payload) return null;
+  const user = await findUser(payload.sub);
+  if (!user || !Number(user.is_active)) return null;
+  return {
+    id: user.id,
+    username: user.username,
+    display_name: user.display_name,
+    roles: rolesOf(user.role),
+    inspector_id: user.inspector_id ?? null,
+  };
+};
+
+const requireMenu = (key) => async (req, res, next) => {
+  try {
+    // require ในฟังก์ชัน — menuAccess ดึง db/pool ซึ่งไฟล์นี้ก็ดึงอยู่แล้ว แต่กันวงวนตอนเทสที่ mock แยก
+    const { loadPermissions, isAllowed, userAllowed, MENUS } = require('../services/menuAccess');
+    const menuKey = typeof key === 'function' ? key(req) : key;
+    const perms = await loadPermissions();
+    const user = await optionalUser(req);
+    if (user) req.user = user;
+    if (userAllowed(perms, menuKey, user)) return next();
+    if (!user) throw new AppError(isAllowed(perms, menuKey, 'GUEST') ? NEED_LOGIN : 'กรุณาเข้าสู่ระบบก่อน', 401);
+    const label = MENUS.find((m) => m.key === menuKey)?.label ?? menuKey;
+    throw new AppError(`บัญชีนี้ไม่มีสิทธิ์ใช้เมนู "${label}" — ให้ ADMIN เปิดสิทธิ์ที่ Master › ผู้ใช้ & สิทธิ์`, 403);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
-  requireLogin, requireLoginUnless, requireRole, requireAdmin, makeRequireLogin, makeRequireRole,
-  rolesOf, tokenOf, NEED_LOGIN,
+  requireLogin, requireLoginUnless, requireRole, requireAdmin, requireMenu, optionalUser,
+  makeRequireLogin, makeRequireRole, rolesOf, tokenOf, NEED_LOGIN,
 };

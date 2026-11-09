@@ -526,7 +526,7 @@ CREATE TABLE IF NOT EXISTS check_job_events (
   id             BIGINT AUTO_INCREMENT PRIMARY KEY,
   job_id         INT NOT NULL,
   round_no       INT NOT NULL,
-  action         ENUM('open','pd_submit','qc_accept','qc_pass','qc_reject','cancel') NOT NULL,
+  action         ENUM('open','pd_submit','qc_accept','qc_pass','qc_reject','pd_pass','pd_reject','cancel') NOT NULL,
   user_id        INT NOT NULL,
   user_name      VARCHAR(100) NOT NULL,
   note           VARCHAR(255) NULL,
@@ -554,3 +554,33 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS inspector_id INT NULL;
 -- ⚠️ DEFAULT 1 — จุดเดิมทั้งหมดยังอยู่ในใบตรวจตามรอบเหมือนเดิม · ตัวเลือกจุดตามรอบมีที่เดียว:
 --    fetchModelCheckpoints({ routineOnly }) (backend) / isRoutinePoint() (frontend utils/checkpointForm.js)
 ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS in_routine TINYINT(1) NOT NULL DEFAULT 1;
+
+-- ── สิทธิ์เข้าเมนูราย role (2026-11 · ADMIN ตั้งที่ Master › ผู้ใช้ & สิทธิ์) ─────────────────
+-- role GUEST = คนที่ไม่ได้ login · allowed 1 = เข้าได้ · รายการเมนู/ช่องที่ล็อกอยู่ที่ backend/services/menuAccess.js
+-- ⚠️ INSERT IGNORE + คอลัมน์ allowed (ไม่ใช่ "มีแถว = อนุญาต") — db:apply ซ้ำต้องไม่เปิดสิทธิ์ที่ ADMIN ปิดไว้กลับคืน
+-- seed = พฤติกรรมก่อนมีตารางนี้เป๊ะ (ใบตรวจ/Dashboard/SC/รายงาน ไม่ต้อง login · Set up = PD/QC/ADMIN · Master = ADMIN)
+CREATE TABLE IF NOT EXISTS menu_permissions (
+  menu_key  VARCHAR(40) NOT NULL,
+  role      ENUM('GUEST','ADMIN','PD','QC') NOT NULL,
+  allowed   TINYINT(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (menu_key, role)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO menu_permissions (menu_key, role, allowed) VALUES
+  ('inspect', 'GUEST', 1), ('inspect', 'ADMIN', 1), ('inspect', 'PD', 1), ('inspect', 'QC', 1),
+  ('setup', 'GUEST', 0), ('setup', 'ADMIN', 1), ('setup', 'PD', 1), ('setup', 'QC', 1),
+  ('dashboard', 'GUEST', 1), ('dashboard', 'ADMIN', 1), ('dashboard', 'PD', 1), ('dashboard', 'QC', 1),
+  ('sc', 'GUEST', 1), ('sc', 'ADMIN', 1), ('sc', 'PD', 1), ('sc', 'QC', 1),
+  ('report', 'GUEST', 1), ('report', 'ADMIN', 1), ('report', 'PD', 1), ('report', 'QC', 1),
+  ('master.items', 'GUEST', 0), ('master.items', 'ADMIN', 1), ('master.items', 'PD', 0), ('master.items', 'QC', 0),
+  ('master.base', 'GUEST', 0), ('master.base', 'ADMIN', 1), ('master.base', 'PD', 0), ('master.base', 'QC', 0),
+  ('master.categories', 'GUEST', 0), ('master.categories', 'ADMIN', 1), ('master.categories', 'PD', 0), ('master.categories', 'QC', 0),
+  ('master.users', 'GUEST', 0), ('master.users', 'ADMIN', 1), ('master.users', 'PD', 0), ('master.users', 'QC', 0);
+
+-- ── หมวดการตรวจ: คำอธิบายบนการ์ดหน้าแรก + ใครตรวจ (2026-11) ──────────────────────────────
+-- flow: pd_qc = PD ตรวจแล้วส่ง QC ยืนยัน (Set up เดิม) · pd = PD ตรวจแล้วปิดงานเอง · qc = QC เปิดงานแล้วตรวจเอง
+-- ⚠️ DEFAULT 'pd_qc' = พฤติกรรมเดิมของทุกหมวด · ตัวตัดสินลำดับขั้นอยู่ที่ routes/checkJobs.js (stagesOf)
+ALTER TABLE check_categories ADD COLUMN IF NOT EXISTS description VARCHAR(200) NULL;
+ALTER TABLE check_categories ADD COLUMN IF NOT EXISTS flow ENUM('pd_qc','pd','qc') NOT NULL DEFAULT 'pd_qc';
+-- flow pd: PD ตัดสินผลเอง → event pd_pass / pd_reject (MODIFY รันซ้ำได้ ค่าเดิมยังอยู่ครบ)
+ALTER TABLE check_job_events MODIFY action ENUM('open','pd_submit','qc_accept','qc_pass','qc_reject','pd_pass','pd_reject','cancel') NOT NULL;

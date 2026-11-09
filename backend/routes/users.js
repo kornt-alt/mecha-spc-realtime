@@ -10,11 +10,11 @@
 const express = require('express');
 const { query, execute } = require('../db/pool');
 const { hashPassword, hashPasskey } = require('../services/auth');
-const { requireAdmin } = require('../middleware/requireLogin');
+const { requireMenu } = require('../middleware/requireLogin');
 const { AppError, wrap } = require('../middleware/errorHandler');
 
 const router = express.Router();
-router.use(requireAdmin);
+router.use(requireMenu('master.users'));
 
 const MIN_PASSWORD = 6; // เท่ากับ scripts/user.js
 // passkey ใช้เข้าได้ด้วยช่องเดียว (ไม่มี username ช่วย) จึงสั้นกว่านี้ไม่ได้

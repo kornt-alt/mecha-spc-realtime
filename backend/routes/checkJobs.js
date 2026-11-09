@@ -17,10 +17,11 @@ const { query, withTransaction } = require('../db/pool');
 const { insertInspection } = require('../db/inspectionWrite');
 const { evaluateCheckpoint, summarize, validateSubmission, isShift } = require('../services/judgment');
 const { AppError, wrap } = require('../middleware/errorHandler');
-const { requireLogin, requireRole } = require('../middleware/requireLogin');
+const { requireMenu, requireRole } = require('../middleware/requireLogin');
 
 const router = express.Router();
-router.use(requireLogin);
+// สิทธิ์เมนู Set up (ADMIN ตั้งได้) — GUEST ของเมนูนี้ล็อกปิดเสมอ จึงมี req.user ทุกเส้น
+router.use(requireMenu('setup'));
 
 const requirePD = requireRole('PD');
 const requireQC = requireRole('QC');
@@ -137,7 +138,7 @@ const emitInspectionSaved = (req, job, inspectionId, linesByCheckpoint, overall)
 // ── อ่าน ──────────────────────────────────────────────────────────────────
 
 const SELECT_JOBS = `
-  SELECT j.*, cat.code AS category_code, cat.name AS category_name,
+  SELECT j.*, cat.code AS category_code, cat.name AS category_name, cat.flow AS category_flow,
          m.item_no, m.item_name, m.drawing_no, m.drawing_rev,
          mc.code AS machine_code, mc.name AS machine_name,
          ou.display_name AS opened_by_name, ou.username AS opened_by_username,
@@ -145,7 +146,7 @@ const SELECT_JOBS = `
          (SELECT e.action FROM check_job_events e WHERE e.job_id = j.id ORDER BY e.id DESC LIMIT 1) AS last_action,
          (SELECT e.user_name FROM check_job_events e WHERE e.job_id = j.id ORDER BY e.id DESC LIMIT 1) AS last_user_name,
          (SELECT e.note FROM check_job_events e
-           WHERE e.job_id = j.id AND e.action = 'qc_reject' ORDER BY e.id DESC LIMIT 1) AS last_reject_note
+           WHERE e.job_id = j.id AND e.action IN ('qc_reject','pd_reject') ORDER BY e.id DESC LIMIT 1) AS last_reject_note
     FROM check_jobs j
     JOIN check_categories cat ON cat.id = j.category_id
     JOIN models m             ON m.id  = j.model_id
@@ -256,8 +257,26 @@ router.get('/:id', wrap(async (req, res) => {
 
 // ── เขียน ─────────────────────────────────────────────────────────────────
 
-// PD เปิดงาน — body: { category_id, model_id, machine_id, mo_no, lot_no?, shift, mo_item_no?, mo_item_name?, mo_draw? }
-router.post('/', requirePD, wrap(async (req, res) => {
+// ── ใครตรวจ: check_categories.flow (ตั้งที่ Master › หมวดการตรวจ) ───────────────────────
+//   pd_qc = PD เปิด → PD ตรวจ → ส่ง QC → QC รับ → ผ่าน/ไม่ผ่าน (ไม่ผ่าน = กลับ PD รอบใหม่)   ← ค่าเริ่ม
+//   pd    = PD เปิด → PD ตรวจแล้วตัดสินผ่าน/ไม่ผ่านเอง (/decide) · ไม่ผ่าน = PD ตรวจซ้ำรอบใหม่
+//   qc    = QC เปิด (= รับงานไว้เอง) → QC ตรวจแล้วตัดสิน (/decide) · ไม่ผ่าน = QC ตรวจซ้ำรอบใหม่
+// ⚠️ ขั้นของจุดตรวจ: pd_qc ใช้ settings ขั้น pd + qc · pd ใช้ขั้น pd · qc ใช้ขั้น qc
+const FLOW_STAGES = { pd_qc: ['pd', 'qc'], pd: ['pd'], qc: ['qc'] };
+const flowOf = async (categoryId) => {
+  const [[c]] = await query('SELECT flow FROM check_categories WHERE id = ?', [Number(categoryId)]);
+  return FLOW_STAGES[c?.flow] ? c.flow : 'pd_qc';
+};
+// role ที่เปิดงานของแต่ละ flow
+const OPENER = { pd_qc: 'PD', pd: 'PD', qc: 'QC' };
+const requireOpener = (req, res, next) => {
+  flowOf(req.body?.category_id)
+    .then((flow) => requireRole(OPENER[flow])(req, res, next))
+    .catch(next);
+};
+
+// เปิดงาน — body: { category_id, model_id, machine_id, mo_no, lot_no?, shift, mo_item_no?, mo_item_name?, mo_draw? }
+router.post('/', requireOpener, wrap(async (req, res) => {
   const b = req.body ?? {};
   for (const [key, label] of [['category_id', 'หมวด'], ['model_id', 'item'], ['machine_id', 'เครื่อง']]) {
     if (!isIntLike(b[key])) throw new AppError(`ยังไม่ได้เลือก${label}`, 400);
@@ -267,16 +286,20 @@ router.post('/', requirePD, wrap(async (req, res) => {
   if (!b.shift) throw new AppError('ยังไม่ได้เลือกกะ', 400);
   if (!isShift(b.shift)) throw new AppError(`กะ "${b.shift}" ไม่ใช่กะที่ระบบรับ`, 400);
 
-  const [[cat]] = await query('SELECT id, name, has_workflow FROM check_categories WHERE id = ? AND is_active = 1', [Number(b.category_id)]);
+  const [[cat]] = await query('SELECT id, name, has_workflow, flow FROM check_categories WHERE id = ? AND is_active = 1', [Number(b.category_id)]);
   if (!cat || !Number(cat.has_workflow)) throw new AppError('หมวดนี้ไม่ใช่งานที่ต้องส่งต่อ PD → QC', 400);
+  const flow = FLOW_STAGES[cat.flow] ? cat.flow : 'pd_qc';
+  const firstStage = FLOW_STAGES[flow][0];
   const [[model]] = await query('SELECT id, division_id FROM models WHERE id = ? AND is_active = 1', [Number(b.model_id)]);
   if (!model) throw new AppError('ไม่พบ item นี้ หรือถูกปิดใช้งาน', 400);
   const [[machine]] = await query('SELECT id, division_id FROM machines WHERE id = ? AND is_active = 1', [Number(b.machine_id)]);
   if (!machine) throw new AppError('ไม่พบเครื่องนี้ หรือถูกปิดใช้งาน', 400);
   if (Number(machine.division_id) !== Number(model.division_id)) throw new AppError('เครื่องกับ item อยู่คนละ Division', 400);
 
-  const pd = await stageCheckpoints(model.id, cat.id, 'pd');
-  if (!pd.length) throw new AppError(`item นี้ยังไม่ได้ตั้งจุดตรวจ ${cat.name} ขั้น PD — ตั้งที่ Master › จุดตรวจ`, 400);
+  const first = await stageCheckpoints(model.id, cat.id, firstStage);
+  if (!first.length) {
+    throw new AppError(`item นี้ยังไม่ได้ตั้งจุดตรวจ ${cat.name} ขั้น ${firstStage.toUpperCase()} — ตั้งที่ Master › ตารางหมวดการตรวจ`, 400);
+  }
 
   // งานที่ยังไม่ปิดของ หมวด + item + เครื่อง + WOS เดียวกันมีได้ใบเดียว — เปิดซ้ำ = คิวซ้อนกันสองใบ
   const [[dup]] = await query(
@@ -290,13 +313,16 @@ router.post('/', requirePD, wrap(async (req, res) => {
   const job = await withTransaction(async (conn) => {
     const [r] = await conn.execute(
       `INSERT INTO check_jobs
-         (category_id, model_id, machine_id, mo_no, lot_no, shift, mo_item_no, mo_item_name, mo_draw, opened_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (category_id, model_id, machine_id, mo_no, lot_no, shift, mo_item_no, mo_item_name, mo_draw, opened_by, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [cat.id, model.id, machine.id, moNo, textOrNull(b.lot_no), b.shift,
-        textOrNull(b.mo_item_no), textOrNull(b.mo_item_name), textOrNull(b.mo_draw), req.user.id]
+        textOrNull(b.mo_item_no), textOrNull(b.mo_item_name), textOrNull(b.mo_draw), req.user.id,
+        flow === 'qc' ? 'qc_checking' : 'pd_checking']
     );
     const created = await loadJob(r.insertId, conn);
     await addEvent(conn, created, 1, 'open', req.user);
+    // flow qc: คนเปิด = QC ที่รับงานไว้เลย (ตัดสินผลได้เฉพาะคนที่ qc_accept ล่าสุด)
+    if (flow === 'qc') await addEvent(conn, created, 1, 'qc_accept', req.user);
     return created;
   });
 
@@ -309,6 +335,9 @@ router.post('/:id/submit', requirePD, wrap(async (req, res) => {
   if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
   const job = await loadJob(req.params.id);
   if (job.status !== 'pd_checking') throw new AppError('งานนี้ไม่ได้อยู่ขั้น PD ตรวจ', 409);
+  if ((await flowOf(job.category_id)) !== 'pd_qc') {
+    throw new AppError('หมวดนี้ PD ตัดสินผลเอง ไม่ต้องส่ง QC — ใช้ปุ่มผ่าน/ไม่ผ่าน', 409);
+  }
 
   const evaluated = evaluateStage(await stageCheckpoints(job.model_id, job.category_id, 'pd'), req.body?.results, { required: true });
 
@@ -341,50 +370,65 @@ router.post('/:id/accept', requireQC, wrap(async (req, res) => {
 // QC ยืนยันผล — body: { result: 'pass'|'fail', note?, results: [...] }
 //   pass: ต้องกรอกครบทุกจุดของขั้น QC และห้ามมี NG · fail: ต้องมีเหตุผล ผลตรวจกรอกเท่าที่ตรวจได้ (ว่างได้)
 // ⚠️ คนกดยืนยันต้องเป็น QC คนที่รับงานไว้ — กันอีกคนมาปิดงานที่คนอื่นกำลังตรวจอยู่
-router.post('/:id/decide', requireQC, wrap(async (req, res) => {
+// ตัดสินผล — body: { result: 'pass'|'fail', note?, results: [...] }
+//   flow pd_qc / qc: QC ที่รับงานไว้ ตอน qc_checking · flow pd: PD ตอน pd_checking
+//   pass: ต้องกรอกครบทุกจุดของขั้นนั้นและห้ามมี NG · fail: ต้องมีเหตุผล ผลตรวจกรอกเท่าที่ตรวจได้ (ว่างได้)
+// ⚠️ ขั้น QC: คนกดยืนยันต้องเป็น QC คนที่รับงานไว้ — กันอีกคนมาปิดงานที่คนอื่นกำลังตรวจอยู่
+router.post('/:id/decide', wrap(async (req, res) => {
   if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
   const result = req.body?.result;
   if (result !== 'pass' && result !== 'fail') throw new AppError('result ต้องเป็น pass หรือ fail', 400);
   const note = textOrNull(req.body?.note);
-  if (result === 'fail' && !note) throw new AppError('ไม่ผ่าน ต้องระบุเหตุผลให้ PD', 400);
+  if (result === 'fail' && !note) throw new AppError('ไม่ผ่าน ต้องระบุเหตุผล', 400);
 
   const job = await loadJob(req.params.id);
-  if (job.status !== 'qc_checking') throw new AppError('งานนี้ยังไม่ได้อยู่ขั้น QC ตรวจ (ต้องกดรับงานก่อน)', 409);
-  const [[accept]] = await query(
-    "SELECT user_id, user_name FROM check_job_events WHERE job_id = ? AND action = 'qc_accept' ORDER BY id DESC LIMIT 1",
-    [job.id]
-  );
-  if (accept && Number(accept.user_id) !== Number(req.user.id)) {
-    throw new AppError(`งานนี้ ${accept.user_name} รับไว้ — ให้คนที่รับงานเป็นคนยืนยันผล`, 409);
+  const flow = await flowOf(job.category_id);
+  const stage = flow === 'pd' ? 'pd' : 'qc';
+  const role = stage === 'pd' ? 'PD' : 'QC';
+  const fromStatus = stage === 'pd' ? 'pd_checking' : 'qc_checking';
+  if (!req.user.roles.includes(role)) throw new AppError(`บัญชีนี้ไม่มีสิทธิ์ (ต้องเป็น ${role})`, 403);
+  if (job.status !== fromStatus) {
+    throw new AppError(stage === 'qc' ? 'งานนี้ยังไม่ได้อยู่ขั้น QC ตรวจ (ต้องกดรับงานก่อน)' : 'งานนี้ไม่ได้อยู่ขั้น PD ตรวจ', 409);
+  }
+  if (stage === 'qc') {
+    const [[accept]] = await query(
+      "SELECT user_id, user_name FROM check_job_events WHERE job_id = ? AND action = 'qc_accept' ORDER BY id DESC LIMIT 1",
+      [job.id]
+    );
+    if (accept && Number(accept.user_id) !== Number(req.user.id)) {
+      throw new AppError(`งานนี้ ${accept.user_name} รับไว้ — ให้คนที่รับงานเป็นคนยืนยันผล`, 409);
+    }
   }
 
   const submitted = Array.isArray(req.body?.results) ? req.body.results : [];
   const evaluated = submitted.length || result === 'pass'
-    ? evaluateStage(await stageCheckpoints(job.model_id, job.category_id, 'qc'), submitted, { required: result === 'pass' })
+    ? evaluateStage(await stageCheckpoints(job.model_id, job.category_id, stage), submitted, { required: result === 'pass' })
     : null;
   if (result === 'pass' && evaluated.overall === 'NG') {
-    throw new AppError('มีค่า NG อยู่ ยืนยันผ่านไม่ได้ — กดไม่ผ่านแล้วตีกลับ PD', 400);
+    throw new AppError('มีค่า NG อยู่ ยืนยันผ่านไม่ได้ — กดไม่ผ่าน', 400);
   }
 
+  // ไม่ผ่าน = รอบใหม่ · pd_qc กลับไป PD · pd / qc ตรวจซ้ำที่ขั้นเดิม
+  const failStatus = flow === 'qc' ? 'qc_checking' : 'pd_checking';
+  const action = `${stage}_${result === 'pass' ? 'pass' : 'reject'}`;
   const saved = await withTransaction(async (conn) => {
     if (result === 'pass') {
-      await transition(conn, job.id, 'qc_checking', "status = 'passed', result = 'pass', closed_at = NOW()");
+      await transition(conn, job.id, fromStatus, "status = 'passed', result = 'pass', closed_at = NOW()");
     } else {
-      // ตีกลับ = รอบใหม่ของ PD · event ของการตีกลับยังเป็นของรอบเดิม (round_no ก่อนบวก)
-      await transition(conn, job.id, 'qc_checking', "status = 'pd_checking', result = 'fail', round_no = round_no + 1");
+      // event ของการตีกลับยังเป็นของรอบเดิม (round_no ก่อนบวก)
+      await transition(conn, job.id, fromStatus, `status = '${failStatus}', result = 'fail', round_no = round_no + 1`);
     }
     const ins = evaluated && evaluated.linesByCheckpoint.length
-      ? await insertStageInspection(conn, job, req.user, 'qc', evaluated, note)
+      ? await insertStageInspection(conn, job, req.user, stage, evaluated, note)
       : null;
-    await addEvent(conn, job, job.round_no, result === 'pass' ? 'qc_pass' : 'qc_reject', req.user,
-      { note, inspectionId: ins?.inspectionId ?? null });
+    await addEvent(conn, job, job.round_no, action, req.user, { note, inspectionId: ins?.inspectionId ?? null });
     return ins;
   });
 
   const after = result === 'pass'
     ? { ...job, status: 'passed' }
-    : { ...job, status: 'pd_checking', round_no: job.round_no + 1 };
-  notify(req, after, result === 'pass' ? 'qc_pass' : 'qc_reject');
+    : { ...job, status: failStatus, round_no: job.round_no + 1 };
+  notify(req, after, action);
   if (saved) emitInspectionSaved(req, job, saved.inspectionId, evaluated.linesByCheckpoint, evaluated.overall);
   res.json({ success: true, status: after.status, round_no: after.round_no, inspection_id: saved?.inspectionId ?? null });
 }));

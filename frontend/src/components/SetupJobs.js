@@ -45,13 +45,21 @@ export const statusInfo = (job) => {
 };
 
 const ACTION_LABEL = {
-  open: 'PD เปิดงาน',
+  open: 'เปิดงาน',
   pd_submit: 'PD ส่งให้ QC',
   qc_accept: 'QC รับงาน',
   qc_pass: 'QC ยืนยัน ผ่าน',
-  qc_reject: 'QC ไม่ผ่าน — ตีกลับ PD',
+  qc_reject: 'QC ไม่ผ่าน',
+  pd_pass: 'PD ยืนยัน ผ่าน',
+  pd_reject: 'PD ไม่ผ่าน — ตรวจซ้ำ',
   cancel: 'ยกเลิกงาน',
 };
+
+// ใครตรวจของหมวด (check_categories.flow · ตั้งที่ Master › หมวดการตรวจ) — ตัวบังคับจริงอยู่ที่ routes/checkJobs.js
+//   pd_qc = PD ตรวจ → ส่ง QC ยืนยัน · pd = PD ตรวจแล้วตัดสินเอง · qc = QC เปิดงานแล้วตรวจเอง
+export const FLOW_LABEL = { pd_qc: 'PD ตรวจ → QC ยืนยัน', pd: 'PD ตรวจอย่างเดียว', qc: 'QC ตรวจอย่างเดียว' };
+const flowOfJob = (job) => job?.category_flow || 'pd_qc';
+const openerRole = (flow) => (flow === 'qc' ? 'QC' : 'PD');
 
 // "รอมา 12 นาที" — นับจากเหตุการณ์ล่าสุดของงาน
 const waitedText = (from, now) => {
@@ -254,7 +262,8 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
   const mineQc = lastAccept && Number(lastAccept.user_id) === Number(session?.user?.id);
   const open = ['pd_checking', 'waiting_qc', 'qc_checking'].includes(job.status);
 
-  const stage = job.status === 'pd_checking' && isPD ? 'pd'
+  const flow = flowOfJob(job);
+  const stage = job.status === 'pd_checking' && isPD && flow !== 'qc' ? 'pd'
     : job.status === 'qc_checking' && isQC && mineQc ? 'qc'
       : null;
   const stageCps = stage ? checkpoints[stage] : [];
@@ -279,6 +288,8 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
     }
   };
 
+  // ขั้นนี้ตัดสินผลเองไหม — ขั้น QC เสมอ · ขั้น PD เฉพาะหมวด flow pd (ไม่มี QC)
+  const decides = stage === 'qc' || (stage === 'pd' && flow === 'pd');
   const submitPd = () => run(() => apiCall(`/check-jobs/${job.id}/submit`, {
     method: 'POST', body: { results: buildResults(stageCps, values) },
   }), 'ส่งให้ QC แล้ว — งานเข้าคิว QC');
@@ -289,14 +300,16 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
     method: 'POST', body: { result: 'pass', results: buildResults(stageCps, values) },
   }), 'ยืนยันผ่านแล้ว — ปิดงาน');
 
+  // ไม่ผ่าน: flow pd_qc = ตีกลับ PD · pd / qc = ตรวจซ้ำรอบใหม่ที่ขั้นเดิม
+  const failLabel = flow === 'pd_qc' ? 'ไม่ผ่าน — ตีกลับ PD' : 'ไม่ผ่าน — ตรวจซ้ำ';
   const fail = () => showPrompt({
-    title: 'ไม่ผ่าน — ตีกลับ PD',
-    body: 'ระบุเหตุผล/จุดที่ต้องแก้ ให้ PD เห็น (ค่าที่กรอกไว้จะถูกบันทึกเป็นหลักฐานด้วย)',
+    title: failLabel,
+    body: 'ระบุเหตุผล/จุดที่ต้องแก้ (ค่าที่กรอกไว้จะถูกบันทึกเป็นหลักฐานด้วย)',
     inputLabel: 'เหตุผล',
-    confirmLabel: 'ตีกลับ PD',
+    confirmLabel: flow === 'pd_qc' ? 'ตีกลับ PD' : 'บันทึกไม่ผ่าน',
     onConfirm: (note) => run(() => apiCall(`/check-jobs/${job.id}/decide`, {
       method: 'POST', body: { result: 'fail', note, results: buildResults(stageCps, values) },
-    }), 'ตีกลับ PD แล้ว'),
+    }), flow === 'pd_qc' ? 'ตีกลับ PD แล้ว' : 'บันทึกไม่ผ่านแล้ว — เริ่มรอบใหม่'),
   });
 
   const cancel = () => showPrompt({
@@ -354,18 +367,18 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
                 กรอกครบแล้ว {doneCount}/{stageCps.length} จุด
               </span>
               {anyNg && <span className="verdict verdict--ng">มีค่า NG</span>}
-              {stage === 'qc' && anyNg && (
-                <span className="small" style={{ color: 'var(--red)' }}>ยืนยันผ่านไม่ได้ — ตีกลับ PD</span>
+              {decides && anyNg && (
+                <span className="small" style={{ color: 'var(--red)' }}>ยืนยันผ่านไม่ได้ — กดไม่ผ่าน</span>
               )}
               <span className="savebar__spacer" />
-              {stage === 'pd' && (
+              {!decides && (
                 <Button size="lg" disabled={busy || !allDone} onClick={submitPd}>
                   {busy && <Spinner size="sm" animation="border" className="me-1" />}ส่งให้ QC
                 </Button>
               )}
-              {stage === 'qc' && (
+              {decides && (
                 <>
-                  <Button size="lg" variant="outline-danger" disabled={busy} onClick={fail}>ไม่ผ่าน — ตีกลับ PD</Button>
+                  <Button size="lg" variant="outline-danger" disabled={busy} onClick={fail}>{failLabel}</Button>
                   <Button size="lg" variant="success" disabled={busy || !allDone || anyNg} onClick={pass}>
                     {busy && <Spinner size="sm" animation="border" className="me-1" />}ผ่าน
                   </Button>
@@ -401,7 +414,8 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
                 <tr key={e.id}>
                   <td className="text-nowrap">{fmtDateTime(e.at)}</td>
                   <td>{e.round_no}</td>
-                  <td style={e.action === 'qc_reject' ? { color: 'var(--red)' } : e.action === 'qc_pass' ? { color: 'var(--green)' } : undefined}>
+                  <td style={['qc_reject', 'pd_reject'].includes(e.action) ? { color: 'var(--red)' }
+                    : ['qc_pass', 'pd_pass'].includes(e.action) ? { color: 'var(--green)' } : undefined}>
                     {ACTION_LABEL[e.action] ?? e.action}
                   </td>
                   <td>{e.user_name}</td>
@@ -629,6 +643,7 @@ const SetupJobs = () => {
 
   const categories = useMemo(() => (lookups.categories ?? []).filter((c) => Number(c.has_workflow)), [lookups]);
   const categoryId = Number(catParam) || categories[0]?.id || null;
+  const currentFlow = categories.find((c) => Number(c.id) === Number(categoryId))?.flow || 'pd_qc';
 
   const loadCounts = useCallback(() => {
     apiCall('/check-jobs/counts').then(setCounts).catch(() => {});
@@ -640,16 +655,21 @@ const SetupJobs = () => {
     loadCounts();
     if (isQC && e.action === 'pd_submit') setToast({ id: e.id, text: `WOS ${e.moNo} ส่งมาให้ QC ตรวจ`, bg: 'primary' });
     else if (isPD && e.action === 'qc_reject') setToast({ id: e.id, text: `WOS ${e.moNo} QC ไม่ผ่าน — ตีกลับ PD`, bg: 'danger' });
+    else if (isQC && e.action === 'open' && e.status === 'qc_checking') setToast({ id: e.id, text: `WOS ${e.moNo} เปิดงานใหม่ (QC ตรวจ)`, bg: 'primary' });
     else if (isPD && e.action === 'qc_pass') setToast({ id: e.id, text: `WOS ${e.moNo} QC ยืนยันผ่าน`, bg: 'success' });
   }), [isPD, isQC, loadCounts]);
 
   // แท็บคิวตั้งต้นตาม role — QC เห็นงานที่รอรับก่อน · PD เห็นงานของตัวเอง/ที่ถูกตีกลับ
-  const tab = tabParam || (isQC ? 'waiting_qc' : 'pd_checking');
+  // flow qc ไม่มีขั้นรอรับ — งานเปิดแล้วอยู่ "QC กำลังตรวจ" ทันที · flow pd ไม่มี QC เลย
+  const tab = tabParam || (currentFlow === 'qc' ? 'qc_checking' : currentFlow === 'pd' ? 'pd_checking' : isQC ? 'waiting_qc' : 'pd_checking');
 
   return (
     <Container fluid className="page">
+      <div className="page-head">
+        <h1>งาน Set up / Last Piece</h1>
+        <span className="page-head__meta">{FLOW_LABEL[currentFlow]}</span>
+      </div>
       <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
-        <h1 className="fs-4 mb-0 me-2">งานตรวจส่งต่อ PD → QC</h1>
         {categories.map((c) => (
           <Button key={c.id} size="sm" variant={c.id === categoryId ? 'primary' : 'outline-primary'}
             onClick={() => { setCatParam(String(c.id)); setJobParam(''); }}>
@@ -665,7 +685,8 @@ const SetupJobs = () => {
           showAlert={showAlert} showPrompt={showPrompt} />
       ) : (
         <>
-          {isPD && (
+          {/* คนเปิดงานตามหมวด: flow qc = QC เปิดเอง · อื่น ๆ = PD */}
+          {hasRole(session, openerRole(currentFlow)) && (
             <OpenJob categoryId={categoryId} lookups={lookups} models={models}
               onOpened={(id) => setJobParam(String(id))} showAlert={showAlert} />
           )}

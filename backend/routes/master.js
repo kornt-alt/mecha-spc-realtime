@@ -6,7 +6,12 @@ const { query, execute, withTransaction } = require('../db/pool');
 const { fetchModelCheckpoints, fetchModelBaselines } = require('../db/queries');
 const { baselineOf } = require('../services/baseline');
 const { AppError, wrap } = require('../middleware/errorHandler');
-const { requireAdmin, requireLoginUnless } = require('../middleware/requireLogin');
+const { requireMenu } = require('../middleware/requireLogin');
+
+// generic CRUD เลือกเมนูตามตาราง — item/จุดตรวจ = master.items · ที่เหลือ = master.base
+// ⚠️ เพิ่มผู้ตรวจจากหน้าใบตรวจ (ปุ่ม "+ เพิ่มผู้ตรวจใหม่") ใช้สิทธิ์ของเมนูใบตรวจ (inspect) ไม่ใช่ Master
+const MENU_OF_TABLE = { models: 'master.items', checkpoints: 'master.items' };
+const menuOfTable = (req) => MENU_OF_TABLE[req.body?.table ?? req.query?.table] ?? 'master.base';
 
 const router = express.Router();
 
@@ -71,7 +76,7 @@ router.get('/lookups', wrap(async (req, res) => {
     query(`SELECT id, emp_code, name, division_id, is_active FROM inspectors${flag} ORDER BY name`),
     query(`SELECT id, name, min_cp, min_cpk, min_cp_ctf, min_cpk_ctf, ocs_rule_set, is_active FROM customers${flag} ORDER BY name`),
     // หมวดการตรวจ (id 1 = ตรวจตามรอบ) — ตัวกรอง ?category= ของ Dashboard/SC/รายงาน และหน้า Set up ใช้
-    query(`SELECT id, code, name, has_workflow, sort_order, is_active FROM check_categories${flag} ORDER BY sort_order, id`),
+    query(`SELECT id, code, name, description, has_workflow, flow, sort_order, is_active FROM check_categories${flag} ORDER BY sort_order, id`),
   ]);
 
   res.json({ divisions, machines, inspectors, customers, categories });
@@ -148,7 +153,7 @@ router.get('/models/:id', wrap(async (req, res) => {
 
 // ── เขียน (generic CRUD) ──────────────────────────────────────────────────
 
-router.post('/add', requireLoginUnless(isAddInspector, requireAdmin), wrap(async (req, res) => {
+router.post('/add', requireMenu((req) => (isAddInspector(req) ? 'inspect' : menuOfTable(req))), wrap(async (req, res) => {
   const { table, data } = req.body;
   if (!allowedTables.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
 
@@ -164,7 +169,7 @@ router.post('/add', requireLoginUnless(isAddInspector, requireAdmin), wrap(async
   res.json({ success: true, id: result.insertId });
 }));
 
-router.put('/update', requireAdmin, wrap(async (req, res) => {
+router.put('/update', requireMenu(menuOfTable), wrap(async (req, res) => {
   const { table, id, data } = req.body;
   if (!allowedTables.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
   if (!isIntLike(id)) throw new AppError('id ไม่ถูกต้อง', 400);
@@ -185,7 +190,7 @@ router.put('/update', requireAdmin, wrap(async (req, res) => {
   res.json({ success: true, baselineMayBeStale: affectsBaseline });
 }));
 
-router.delete('/delete', requireAdmin, wrap(async (req, res) => {
+router.delete('/delete', requireMenu(menuOfTable), wrap(async (req, res) => {
   const { table, id } = req.body;
   if (!allowedTables.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
   if (!isIntLike(id)) throw new AppError('id ไม่ถูกต้อง', 400);
@@ -265,7 +270,7 @@ const settingRows = (checkpointId, list, catById, label = '') => {
 };
 
 // ตั้งหมวดของจุดเดียว (แทนทั้งชุดของจุดนี้) — body: { settings: [...] } · array ว่าง = ไม่ตรวจในหมวดไหนเลย
-router.put('/checkpoints/:id/categories', requireAdmin, wrap(async (req, res) => {
+router.put('/checkpoints/:id/categories', requireMenu('master.items'), wrap(async (req, res) => {
   if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
   const id = Number(req.params.id);
   const [[cp]] = await query('SELECT id FROM checkpoints WHERE id = ?', [id]);
@@ -288,7 +293,7 @@ router.put('/checkpoints/:id/categories', requireAdmin, wrap(async (req, res) =>
 //   in_routine/sample_size/frequency = คอลัมน์ "Inspection Record" (ตรวจตามรอบ) · settings = หมวดอื่น (แทนทั้งชุดของจุดนั้น)
 // ⚠️ ทุก id ต้องเป็นจุดของ item นี้ · ทั้งหมดใน transaction เดียว
 // ⚠️ เปลี่ยน sample_size ของจุดที่มีผลตรวจแล้ว = n ของกราฟเปลี่ยน (buildSubgroups ปฏิเสธการผสม n) → คืนรายชื่อให้เตือน re-baseline
-router.put('/models/:id/category-matrix', requireAdmin, wrap(async (req, res) => {
+router.put('/models/:id/category-matrix', requireMenu('master.items'), wrap(async (req, res) => {
   if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
   const modelId = Number(req.params.id);
   const points = Array.isArray(req.body?.points) ? req.body.points : null;
@@ -349,7 +354,7 @@ router.put('/models/:id/category-matrix', requireAdmin, wrap(async (req, res) =>
 //
 // ⚠️ ต้องทำใน transaction และพักค่าไว้ที่เลขชั่วคราวก่อน เพราะมี UNIQUE(model_id, seq_no)
 //    ถ้า UPDATE ตรง ๆ ทีละแถวจะชนกันเองกลางคัน
-router.put('/checkpoints/:id/move', requireAdmin, wrap(async (req, res) => {
+router.put('/checkpoints/:id/move', requireMenu('master.items'), wrap(async (req, res) => {
   const { id } = req.params;
   const { direction } = req.body;
   if (!isIntLike(id)) throw new AppError('id ไม่ถูกต้อง', 400);
@@ -373,6 +378,126 @@ router.put('/checkpoints/:id/move', requireAdmin, wrap(async (req, res) => {
     await conn.execute('UPDATE checkpoints SET seq_no = ? WHERE id = ?', [neighbour.seq_no, current.id]);
   });
 
+  notifyMasterChanged(req);
+  res.json({ success: true });
+}));
+
+// ── สิทธิ์เข้าเมนู (แท็บ "ผู้ใช้ & สิทธิ์") ───────────────────────────────────────
+// matrix = { <menu_key>: { GUEST|ADMIN|PD|QC: true|false } } · ช่องที่ล็อก (LOCKED) ส่งมาก็ไม่เปลี่ยน
+const menuAccess = require('../services/menuAccess');
+
+router.get('/permissions', requireMenu('master.users'), wrap(async (req, res) => {
+  const perms = await menuAccess.loadPermissions();
+  const matrix = Object.fromEntries(menuAccess.MENU_KEYS.map((k) => [
+    k, Object.fromEntries(menuAccess.ROLES.map((r) => [r, menuAccess.isAllowed(perms, k, r)])),
+  ]));
+  res.json({
+    menus: menuAccess.MENUS.map(({ key, label }) => ({ key, label })),
+    roles: menuAccess.ROLES,
+    matrix,
+    locked: menuAccess.LOCKED,
+  });
+}));
+
+router.put('/permissions', requireMenu('master.users'), wrap(async (req, res) => {
+  const matrix = req.body?.matrix;
+  if (!matrix || typeof matrix !== 'object') throw new AppError('matrix ไม่ถูกต้อง', 400);
+  const rows = [];
+  for (const [key, byRole] of Object.entries(matrix)) {
+    if (!menuAccess.MENU_KEYS.includes(key)) throw new AppError(`ไม่รู้จักเมนู "${key}"`, 400);
+    for (const [role, v] of Object.entries(byRole ?? {})) {
+      if (!menuAccess.ROLES.includes(role)) throw new AppError(`ไม่รู้จัก role "${role}"`, 400);
+      if (menuAccess.LOCKED[`${key}:${role}`] !== undefined) continue; // ล็อกไว้ — ข้ามเงียบ ๆ
+      rows.push([key, role, v ? 1 : 0]);
+    }
+  }
+  if (rows.length) {
+    await query(
+      'INSERT INTO menu_permissions (menu_key, role, allowed) VALUES ? ON DUPLICATE KEY UPDATE allowed = VALUES(allowed)',
+      [rows]
+    );
+  }
+  menuAccess.clearPermissionCache();
+  logWrite(req, 'ตั้งสิทธิ์เมนู', 'menu_permissions', rows.length);
+  notifyMasterChanged(req);
+  res.json({ success: true, count: rows.length });
+}));
+
+// ── หมวดการตรวจ (แท็บ "หมวดการตรวจ") ──────────────────────────────────────────
+// ⚠️ ไม่มีลบ — check_jobs / inspections อ้าง id อยู่ ใช้ is_active = 0 แทน
+// ⚠️ id 1 (ตรวจตามรอบ) ปิดไม่ได้ และไม่มี flow (ไม่ใช่งานส่งต่อ) · has_workflow ไม่ให้แก้ทุกหมวด
+//    (routine = 0 ตายตัว · หมวดที่เพิ่มใหม่ = 1 เสมอ — หมวดตามรอบมีได้หมวดเดียว)
+// flow: pd_qc = PD ตรวจ → QC ยืนยัน · pd = PD ตรวจแล้วจบ · qc = QC ตรวจเองตั้งแต่เปิดงาน
+const FLOWS = ['pd_qc', 'pd', 'qc'];
+const CATEGORY_CODE = /^[a-z][a-z0-9_]{1,29}$/;
+const ROUTINE_CATEGORY_ID = 1;
+
+const categoryFields = (b, { isNew }) => {
+  const out = {};
+  if (isNew || b.name !== undefined) {
+    const name = String(b.name ?? '').trim();
+    if (!name || name.length > 50) throw new AppError('ชื่อหมวดต้องมี 1-50 ตัวอักษร', 400);
+    out.name = name;
+  }
+  if (b.description !== undefined) {
+    const d = String(b.description ?? '').trim();
+    if (d.length > 200) throw new AppError('คำอธิบายยาวเกิน 200 ตัวอักษร', 400);
+    out.description = d || null;
+  }
+  if (b.flow !== undefined) {
+    if (!FLOWS.includes(b.flow)) throw new AppError('ผู้ตรวจของหมวดต้องเป็น pd_qc / pd / qc', 400);
+    out.flow = b.flow;
+  }
+  if (b.sort_order !== undefined) {
+    const n = Number(b.sort_order);
+    if (!Number.isInteger(n) || n < 0 || n > 999) throw new AppError('ลำดับต้องเป็น 0-999', 400);
+    out.sort_order = n;
+  }
+  if (b.is_active !== undefined) out.is_active = b.is_active ? 1 : 0;
+  return out;
+};
+
+router.get('/categories', requireMenu('master.categories'), wrap(async (req, res) => {
+  const [rows] = await query(
+    `SELECT c.id, c.code, c.name, c.description, c.has_workflow, c.flow, c.sort_order, c.is_active,
+            (SELECT COUNT(*) FROM check_jobs j WHERE j.category_id = c.id) AS job_count
+       FROM check_categories c ORDER BY c.sort_order, c.id`
+  );
+  res.json(rows);
+}));
+
+router.post('/categories', requireMenu('master.categories'), wrap(async (req, res) => {
+  const b = req.body ?? {};
+  const code = String(b.code ?? '').trim();
+  if (!CATEGORY_CODE.test(code)) throw new AppError('รหัสหมวดต้องเป็นภาษาอังกฤษตัวเล็ก/ตัวเลข/_ 2-30 ตัว ขึ้นต้นด้วยตัวอักษร', 400);
+  const f = categoryFields(b, { isNew: true });
+  const [r] = await execute(
+    `INSERT INTO check_categories (code, name, description, has_workflow, flow, sort_order, is_active)
+     VALUES (?, ?, ?, 1, ?, ?, ?)`,
+    [code, f.name, f.description ?? null, f.flow ?? 'pd_qc', f.sort_order ?? 99, f.is_active ?? 1]
+  );
+  logWrite(req, 'เพิ่มหมวดการตรวจ', 'check_categories', r.insertId);
+  notifyMasterChanged(req);
+  res.json({ success: true, id: r.insertId });
+}));
+
+router.put('/categories/:id', requireMenu('master.categories'), wrap(async (req, res) => {
+  if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const id = Number(req.params.id);
+  const [[cat]] = await query('SELECT id FROM check_categories WHERE id = ?', [id]);
+  if (!cat) throw new AppError('ไม่พบหมวดนี้', 404);
+  const f = categoryFields(req.body ?? {}, { isNew: false });
+  if (id === ROUTINE_CATEGORY_ID) {
+    if (f.is_active === 0) throw new AppError('หมวดตรวจตามรอบปิดไม่ได้ (ใบตรวจ/กราฟ SPC ทั้งระบบใช้หมวดนี้)', 400);
+    delete f.flow; // ตรวจตามรอบไม่ใช่งานส่งต่อ PD → QC
+  }
+  const cols = Object.keys(f);
+  if (cols.length === 0) throw new AppError('ไม่มีอะไรให้แก้', 400);
+  await execute(
+    `UPDATE check_categories SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
+    [...cols.map((c) => f[c]), id]
+  );
+  logWrite(req, 'แก้หมวดการตรวจ', 'check_categories', id);
   notifyMasterChanged(req);
   res.json({ success: true });
 }));

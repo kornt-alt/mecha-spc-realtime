@@ -46,7 +46,8 @@ const REQUIRED = {
     'id', 'checkpoint_id', 'inspection_id', 'chart', 'rules', 'man_pd', 'man_qc',
     'machine_note', 'method', 'material', 'measurement', 'corrective_action', 'recorded_by',
   ],
-  check_categories: ['id', 'code', 'name', 'has_workflow', 'sort_order', 'is_active'],
+  check_categories: ['id', 'code', 'name', 'has_workflow', 'sort_order', 'is_active', 'description', 'flow'],
+  menu_permissions: ['menu_key', 'role', 'allowed'],
   checkpoint_category_settings: ['id', 'checkpoint_id', 'category_id', 'stage', 'sample_qty'],
   check_jobs: [
     'id', 'category_id', 'model_id', 'machine_id', 'mo_no', 'lot_no', 'shift',

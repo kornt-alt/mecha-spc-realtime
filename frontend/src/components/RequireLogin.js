@@ -6,11 +6,12 @@
 //    ?item_no=…&division_id=… มาให้ (masterHref) login เสร็จแล้ว MasterSetup ต้องได้ prefill ครบ
 // ⚠️ session หมดกลางคัน (บันทึกแล้วได้ 401) → **ห้าม unmount หน้า** เปิดกล่อง login ทับแทน
 //    ไม่งั้นฟอร์มจุดตรวจที่กรอกค้างไว้หายหมด · login เสร็จกดบันทึกซ้ำได้เลย
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button, Card, Container, Form, Modal, Spinner } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
 import { clearSession, getSession, hasRole, LOGOUT_EVENT, onSessionChange, setSession } from '../utils/auth';
 import BrandLogo from './layout/BrandLogo';
+import useMenuAccess from '../utils/useMenuAccess';
 
 // เข้าได้ 2 ทาง: passkey ช่องเดียว หรือ ชื่อผู้ใช้ + รหัสผ่าน — แยกเป็นสองฟอร์มคนละปุ่ม
 // ไม่รวมเป็นฟอร์มเดียวที่ "เดาเอา" ว่าคนตั้งใจใช้ทางไหนจากช่องที่กรอก
@@ -72,9 +73,14 @@ export const LoginForm = ({ onDone, idPrefix = 'login' }) => {
   );
 };
 
+// menu = key เมนู (หรือ array = มีตัวใดตัวหนึ่งพอ) ตามสิทธิ์ที่ ADMIN ตั้ง (utils/useMenuAccess)
+//   เมนูที่เปิดให้คนไม่ login (GUEST) = ผ่านเลย ไม่มีกล่อง login · ไม่ส่ง menu = ใช้ roles แบบเดิม
 // roles = role ที่เข้าหน้านี้ได้ (มีตัวใดตัวหนึ่งพอ) · title = หัวการ์ด login
 // ⚠️ ไม่มีสิทธิ์ ≠ ยังไม่ login — ไม่ล้าง session (QC ที่หลงเข้าหน้า Master ต้องยังอยู่ในระบบหน้า Set up)
-const RequireLogin = ({ children, roles = ['ADMIN'], title = 'เข้าสู่ระบบเพื่อแก้ไขข้อมูล Master' }) => {
+const RequireLogin = ({ children, menu, roles = ['ADMIN'], title = 'เข้าสู่ระบบเพื่อแก้ไขข้อมูล Master' }) => {
+  const access = useMenuAccess();
+  // เคยแสดงหน้าไปแล้ว — ระหว่างโหลดสิทธิ์ใหม่ (session เปลี่ยน) ห้าม unmount หน้า ฟอร์มที่กรอกค้างจะหาย
+  const shownRef = useRef(false);
   const [session, setSessionState] = useState(getSession);
   // เคยเข้าหน้าได้แล้วในรอบนี้ไหม — ตัดสินว่า session หายแล้วจะโชว์ฟอร์มเต็มหน้าหรือกล่องทับ
   const [entered, setEntered] = useState(() => Boolean(getSession()));
@@ -107,6 +113,15 @@ const RequireLogin = ({ children, roles = ['ADMIN'], title = 'เข้าสู
     clearSession();
   };
 
+  if (menu && !access.loaded && !shownRef.current) {
+    return <div className="page text-muted"><Spinner size="sm" animation="border" className="me-2" />กำลังตรวจสิทธิ์…</div>;
+  }
+  // หน้าที่เปิดให้คนไม่ login — ไม่มีกล่อง login ไม่มีอะไรกั้น (ใบตรวจ / Dashboard / SC / รายงาน ค่าเริ่มต้น)
+  if (menu && access.loaded && access.canGuest(menu)) {
+    shownRef.current = true;
+    return children;
+  }
+
   if (!entered) {
     return (
       <Container className="mc-auth">
@@ -118,7 +133,7 @@ const RequireLogin = ({ children, roles = ['ADMIN'], title = 'เข้าสู
             </div>
             <LoginForm idPrefix="login-page" />
             <div className="small text-muted mt-3">
-              หน้าใบตรวจ Dashboard และรายงานใช้งานได้โดยไม่ต้องเข้าสู่ระบบ
+              หน้านี้ต้องเข้าสู่ระบบ · หน้าที่ ADMIN เปิดให้ทุกคนใช้งานได้โดยไม่ต้องเข้าสู่ระบบ
             </div>
           </Card.Body>
         </Card>
@@ -126,7 +141,8 @@ const RequireLogin = ({ children, roles = ['ADMIN'], title = 'เข้าสู
     );
   }
 
-  if (session && !hasRole(session, ...roles)) {
+  const allowed = menu ? (access.loaded ? access.can(menu) : shownRef.current) : hasRole(session, ...roles);
+  if (session && !allowed) {
     return (
       <Container className="page" style={{ maxWidth: 420 }}>
         <Card className="mt-4">
@@ -134,7 +150,9 @@ const RequireLogin = ({ children, roles = ['ADMIN'], title = 'เข้าสู
           <Card.Body className="small">
             <div>เข้าสู่ระบบเป็น <b>{session.user?.display_name || session.user?.username}</b>
               {' '}(สิทธิ์: {(session.user?.roles ?? []).join(', ') || 'ไม่มี'})</div>
-            <div className="text-muted mt-1">หน้านี้ต้องเป็น {roles.join(' หรือ ')} — ให้ ADMIN ตั้งที่ Master › ผู้ใช้</div>
+            <div className="text-muted mt-1">
+              {menu ? 'ให้ ADMIN เปิดสิทธิ์เมนูนี้ที่ Master › ผู้ใช้ & สิทธิ์' : `หน้านี้ต้องเป็น ${roles.join(' หรือ ')} — ให้ ADMIN ตั้งที่ Master › ผู้ใช้`}
+            </div>
             <Button size="sm" variant="outline-secondary" className="mt-3" onClick={logout}>เปลี่ยนบัญชี</Button>
           </Card.Body>
         </Card>
@@ -142,6 +160,7 @@ const RequireLogin = ({ children, roles = ['ADMIN'], title = 'เข้าสู
     );
   }
 
+  if (session) shownRef.current = true;
   return (
     <>
       {/* ชื่อผู้ใช้ + ออกจากระบบ อยู่ที่แถบบนของ header (SiteHeader) แล้ว */}

@@ -17,6 +17,7 @@ import PageTransition from './components/layout/PageTransition';
 import { getSession, setSession } from './utils/auth';
 import { APP_BASE } from './utils/config';
 import { useFollowSystemTheme } from './utils/theme';
+import { MENU, MASTER_KEYS } from './utils/useMenuAccess';
 
 // ⚠️ ไม่ import CSS ที่นี่ — ทั้งแอป import ที่ src/index.js ที่เดียวเพื่อคุมลำดับ
 //    (ของเดิม import ซ้ำที่นี่ด้วย ทำให้ลำดับที่ webpack ปล่อยออกมาเดาไม่ได้)
@@ -54,15 +55,15 @@ const App = () => (
         <Routes>
           {/* หน้าแรก = เลือกหมวดที่จะตรวจ · ใบตรวจตามรอบย้ายไป /inspect (บุ๊กมาร์กเก่า /?model= ถูกพาไปเอง) */}
           <Route path="/" element={<CategoryHome />} />
-          <Route path="/inspect" element={<InspectionSheet />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/sc" element={<ScSheet />} />
-          <Route path="/report" element={<ReportPage />} />
-          {/* หน้าเดียวที่ต้อง login — กั้นที่ route ไม่ใช่ใน MasterSetup (ดู RequireLogin.js) */}
-          <Route path="/master" element={<RequireLogin roles={['ADMIN']}><MasterSetup /></RequireLogin>} />
-          {/* งานส่งต่อ PD → QC — ต้อง login เป็น PD หรือ QC (ADMIN เข้าดูได้) */}
+          {/* ทุกหน้ากั้นตามสิทธิ์เมนูที่ ADMIN ตั้ง (Master › ผู้ใช้ & สิทธิ์) — เมนูที่เปิดให้คนไม่ login ผ่านเลย
+              ค่าเริ่มต้น: ใบตรวจ/Dashboard/SC/รายงาน ไม่ต้อง login · Set up = PD/QC/ADMIN · Master = ADMIN */}
+          <Route path="/inspect" element={<RequireLogin menu={MENU.inspect} title="เข้าสู่ระบบ — ใบตรวจตามรอบ"><InspectionSheet /></RequireLogin>} />
+          <Route path="/dashboard" element={<RequireLogin menu={MENU.dashboard} title="เข้าสู่ระบบ — Dashboard"><Dashboard /></RequireLogin>} />
+          <Route path="/sc" element={<RequireLogin menu={MENU.sc} title="เข้าสู่ระบบ — SC Chart"><ScSheet /></RequireLogin>} />
+          <Route path="/report" element={<RequireLogin menu={MENU.report} title="เข้าสู่ระบบ — รายงาน"><ReportPage /></RequireLogin>} />
+          <Route path="/master" element={<RequireLogin menu={MASTER_KEYS}><MasterSetup /></RequireLogin>} />
           <Route path="/setup" element={(
-            <RequireLogin roles={['PD', 'QC', 'ADMIN']} title="เข้าสู่ระบบ — งาน Set up / Last Piece">
+            <RequireLogin menu={MENU.setup} title="เข้าสู่ระบบ — งาน Set up / Last Piece">
               <SetupJobs />
             </RequireLogin>
           )} />
