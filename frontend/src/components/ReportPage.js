@@ -10,6 +10,7 @@ import { SHIFTS } from '../utils/config';
 import SearchSelect from './SearchSelect';
 import { Link } from 'react-router-dom';
 import { useModelParam, useUrlParam, scHref } from '../utils/useModelParam';
+import { useDataTable, FilterBar } from './table/useDataTable';
 import ControlChart from './ControlChart';
 import InputGrid from './InputGrid';
 import InspectionList from './InspectionList';
@@ -56,6 +57,25 @@ const toQuery = (f) => {
 
 const pct = (v) => (typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '—');
 
+// ตารางสรุปรายจุด: เรียง/กรองหัวคอลัมน์ (ไม่แบ่งหน้า — จุดตรวจต่อ item ไม่กี่สิบแถว)
+// ค่าเริ่ม = ลำดับ seq_no ตามที่ server ส่งมา · ตัวเลขว่าง (attribute) เรียงท้ายเสมอ
+const capOf = (c, k) => (typeof c.capability?.[k] === 'number' ? c.capability[k] : null);
+const SUMMARY_COLS = {
+  seq: { get: (c) => Number(c.checkpoint.seq_no) },
+  name: { get: (c) => c.checkpoint.name ?? '' },
+  n: { get: (c) => (c.checkpoint.char_type === 'attribute' ? null : Number(c.checkpoint.sample_size)) },
+  cp: { get: (c) => capOf(c, 'cp') },
+  cpk: { get: (c) => capOf(c, 'cpk') },
+  pp: { get: (c) => capOf(c, 'pp') },
+  ppk: { get: (c) => capOf(c, 'ppk') },
+  ng: { get: (c) => Number(c.ngCount ?? 0) },
+  status: {
+    get: (c) => (c.checkpoint.char_type === 'attribute' ? '—'
+      : (c.violations?.length ?? 0) > 0 ? 'out of control' : 'in control'),
+  },
+};
+const NO_CHARTS = [];
+
 const ReportPage = () => {
   const [models, setModels] = useState([]);
   const [lookups, setLookups] = useState({ machines: [], inspectors: [] });
@@ -75,6 +95,7 @@ const ReportPage = () => {
   // ปุ่มแก้ค่าในใบเดิม = เฉพาะ ADMIN (PUT /inspections/:id/results เป็น requireAdmin) — บัญชี PD/QC ไม่เห็นปุ่ม
   const session = hasRole(useSession(), 'ADMIN');
   const [editMsg, setEditMsg] = useState(null);
+  const summary = useDataTable(report?.charts ?? NO_CHARTS, SUMMARY_COLS);
 
   useEffect(() => {
     Promise.all([apiCall('/master/models?all=1'), apiCall('/master/lookups?all=1')])
@@ -306,7 +327,7 @@ const ReportPage = () => {
                   className="text-center"
                   style={c.tone ? {
                     borderLeft: `3px solid ${c.tone === 'spec' ? 'var(--red)' : 'var(--amber-line)'}`,
-                    background: c.tone === 'spec' ? '#FCECEE' : 'var(--amber-tint)',
+                    background: c.tone === 'spec' ? 'var(--red-tint)' : 'var(--amber-tint)',
                   } : undefined}
                 >
                   <Card.Body className="py-2">
@@ -326,24 +347,25 @@ const ReportPage = () => {
           {/* สรุปรายจุด — ตัวเลขชุดเดียวกับที่กราฟข้างล่างใช้ (มาจาก analyze() ตัวเดียวกัน) */}
           <Card className="mb-3">
             <Card.Header className="py-2">สรุปรายจุดตรวจ</Card.Header>
-            <div className="sheet-wrap" style={{ maxHeight: 'none', border: 0, borderRadius: 0 }}>
+            <FilterBar dt={summary} className="m-2 mb-0" />
+            <div className="mc-freeze sheet-wrap" style={{ border: 0, borderRadius: 0 }}>
               <table className="sheet">
                 <thead>
                   <tr>
-                    <th scope="col" className="sheet__seq">#</th>
-                    <th scope="col" className="sheet__name">จุดตรวจ</th>
+                    {summary.th('seq', '#', { className: 'sheet__seq' })}
+                    {summary.th('name', 'จุดตรวจ', { className: 'sheet__name mc-sticky-start' })}
                     <th scope="col" className="sheet__spec">Spec</th>
-                    <th scope="col" className="text-end">n</th>
-                    <th scope="col" className="text-end">Cp</th>
-                    <th scope="col" className="text-end">Cpk</th>
-                    <th scope="col" className="text-end">Pp</th>
-                    <th scope="col" className="text-end">Ppk</th>
-                    <th scope="col" className="text-end">NG</th>
-                    <th scope="col">สถานะ</th>
+                    {summary.th('n', 'n', { className: 'text-end' })}
+                    {summary.th('cp', 'Cp', { className: 'text-end' })}
+                    {summary.th('cpk', 'Cpk', { className: 'text-end' })}
+                    {summary.th('pp', 'Pp', { className: 'text-end' })}
+                    {summary.th('ppk', 'Ppk', { className: 'text-end' })}
+                    {summary.th('ng', 'NG', { className: 'text-end' })}
+                    {summary.th('status', 'สถานะ')}
                   </tr>
                 </thead>
                 <tbody>
-                  {report.charts.map((c) => {
+                  {summary.rows.map((c) => {
                     const cp = c.checkpoint;
                     const cap = c.capability ?? {};
                     const f = (v) => (typeof v === 'number' ? v.toFixed(2) : '—');
@@ -354,7 +376,7 @@ const ReportPage = () => {
                     return (
                       <tr key={cp.id}>
                         <td className="sheet__seq">{cp.seq_no}</td>
-                        <th scope="row" className="sheet__name fw-normal">
+                        <th scope="row" className="sheet__name fw-normal mc-sticky-start">
                           <b>{cp.name}</b>
                           {cp.is_critical && (
                             <span className="badge bg-light text-dark ms-1" title="จุดวิกฤต — SC point">SC point</span>

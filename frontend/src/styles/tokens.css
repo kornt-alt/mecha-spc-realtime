@@ -12,17 +12,22 @@
 
 :root {
   /* ── สีหลัก ─────────────────────────────────────────────────────────── */
-  --ink: #0B1F3A;
+  /* ⚠️ สีที่ซ้ำกับธีมมาตรฐาน (styles/theme.css --mc-*) อ้างถึง --mc-* ตรง ๆ — ค่าจริง (ทั้งสว่างและมืด)
+   *    อยู่ที่ theme.css ที่เดียว · ตัวที่เป็นของแอปนี้เอง (เหลือง/tint/-rgb) มีค่ามืดที่บล็อกท้ายส่วนนี้ */
+  --ink: var(--mc-ink);
   --ink-rgb: 11, 31, 58;
-  --blue: #1B4FA0;
+  --blue: var(--mc-blue);          /* พื้น/เส้น/จุด — ตัวหนังสือสีน้ำเงินใช้ --blue-text */
+  --blue-text: var(--mc-link);     /* โหมดมืด --blue บนพื้นเข้มอ่านไม่ออก */
   --blue-rgb: 27, 79, 160;
   --blue-tint: #EAF0F9;
 
-  --red: #C42032;
+  --red: var(--mc-red);
   --red-rgb: 196, 32, 50;
+  --red-tint: #FCECEE;             /* พื้นของแถว/ป้ายที่หลุดสเปก */
 
   /* ⚠️ เหลืองมี 3 ค่าโดยตั้งใจ — เหลืองสว่างบนพื้นขาวได้ contrast แค่ ~2:1 ไม่มีทางผ่านเกณฑ์
-   *    (#ffc107 ของ bootstrap ที่ใช้อยู่เดิมได้ 1.6:1) จึงแยกค่าตามพื้นที่วางบน */
+   *    (#ffc107 ของ bootstrap ที่ใช้อยู่เดิมได้ 1.6:1) จึงแยกค่าตามพื้นที่วางบน
+   *    ⚠️ ธีมมาตรฐานของ Korn ไม่ใช้เหลือง แต่แอปนี้ใช้ — เหลือง = แกน "คอนโทรล" (ดูหัวไฟล์) ใช้เฉพาะความหมายนั้น */
   --amber: #F5B324;        /* 8.9:1 บน --ink — ใช้บนพื้นเข้มเท่านั้น */
   --amber-rgb: 245, 179, 36;
   --amber-line: #C87F00;   /* 3.2:1 บนขาว — เส้น/ขอบ/จุด ผ่านเกณฑ์ non-text 3:1 */
@@ -30,15 +35,18 @@
   --amber-tint: #FDF4E0;   /* ใช้เป็นพื้นเท่านั้น */
 
   /* เขียวใช้ที่เดียวในระบบ: ป้ายผลตัดสิน OK — ห้ามเอาไปทำพื้นหรือขอบการ์ด */
-  --green: #1F7A4D;
+  --green: var(--mc-green);
   --green-rgb: 31, 122, 77;
+  --green-tint: #EAF5EF;
 
   /* ── พื้นและเส้น ──────────────────────────────────────────────────────── */
-  --paper: #F7F8FA;
-  --surface: #FFFFFF;
+  --paper: var(--mc-surface-alt);
+  --surface: var(--mc-surface);
   --line: #D3D9E3;
   --line-strong: #B6C0CE;
-  --muted: #5A6779;
+  --muted: var(--mc-muted);
+  --head-bg: #EEF0F3;
+  --ink-deep: #0B1F3A;     /* พื้นเข้มคงที่ (หัวตารางเข้ม/แถบ/ปุ่ม hover) — --ink กลายเป็นสีอ่อนในโหมดมืด ห้ามใช้เป็นพื้น */      /* หัวตารางแบบฟอร์ม (SC / Input) — คนละอย่างกับหัวน้ำเงินของตารางรายการ */
 
   /* ── ตัวอักษร ────────────────────────────────────────────────────────── */
   --fs-xs: 0.75rem;    /* 12 */
@@ -55,6 +63,26 @@
   --sp-4: 1rem;
   --sp-5: 1.5rem;
   --radius: 4px;       /* แผงเครื่องมือวัด ไม่ใช่การ์ดมนแบบ SaaS */
+}
+
+/* ── โหมดมืด (utils/theme.js ใส่ <html data-bs-theme="dark">) ─────────────────
+ * เฉพาะ token ของแอปนี้เอง — ตัวที่อ้าง --mc-* สลับตาม theme.css อยู่แล้ว
+ * ⚠️ พิมพ์ (หน้า SC) บังคับกลับเป็นค่าสว่างที่ @media print ท้าย index.css */
+:root[data-bs-theme="dark"] {
+  --ink-rgb: 228, 234, 243;
+  --blue-rgb: 47, 99, 184;
+  --blue-tint: #1B2A45;
+  --red-rgb: 224, 71, 90;
+  --red-tint: #3A1C24;
+  --amber-line: #E0A12A;
+  --amber-text: #F2C25A;
+  --amber-tint: #3A2E14;
+  --green-rgb: 46, 154, 101;
+  --green-tint: #15342A;
+  --line: #2B3A52;
+  --line-strong: #3E5070;
+  --head-bg: #1E2B42;
+  --ink-deep: #0A1426;
 }
 
 /* ══ map ตัวแปรของ bootstrap 5.3 มาที่ token ข้างบน ════════════════════════
@@ -89,7 +117,7 @@
   --bs-border-radius-sm: var(--radius);
   --bs-border-radius-lg: var(--radius);
 
-  --bs-link-color: var(--blue);
+  --bs-link-color: var(--blue-text);
   --bs-link-color-rgb: var(--blue-rgb);
   --bs-link-hover-color: var(--ink);
 
@@ -109,17 +137,17 @@
 .btn-primary {
   --bs-btn-bg: var(--blue);
   --bs-btn-border-color: var(--blue);
-  --bs-btn-hover-bg: var(--ink);
-  --bs-btn-hover-border-color: var(--ink);
-  --bs-btn-active-bg: var(--ink);
-  --bs-btn-active-border-color: var(--ink);
+  --bs-btn-hover-bg: var(--ink-deep);
+  --bs-btn-hover-border-color: var(--ink-deep);
+  --bs-btn-active-bg: var(--ink-deep);
+  --bs-btn-active-border-color: var(--ink-deep);
   --bs-btn-disabled-bg: var(--line-strong);
   --bs-btn-disabled-border-color: var(--line-strong);
   --bs-btn-disabled-color: #fff;
 }
 
 .btn-outline-primary {
-  --bs-btn-color: var(--blue);
+  --bs-btn-color: var(--blue-text);
   --bs-btn-border-color: var(--blue);
   --bs-btn-hover-bg: var(--blue);
   --bs-btn-hover-border-color: var(--blue);
@@ -185,12 +213,12 @@
 .btn-secondary {
   --bs-btn-bg: var(--muted);
   --bs-btn-border-color: var(--muted);
-  --bs-btn-hover-bg: var(--ink);
-  --bs-btn-hover-border-color: var(--ink);
+  --bs-btn-hover-bg: var(--ink-deep);
+  --bs-btn-hover-border-color: var(--ink-deep);
 }
 
 .btn-link {
-  --bs-btn-color: var(--blue);
+  --bs-btn-color: var(--blue-text);
   --bs-btn-hover-color: var(--ink);
   text-decoration: none;
 }
@@ -203,7 +231,7 @@
 }
 
 .table-dark {
-  --bs-table-bg: var(--ink);
+  --bs-table-bg: var(--ink-deep);
   --bs-table-border-color: rgba(255, 255, 255, 0.15);
   --bs-table-color: #fff;
 }
@@ -222,7 +250,7 @@
 /* ⚠️ แถว NG ของเดิมย้อมแดงทั้งแถวจนตัวเลขช่องอื่นอ่านไม่ออก
  *    เหลือไว้จาง ๆ พอให้กวาดตาเจอ — ตัวชี้จริงคือเส้นแดงซ้ายเฉพาะช่องที่ผิด */
 .table-danger {
-  --bs-table-bg: #FCECEE;
+  --bs-table-bg: var(--red-tint);
   --bs-table-color: var(--ink);
 }
 
@@ -235,13 +263,13 @@
 
 .alert-danger {
   --bs-alert-color: var(--red);
-  --bs-alert-bg: #FCECEE;
+  --bs-alert-bg: var(--red-tint);
   --bs-alert-border-color: var(--red);
 }
 
 .alert-success {
   --bs-alert-color: var(--green);
-  --bs-alert-bg: #EAF5EF;
+  --bs-alert-bg: var(--green-tint);
   --bs-alert-border-color: var(--green);
 }
 
@@ -319,8 +347,7 @@
 /* ── Navbar ───────────────────────────────────────────────────────────
  * ⚠️ ไอคอนปุ่ม toggler ของ bootstrap เป็น data-URI ที่ฝังสีไว้ใน URL
  *    เปลี่ยนสีด้วยตัวแปรสีธรรมดาไม่ได้ ต้องเขียน data-URI ใหม่ทั้งอัน */
-.navbar-dark,
-.app-nav {
+.navbar-dark {
   --bs-navbar-color: rgba(255, 255, 255, 0.72);
   --bs-navbar-hover-color: #fff;
   --bs-navbar-active-color: #fff;

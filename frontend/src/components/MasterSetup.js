@@ -17,6 +17,8 @@ import SpecValue from './SpecValue';
 import AppDialog from './AppDialog';
 import UsersTab from './UsersTab';
 import SearchSelect from './SearchSelect';
+import { useDataTable, FilterBar } from './table/useDataTable';
+import Pager, { usePager } from './table/Pager';
 import { useDialog } from '../utils/useDialog';
 
 const CHAR_TYPES = [
@@ -493,6 +495,19 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, onAlert, lab
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);
 
+  // เรียง/กรองหัวคอลัมน์ + แบ่งหน้า — คอลัมน์มาจาก prop (ตัวที่ผู้เรียกเขียน inline) จึงสร้างจาก columns ทุกครั้ง
+  const cellText = (c, r) => (c.type === 'check'
+    ? (Number(r[c.key]) ? 'ใช่' : '—')
+    : c.type === 'select'
+      ? (c.options ?? []).find((o) => String(o.id) === String(r[c.key]))?.name ?? '—'
+      : r[c.key] ?? '—');
+  const cols = useMemo(() => Object.fromEntries(columns.map((c) => [c.key, {
+    get: (r) => (c.type === 'number' ? Number(r[c.key]) : cellText(c, r)),
+    text: (r) => String(cellText(c, r)),
+  }])), [columns]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dt = useDataTable(rows, cols);
+  const pg = usePager(dt.rows, dt.resetKey);
+
   const reset = () => { setForm(blank()); setEditingId(null); };
 
   const submit = async (e) => {
@@ -564,32 +579,33 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, onAlert, lab
           </Row>
         </Form>
 
-        <Table striped bordered hover responsive size="sm" className="mb-0">
-          <thead className="table-dark">
-            <tr>{columns.map((c) => <th key={c.key}>{c.label}</th>)}<th style={{ width: 130 }}>จัดการ</th></tr>
-          </thead>
-          <tbody>
-            {rows.length === 0
-              ? <tr><td colSpan={columns.length + 1} className="text-center text-muted">ยังไม่มีข้อมูล</td></tr>
-              : rows.map((r) => (
-                <tr key={r.id} className={Number(r.is_active) === 0 ? 'text-muted' : ''}>
-                  {columns.map((c) => (
-                    <td key={c.key}>
-                      {c.type === 'check'
-                        ? (Number(r[c.key]) ? 'ใช่' : '—')
-                        : c.type === 'select'
-                          ? (c.options ?? []).find((o) => String(o.id) === String(r[c.key]))?.name ?? '—'
-                          : r[c.key] ?? '—'}
+        <FilterBar dt={dt} className="mb-2" />
+        <div className="mc-freeze">
+          <Table striped bordered hover size="sm" className="mb-0 text-nowrap">
+            <thead>
+              <tr>
+                {columns.map((c, i) => dt.th(c.key, c.label, i === 0 ? { className: 'mc-sticky-start' } : {}))}
+                <th className="mc-sticky-end" style={{ width: 130 }}>จัดการ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0
+                ? <tr><td colSpan={columns.length + 1} className="text-center text-muted">ยังไม่มีข้อมูล</td></tr>
+                : pg.rows.map((r) => (
+                  <tr key={r.id} className={Number(r.is_active) === 0 ? 'text-muted' : ''}>
+                    {columns.map((c, i) => (
+                      <td key={c.key} className={i === 0 ? 'mc-sticky-start' : undefined}>{cellText(c, r)}</td>
+                    ))}
+                    <td className="mc-sticky-end">
+                      <Button size="sm" variant="primary" className="me-1" onClick={() => startEdit(r)}>แก้</Button>
+                      <Button size="sm" variant="danger" onClick={() => onRemove(table, r.id, labelOf(r))}>ลบ</Button>
                     </td>
-                  ))}
-                  <td>
-                    <Button size="sm" variant="primary" className="me-1" onClick={() => startEdit(r)}>แก้</Button>
-                    <Button size="sm" variant="danger" onClick={() => onRemove(table, r.id, labelOf(r))}>ลบ</Button>
-                  </td>
-                </tr>
-              ))}
-          </tbody>
-        </Table>
+                  </tr>
+                ))}
+            </tbody>
+          </Table>
+        </div>
+        <Pager pg={pg} />
       </Card.Body>
     </Card>
   );
@@ -750,6 +766,8 @@ const ModelsTab = ({
     if (!q) return true;
     return `${m.item_no} ${m.item_name} ${m.division_name ?? ''}`.toLowerCase().includes(q);
   });
+  // ลิสต์ item ยาวเป็นร้อย — แบ่งหน้า · พิมพ์ค้นหาแล้วกลับหน้า 1
+  const modelPg = usePager(visibleModels, modelQuery);
 
   // preview ใช้ <SpecValue> ตัวเดียวกับที่ operator เห็นบนใบตรวจจริง จะได้ไม่มีรูปที่สองให้เพี้ยน
   // ⚠️ numOrNull คืน NaN ได้ตอนพิมพ์ค้าง ซึ่ง SpecValue กรองด้วย isFinite อยู่แล้ว
@@ -850,9 +868,10 @@ const ModelsTab = ({
             {visibleModels.length === 0 && (
               <div className="small text-muted mb-2">ไม่พบ item ที่ค้นหา</div>
             )}
+            <div className="mc-freeze model-list">
             <Table size="sm" hover className="mb-0">
               <tbody>
-                {visibleModels.map((m) => (
+                {modelPg.rows.map((m) => (
                   <tr key={m.id} className={selectedModel === String(m.id) ? 'table-primary' : ''}>
                     <td role="button" onClick={() => setSelectedModel(String(m.id))}>
                       <div className="fw-bold">{m.item_no}</div>
@@ -884,6 +903,8 @@ const ModelsTab = ({
                 ))}
               </tbody>
             </Table>
+            </div>
+            <Pager pg={modelPg} className="mc-pager--compact" />
           </Card.Body>
         </Card>
       </Col>
@@ -1054,12 +1075,15 @@ const ModelsTab = ({
               ))}
             </Form>
 
-            <Table striped bordered hover responsive size="sm" className="mb-0">
-              <thead className="table-dark">
+            {/* ⚠️ ไม่มีเรียง/กรอง/แบ่งหน้าโดยตั้งใจ — ลำดับแถว = seq_no ของใบตรวจ และปุ่ม ▲▼ ย้ายตามลำดับนี้
+                เรียงใหม่บนจอเมื่อไหร่ "ย้ายขึ้น" จะดูเหมือนย้ายผิดที่ · ตรึงหัว + คอลัมน์ลำดับ/จัดการพอ */}
+            <div className="mc-freeze">
+            <Table striped bordered hover size="sm" className="mb-0">
+              <thead>
                 <tr>
-                  <th style={{ width: 70 }}>ลำดับ</th><th>จุดตรวจ</th><th>ชนิด</th>
+                  <th className="mc-sticky-start" style={{ width: 70 }}>ลำดับ</th><th>จุดตรวจ</th><th>ชนิด</th>
                   <th>LSL ~ USL</th><th>n / ความถี่</th><th>Control limit</th>
-                  <th>Set up / Last Piece</th><th style={{ width: 260 }}>จัดการ</th>
+                  <th>Set up / Last Piece</th><th className="mc-sticky-end" style={{ width: 260 }}>จัดการ</th>
                 </tr>
               </thead>
               <tbody>
@@ -1073,7 +1097,7 @@ const ModelsTab = ({
                         !cp.is_active ? 'text-muted' : '',
                       ].filter(Boolean).join(' ')}
                     >
-                      <td>
+                      <td className="mc-sticky-start text-nowrap">
                         {cp.seq_no}
                         <Button size="sm" variant="link" className="p-0 ms-1" disabled={i === 0}
                           aria-label={`ย้าย ${cp.name} ขึ้น`} title="ย้ายขึ้น"
@@ -1134,7 +1158,7 @@ const ModelsTab = ({
                         })}
                         {!cp.category_settings?.length && <span className="text-muted">—</span>}
                       </td>
-                      <td>
+                      <td className="mc-sticky-end text-nowrap">
                         <Button size="sm" variant="primary" className="me-1" onClick={() => startEditCp(cp)}>แก้</Button>
                         {categories.length > 0 && (
                           <Button size="sm" variant="outline-primary" className="me-1"
@@ -1153,6 +1177,7 @@ const ModelsTab = ({
                   ))}
               </tbody>
             </Table>
+            </div>
           </Card.Body>
         </Card>
       </Col>

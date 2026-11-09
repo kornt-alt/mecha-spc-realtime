@@ -9,6 +9,8 @@ import { Badge, Button, Card, Col, Form, Row, Table } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
 import { getSession } from '../utils/auth';
 import { fmtDateTime } from '../utils/dateFormat';
+import { useDataTable, FilterBar } from './table/useDataTable';
+import Pager, { usePager } from './table/Pager';
 
 const MIN_PASSWORD = 6; // เท่ากับ backend/routes/users.js
 const MIN_PASSKEY = 6;  // เท่ากับ backend/routes/users.js
@@ -31,8 +33,20 @@ const roleLabel = (r) => String(r ?? '').split(',').filter(Boolean).join(' + ') 
 
 const fmtTime = (v) => fmtDateTime(v);
 
+const USER_COLS = {
+  username: { get: (u) => u.username },
+  display: { get: (u) => u.display_name ?? '' },
+  role: { get: (u) => roleLabel(u.role) },
+  insp: { get: (u) => u.inspector_name ?? '' },
+  active: { get: (u) => (Number(u.is_active) ? 'ใช้งาน' : 'ปิดใช้งาน') },
+  passkey: { get: (u) => (Number(u.has_passkey) ? 'ตั้งแล้ว' : '—') },
+  login: { get: (u) => (u.last_login_at ? new Date(u.last_login_at).getTime() : null), text: (u) => fmtTime(u.last_login_at).slice(0, 10) },
+};
+
 const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
   const [users, setUsers] = useState([]);
+  const dt = useDataTable(users, USER_COLS);
+  const pg = usePager(dt.rows, dt.resetKey);
   const [form, setForm] = useState(blank);
   const me = getSession()?.user?.id;
   const [inspectors, setInspectors] = useState([]);
@@ -217,27 +231,31 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
           </Row>
         </Form>
 
-        <Table striped bordered hover responsive size="sm" className="mb-0">
-          <thead className="table-dark">
+        <FilterBar dt={dt} className="mb-2" />
+        <div className="mc-freeze">
+        <Table striped bordered hover size="sm" className="mb-0 text-nowrap">
+          <thead>
             <tr>
-              <th>ชื่อผู้ใช้</th><th>ชื่อที่แสดง</th><th>สิทธิ์</th><th>ผู้ตรวจ</th><th>สถานะ</th><th>Passkey</th><th>login ล่าสุด</th>
-              <th style={{ width: 380 }}>จัดการ</th>
+              {dt.th('username', 'ชื่อผู้ใช้', { className: 'mc-sticky-start' })}{dt.th('display', 'ชื่อที่แสดง')}
+              {dt.th('role', 'สิทธิ์')}{dt.th('insp', 'ผู้ตรวจ')}{dt.th('active', 'สถานะ')}{dt.th('passkey', 'Passkey')}
+              {dt.th('login', 'login ล่าสุด')}
+              <th className="mc-sticky-end" style={{ width: 380 }}>จัดการ</th>
             </tr>
           </thead>
           <tbody>
-            {users.map((u) => {
+            {pg.rows.map((u) => {
               const active = Boolean(Number(u.is_active));
               const isMe = u.id === me;
               return (
                 <tr key={u.id} className={active ? '' : 'text-muted'}>
-                  <td>{u.username}{isMe && <Badge bg="light" text="dark" className="ms-1">คุณ</Badge>}</td>
+                  <td className="mc-sticky-start">{u.username}{isMe && <Badge bg="light" text="dark" className="ms-1">คุณ</Badge>}</td>
                   <td>{u.display_name ?? '—'}</td>
                   <td>{roleLabel(u.role)}</td>
                   <td>{u.inspector_name ? `${u.inspector_code ?? ''} ${u.inspector_name}` : '—'}</td>
                   <td>{active ? 'ใช้งาน' : 'ปิดใช้งาน'}</td>
                   <td>{Number(u.has_passkey) ? 'ตั้งแล้ว' : '—'}</td>
                   <td className="num">{fmtTime(u.last_login_at)}</td>
-                  <td>
+                  <td className="mc-sticky-end">
                     <Button size="sm" variant="outline-primary" className="me-1" onClick={() => rename(u)}>แก้ชื่อ</Button>
                     <Button size="sm" variant="outline-primary" className="me-1" onClick={() => editRole(u)}>สิทธิ์ / ผู้ตรวจ</Button>
                     <Button size="sm" variant="outline-primary" className="me-1" onClick={() => resetPassword(u)}>
@@ -260,6 +278,8 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
             })}
           </tbody>
         </Table>
+        </div>
+        <Pager pg={pg} />
       </Card.Body>
     </Card>
   );

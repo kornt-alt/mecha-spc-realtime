@@ -9,7 +9,8 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Card, Container, Form, Modal, Spinner } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
-import { clearSession, getSession, hasRole, onSessionChange, setSession } from '../utils/auth';
+import { clearSession, getSession, hasRole, LOGOUT_EVENT, onSessionChange, setSession } from '../utils/auth';
+import BrandLogo from './layout/BrandLogo';
 
 // เข้าได้ 2 ทาง: passkey ช่องเดียว หรือ ชื่อผู้ใช้ + รหัสผ่าน — แยกเป็นสองฟอร์มคนละปุ่ม
 // ไม่รวมเป็นฟอร์มเดียวที่ "เดาเอา" ว่าคนตั้งใจใช้ทางไหนจากช่องที่กรอก
@@ -83,6 +84,13 @@ const RequireLogin = ({ children, roles = ['ADMIN'], title = 'เข้าสู
     if (s) setEntered(true);
   }), []);
 
+  // กด "ออกจากระบบ" ที่ header = ตั้งใจออก → หน้า login เต็ม ไม่ใช่กล่อง "เซสชันหมดอายุ"
+  useEffect(() => {
+    const onLogout = () => setEntered(false);
+    window.addEventListener(LOGOUT_EVENT, onLogout);
+    return () => window.removeEventListener(LOGOUT_EVENT, onLogout);
+  }, []);
+
   // token ที่จำไว้อาจใช้ไม่ได้แล้ว (บัญชีถูกปิด / server เปลี่ยน AUTH_SECRET) — เช็คครั้งเดียวตอนเข้า
   // ไม่ผ่าน apiCall ล้าง session ให้เอง แล้วกล่อง login จะเด้งขึ้นมาก่อนคนเริ่มกรอกอะไร
   // ⚠️ ผลของ /me เขียนกลับลง session ด้วย — role/ผู้ตรวจที่ ADMIN เพิ่งแก้ให้ต้องมีผลโดยไม่ต้อง login ใหม่
@@ -101,10 +109,13 @@ const RequireLogin = ({ children, roles = ['ADMIN'], title = 'เข้าสู
 
   if (!entered) {
     return (
-      <Container className="page" style={{ maxWidth: 380 }}>
-        <Card className="mt-4">
-          <Card.Header>{title}</Card.Header>
-          <Card.Body>
+      <Container className="mc-auth">
+        <Card style={{ width: '100%', maxWidth: 400 }}>
+          <Card.Body className="p-4">
+            <div className="mc-auth__head">
+              <BrandLogo size="sm" />
+              <h2 className="fs-5">{title}</h2>
+            </div>
             <LoginForm idPrefix="login-page" />
             <div className="small text-muted mt-3">
               หน้าใบตรวจ Dashboard และรายงานใช้งานได้โดยไม่ต้องเข้าสู่ระบบ
@@ -133,12 +144,7 @@ const RequireLogin = ({ children, roles = ['ADMIN'], title = 'เข้าสู
 
   return (
     <>
-      {session && (
-        <div className="d-flex justify-content-end align-items-center gap-2 small text-muted px-3 pt-2">
-          <span>เข้าสู่ระบบเป็น <b>{session.user?.display_name || session.user?.username}</b></span>
-          <Button size="sm" variant="link" className="p-0" onClick={logout}>ออกจากระบบ</Button>
-        </div>
-      )}
+      {/* ชื่อผู้ใช้ + ออกจากระบบ อยู่ที่แถบบนของ header (SiteHeader) แล้ว */}
       {children}
       {/* animation={false} ตามกฎ AppDialog — Fade ยิง setState หลังเทสจบ act() */}
       <Modal show={!session} backdrop="static" keyboard={false} animation={false} centered>

@@ -11,7 +11,18 @@
     />
     <link rel="alternate icon" href="%PUBLIC_URL%/blue_external_drive_backup_folder_12388.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#0B1F3A" />
+    <meta name="theme-color" content="#1B4FA0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- โหมดสว่าง/มืด: ตั้งก่อน CSS/React โหลด กันจอขาวแวบ · ต้องตรงกับ src/utils/theme.js (key mechaspc.theme + วิธีคำนวณ) -->
+    <script>
+      (function () {
+        var pref = 'auto';
+        try { pref = localStorage.getItem('mechaspc.theme') || 'auto'; } catch (e) {}
+        var dark = pref === 'dark' || (pref !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-bs-theme', dark ? 'dark' : 'light');
+      })();
+    </script>
     <meta
       name="description"
       content="ระบบตรวจสอบคุณภาพและ control chart แผนก Mecha — Mecha Parts Lopburi 1"

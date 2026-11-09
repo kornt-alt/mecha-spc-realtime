@@ -11,6 +11,8 @@
 //   onReplace(row) — "แก้เป็นใบใหม่" หน้าใบตรวจ ไม่ต้อง login
 //   onEdit(row)    — "แก้ค่าในใบเดิม" หน้ารายงาน ต้อง login (ตัวกล่องจัดการ login เอง)
 import React, { useState } from 'react';
+import { useDataTable, FilterBar } from './table/useDataTable';
+import Pager, { usePager } from './table/Pager';
 import { apiCall } from '../utils/api';
 import { useDialog } from '../utils/useDialog';
 import AppDialog from './AppDialog';
@@ -18,9 +20,26 @@ import { fmtDateTime } from '../utils/dateFormat';
 
 const fmtTime = (v) => fmtDateTime(v);
 
+// เรียง/กรองหัวคอลัมน์ (มาตรฐานตารางรายการ) — ประกาศนอก component ให้ reference คงที่
+const resultText = (h) => (h.voided_at ? 'ยกเลิก' : h.overall_result);
+const COLS = {
+  at: { get: (h) => new Date(h.inspected_at).getTime(), text: (h) => fmtTime(h.inspected_at).slice(0, 10) },
+  mo: { get: (h) => h.mo_no ?? '' },
+  lot: { get: (h) => h.lot_no ?? '' },
+  sg: { get: (h) => Number(h.subgroup_no), text: (h) => `#${h.subgroup_no}` },
+  shift: { get: (h) => h.shift ?? '' },
+  mc: { get: (h) => h.machine_name ?? '' },
+  insp: { get: (h) => h.inspector_name ?? '' },
+  ng: { get: (h) => Number(h.ng_count ?? 0) },
+  result: { get: resultText },
+};
+
 const InspectionList = ({ rows, onChanged, onReplace, onEdit, emptyText = 'ยังไม่มีใบตรวจ' }) => {
   const [busyId, setBusyId] = useState(null);
   const { dialog, showAlert, showConfirm, showPrompt, closeDialog } = useDialog();
+  // ⚠️ hook ต้องอยู่ก่อน early return ข้างล่าง · แบ่งหน้าหลังเรียง/กรอง
+  const dt = useDataTable(rows, COLS);
+  const pg = usePager(dt.rows, dt.resetKey);
 
   // ยกเลิกต้องมีเหตุผลเสมอ — ระบบนี้ไม่มี auth เลยสักเส้น จะรู้ว่าใครกดก็ไม่ได้
   // เหตุผลที่พิมพ์เองจึงเป็นร่องรอยชิ้นเดียวที่เหลืออยู่ · ปุ่มยืนยันกดไม่ได้จนกว่าจะกรอก
@@ -95,28 +114,30 @@ const InspectionList = ({ rows, onChanged, onReplace, onEdit, emptyText = 'ย�
   }
 
   return (
-    <div className="sheet-wrap" style={{ maxHeight: 'none' }}>
+    <div>
+    <FilterBar dt={dt} className="mb-2" />
+    <div className="mc-freeze sheet-wrap">
       <table className="sheet">
         <thead>
           <tr>
-            <th scope="col">เวลา</th>
-            <th scope="col">MO</th>
-            <th scope="col">Lot</th>
-            <th scope="col">Subgroup</th>
-            <th scope="col">Shift</th>
-            <th scope="col">M/C</th>
-            <th scope="col">ผู้ตรวจสอบ</th>
-            <th scope="col">จุด NG</th>
-            <th scope="col">ผล</th>
-            <th scope="col">จัดการ</th>
+            {dt.th('at', 'เวลา', { className: 'mc-sticky-start' })}
+            {dt.th('mo', 'MO')}
+            {dt.th('lot', 'Lot')}
+            {dt.th('sg', 'Subgroup')}
+            {dt.th('shift', 'Shift')}
+            {dt.th('mc', 'M/C')}
+            {dt.th('insp', 'ผู้ตรวจสอบ')}
+            {dt.th('ng', 'จุด NG')}
+            {dt.th('result', 'ผล')}
+            <th scope="col" className="mc-sticky-end">จัดการ</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((h) => {
+          {pg.rows.map((h) => {
             const voided = Boolean(h.voided_at);
             return (
               <tr key={h.id} className={voided ? 'row--voided' : ''}>
-                <td className="num">{fmtTime(h.inspected_at)}</td>
+                <td className="num mc-sticky-start">{fmtTime(h.inspected_at)}</td>
                 <td>{h.mo_no ?? '—'}</td>
                 <td>{h.lot_no ?? '—'}</td>
                 <td className="num">
@@ -140,7 +161,7 @@ const InspectionList = ({ rows, onChanged, onReplace, onEdit, emptyText = 'ย�
                     </span>
                   )}
                 </td>
-                <td>
+                <td className="mc-sticky-end">
                   <button
                     type="button"
                     className={`btn btn-sm ${voided ? 'btn-outline-primary' : 'btn-outline-danger'}`}
@@ -172,7 +193,9 @@ const InspectionList = ({ rows, onChanged, onReplace, onEdit, emptyText = 'ย�
           })}
         </tbody>
       </table>
-      {dialogEl}
+    </div>
+    <Pager pg={pg} />
+    {dialogEl}
     </div>
   );
 };

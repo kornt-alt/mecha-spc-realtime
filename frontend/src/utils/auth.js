@@ -46,6 +46,14 @@ export const clearSession = () => {
   notify();
 };
 
+// ออกจากระบบโดยตั้งใจ (ปุ่มบน header) — ต่างจาก session หมดอายุ/401 ที่ต้องเปิดกล่อง login ทับหน้า
+// (ฟอร์มที่กรอกค้างต้องไม่หาย) · RequireLogin ฟัง event นี้แล้วกลับไปหน้า login เต็มแทน
+export const LOGOUT_EVENT = 'spc:logout';
+export const logout = () => {
+  try { window.dispatchEvent(new Event(LOGOUT_EVENT)); } catch { /* เบราว์เซอร์เก่า — ได้กล่องทับแทน */ }
+  clearSession();
+};
+
 // คืนฟังก์ชัน cleanup ใส่ใน useEffect ได้ตรง ๆ (แพตเทิร์นเดียวกับ on() ของ utils/socket.js)
 export const onSessionChange = (fn) => {
   listeners.add(fn);

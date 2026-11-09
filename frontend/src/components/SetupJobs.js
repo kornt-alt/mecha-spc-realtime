@@ -25,6 +25,8 @@ import AppDialog from './AppDialog';
 import MoLookupBar from './MoLookupBar';
 import SearchSelect from './SearchSelect';
 import SpecValue from './SpecValue';
+import { useDataTable, FilterBar } from './table/useDataTable';
+import Pager, { usePager } from './table/Pager';
 
 // ── สถานะ ─────────────────────────────────────────────────────────────────
 // สี: แดง = ไม่ผ่าน (ของเสีย) · เขียว = ผ่าน · น้ำเงิน = งานที่เดินอยู่ · ไม่ใช้เหลือง (แกนเหลืองคือ control limit)
@@ -100,12 +102,12 @@ const StageForm = ({ checkpoints, values, onChange, disabled }) => {
   const set = (k, v) => onChange((prev) => ({ ...prev, [k]: v }));
 
   return (
-    <div className="table-responsive">
+    <div className="mc-freeze setup-grid-wrap">
       <Table size="sm" bordered className="align-middle mb-0 setup-grid">
         <thead>
           <tr>
             <th style={{ width: 40 }}>No</th>
-            <th>จุดตรวจ</th>
+            <th className="mc-sticky-start">จุดตรวจ</th>
             <th>สเปก</th>
             <th>เครื่องมือวัด</th>
             {Array.from({ length: maxQty }, (_, i) => (
@@ -117,7 +119,7 @@ const StageForm = ({ checkpoints, values, onChange, disabled }) => {
           {checkpoints.map((cp) => (
             <tr key={cp.id}>
               <td>{cp.seq_no}</td>
-              <td>{cp.name}{cp.is_critical ? <Badge bg="danger" className="ms-1">SC</Badge> : null}</td>
+              <td className="mc-sticky-start">{cp.name}{cp.is_critical ? <Badge bg="danger" className="ms-1">SC</Badge> : null}</td>
               <td className="small"><SpecValue checkpoint={cp} /></td>
               <td className="small text-muted">{cp.gauge || '—'}</td>
               {Array.from({ length: maxQty }, (_, i) => {
@@ -256,7 +258,8 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
     : job.status === 'qc_checking' && isQC && mineQc ? 'qc'
       : null;
   const stageCps = stage ? checkpoints[stage] : [];
-  const allDone = stageCps.length > 0 && stageCps.every((cp) => isComplete(cp, values));
+  const doneCount = stageCps.filter((cp) => isComplete(cp, values)).length;
+  const allDone = stageCps.length > 0 && doneCount === stageCps.length;
   const anyNg = stageCps.some((cp) => (cp.char_type === 'attribute'
     ? values[keyOf(cp.id, 1)] === 'NG'
     : Array.from({ length: cp.sample_size }, (_, i) => judgeLocal(values[keyOf(cp.id, i + 1)], cp.usl, cp.lsl)).includes('NG')));
@@ -345,21 +348,28 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
             ) : (
               <StageForm checkpoints={stageCps} values={values} onChange={setValues} disabled={busy} />
             )}
-            <div className="d-flex flex-wrap gap-2 mt-3">
+            {/* แถบปุ่มติดขอบล่าง (ตัวเดียวกับใบตรวจตามรอบ) — ฟอร์มยาวไม่ต้องเลื่อนลงไปหาปุ่ม */}
+            <div className="savebar">
+              <span className="savebar__count">
+                กรอกครบแล้ว {doneCount}/{stageCps.length} จุด
+              </span>
+              {anyNg && <span className="verdict verdict--ng">มีค่า NG</span>}
+              {stage === 'qc' && anyNg && (
+                <span className="small" style={{ color: 'var(--red)' }}>ยืนยันผ่านไม่ได้ — ตีกลับ PD</span>
+              )}
+              <span className="savebar__spacer" />
               {stage === 'pd' && (
-                <Button disabled={busy || !allDone} onClick={submitPd}>ส่งให้ QC</Button>
+                <Button size="lg" disabled={busy || !allDone} onClick={submitPd}>
+                  {busy && <Spinner size="sm" animation="border" className="me-1" />}ส่งให้ QC
+                </Button>
               )}
               {stage === 'qc' && (
                 <>
-                  <Button variant="success" disabled={busy || !allDone || anyNg} onClick={pass}>ผ่าน</Button>
-                  <Button variant="danger" disabled={busy} onClick={fail}>ไม่ผ่าน — ตีกลับ PD</Button>
+                  <Button size="lg" variant="outline-danger" disabled={busy} onClick={fail}>ไม่ผ่าน — ตีกลับ PD</Button>
+                  <Button size="lg" variant="success" disabled={busy || !allDone || anyNg} onClick={pass}>
+                    {busy && <Spinner size="sm" animation="border" className="me-1" />}ผ่าน
+                  </Button>
                 </>
-              )}
-              {!allDone && stageCps.length > 0 && (
-                <span className="small text-muted align-self-center">กรอกให้ครบทุกช่องก่อน</span>
-              )}
-              {stage === 'qc' && anyNg && (
-                <span className="small align-self-center" style={{ color: 'var(--red)' }}>มีค่า NG — ยืนยันผ่านไม่ได้</span>
               )}
             </div>
           </Card.Body>
@@ -502,6 +512,18 @@ const QUEUE_TABS = [
   { key: 'closed', label: 'ปิดแล้ว (7 วัน)', status: 'passed,cancelled', days: 7 },
 ];
 
+// เรียง/กรองหัวคอลัมน์ — ค่าเริ่ม (ไม่กดเรียง) = ลำดับที่ server ส่งมา (เก่าสุดก่อน = คิว)
+const QUEUE_COLS = {
+  id: { get: (r) => Number(r.id), text: (r) => `#${r.id}` },
+  mo: { get: (r) => r.mo_no ?? '' },
+  item: { get: (r) => r.item_no ?? '' },
+  mc: { get: (r) => r.machine_code ?? '' },
+  shift: { get: (r) => r.shift ?? '' },
+  round: { get: (r) => Number(r.round_no) },
+  status: { get: (r) => statusInfo(r).label },
+  last: { get: (r) => new Date(r.last_event_at).getTime(), text: (r) => r.last_user_name ?? '' },
+};
+
 const Queue = ({ categoryId, tab, onTab, onOpen, counts }) => {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -527,6 +549,9 @@ const Queue = ({ categoryId, tab, onTab, onOpen, counts }) => {
   useEffect(() => { load(); }, [load]);
   useEffect(() => on('check_job_updated', load), [load]);
 
+  const dt = useDataTable(rows, QUEUE_COLS);
+  const pg = usePager(dt.rows, `${dt.resetKey}|${def.key}`);
+
   const c = counts?.byCategory?.[categoryId] ?? {};
   const countOf = { waiting_qc: c.waiting_qc, qc_checking: c.qc_checking, pd_checking: c.pd_checking };
 
@@ -540,26 +565,33 @@ const Queue = ({ categoryId, tab, onTab, onOpen, counts }) => {
         ))}
         {loading && <Spinner animation="border" size="sm" className="ms-2 align-self-center" />}
       </Card.Header>
-      <Card.Body className="p-0">
-        <Table hover size="sm" className="mb-0 small align-middle">
+      <Card.Body className="p-2">
+        <FilterBar dt={dt} className="mb-2" />
+        <div className="mc-freeze">
+        <Table hover size="sm" className="mb-0 align-middle text-nowrap queue-table">
           <thead>
-            <tr><th>งาน</th><th>WOS</th><th>Item</th><th>เครื่อง</th><th>กะ</th><th>รอบ</th><th>สถานะ</th><th>ล่าสุด</th><th>รอมา</th></tr>
+            <tr>
+              {dt.th('id', 'งาน', { className: 'mc-sticky-start' })}{dt.th('mo', 'WOS')}{dt.th('item', 'Item')}
+              {dt.th('mc', 'เครื่อง')}{dt.th('shift', 'กะ')}{dt.th('round', 'รอบ')}{dt.th('status', 'สถานะ')}
+              {dt.th('last', 'ล่าสุด')}<th>รอมา</th>
+            </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={9} className="text-center text-muted py-3">ไม่มีงานในช่องนี้</td></tr>
+              <tr><td colSpan={9} className="text-center text-muted py-4">ไม่มีงานในช่องนี้</td></tr>
             )}
-            {rows.map((r) => {
+            {pg.rows.map((r) => {
               const st = statusInfo(r);
               return (
-                <tr key={r.id} role="button" onClick={() => onOpen(r.id)}>
-                  <td>#{r.id}</td>
+                <tr key={r.id} role="button" tabIndex={0} onClick={() => onOpen(r.id)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') onOpen(r.id); }}>
+                  <td className="mc-sticky-start">#{r.id}</td>
                   <td><b>{r.mo_no}</b></td>
                   <td>{r.item_no}</td>
                   <td>{r.machine_code}</td>
                   <td>{r.shift}</td>
                   <td>{r.round_no}</td>
-                  <td><Badge bg={st.bg}>{st.label}</Badge></td>
+                  <td><Badge bg={st.bg} className="job-status">{st.label}</Badge></td>
                   <td className="text-nowrap">{ACTION_LABEL[r.last_action] ?? '—'} · {r.last_user_name}<div className="text-muted">{fmtDateTime(r.last_event_at)}</div></td>
                   <td className="text-nowrap">{['passed', 'cancelled'].includes(r.status) ? '—' : waitedText(r.last_event_at, now)}</td>
                 </tr>
@@ -567,6 +599,8 @@ const Queue = ({ categoryId, tab, onTab, onOpen, counts }) => {
             })}
           </tbody>
         </Table>
+        </div>
+        <Pager pg={pg} />
       </Card.Body>
     </Card>
   );

@@ -1,0 +1,588 @@
+/* frontend/src/theme.css — ธีมทั้งแอป (โครงตามเว็บ มก. · สี น้ำเงิน ขาว แดง เขียว)
+ *
+ * ⚠️ import หลัง bootstrap ใน src/index.js — ไฟล์นี้ต้องชนะ bootstrap
+ * สีเปลี่ยนที่ token ข้างล่างที่เดียว · คลาสของ header / footer / หน้าแรกขึ้นต้นด้วย mc- (กันชน bootstrap)
+ * bootstrap 5.3 คอมไพล์สีปุ่มเป็นค่าตายตัว → ปุ่มต้อง override ตัวแปร --bs-btn-* เอง (ด้านล่าง)
+ * โหมดมืด: <html data-bs-theme="dark"> (utils/theme.js) → token ชุด :root[data-bs-theme="dark"] ท้ายส่วน token
+ *   --mc-blue = สีพื้น (ปุ่ม, หัวตาราง) · --mc-link = สีตัวหนังสือ (หัวข้อ, ลิงก์) — โหมดมืดสองตัวนี้ต่างกัน
+ *   พื้นหลังห้ามเขียน #fff ตรง ๆ ใช้ --mc-bg / --mc-surface / --mc-surface-alt (รวมถึง inline style ใน component)
+ */
+@import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --mc-blue: #1B4FA0;
+  --mc-blue-dark: #143B78;
+  --mc-blue-deep: #0E2B5C;
+  --mc-blue-soft: #E8EEF8;
+  --mc-red: #C42032;
+  --mc-red-dark: #A01A29;
+  --mc-green: #1F7A4D;
+  --mc-green-dark: #18603C;
+  --mc-ink: #0B1F3A;
+  --mc-muted: #5B6B82;
+  --mc-line: #DFE3EA;
+  --mc-bg-soft: #F4F6FA;
+  --mc-link: #1B4FA0;
+  --mc-bg: #FFFFFF;
+  --mc-surface: #FFFFFF;
+  --mc-surface-alt: #F6F8FB;
+  --mc-tint: #EEF3FB;
+  --mc-tint-strong: #E3ECFA;
+  --mc-highlight: #FFF3CD;
+  --mc-warn-bg: #FFF8E1;
+  --mc-warn-border: #FFE082;
+  --mc-shadow: rgba(11, 31, 58, .12);
+  --mc-font: 'Prompt', 'Segoe UI', Tahoma, sans-serif;
+  /* motion — ทุก transition/animation ใช้ค่าชุดนี้ · prefers-reduced-motion ปิดทั้งหมด (ท้ายไฟล์) */
+  --mc-ease: cubic-bezier(.22, .61, .36, 1);
+  --mc-dur: .25s;
+
+  --bs-primary: var(--mc-blue);
+  --bs-primary-rgb: 27, 79, 160;
+  --bs-danger: var(--mc-red);
+  --bs-danger-rgb: 196, 32, 50;
+  --bs-success: var(--mc-green);
+  --bs-success-rgb: 31, 122, 77;
+  --bs-body-font-family: var(--mc-font);
+  --bs-body-color: var(--mc-ink);
+  --bs-body-bg: var(--mc-bg);
+  --bs-link-color: var(--mc-link);
+  --bs-link-color-rgb: 27, 79, 160;
+  --bs-link-hover-color: var(--mc-red);
+  --bs-link-hover-color-rgb: 196, 32, 50;
+  --bs-border-color: var(--mc-line);
+  --bs-border-radius: .375rem;
+  --bs-primary-text-emphasis: var(--mc-blue-dark);
+  --bs-primary-bg-subtle: var(--mc-blue-soft);
+  --bs-primary-border-subtle: #B9CAE6;
+  --bs-danger-text-emphasis: var(--mc-red-dark);
+  --bs-danger-bg-subtle: #F9E4E6;
+  --bs-danger-border-subtle: #EDB4BA;
+  --bs-success-text-emphasis: var(--mc-green-dark);
+  --bs-success-bg-subtle: #E2F1E9;
+  --bs-success-border-subtle: #ACD5BF;
+}
+
+/* ── โหมดมืด — สลับแค่ token · ห้ามเขียนสีมืดแยกตาม component ถ้าเลี่ยงได้ ─────── */
+:root[data-bs-theme="dark"] {
+  --mc-blue: #2F63B8;
+  --mc-blue-dark: #24508F;
+  --mc-blue-deep: #0A1426;
+  --mc-blue-soft: #1B2A45;
+  --mc-red: #E0475A;
+  --mc-red-dark: #C42032;
+  --mc-green: #2E9A65;
+  --mc-green-dark: #237A50;
+  --mc-ink: #E4EAF3;
+  --mc-muted: #9AA8BD;
+  --mc-line: #2B3A52;
+  --mc-bg-soft: #172235;
+  --mc-link: #8DB0EE;
+  --mc-bg: #0D1522;
+  --mc-surface: #131D2D;
+  --mc-surface-alt: #18243A;
+  --mc-tint: #1A2B48;
+  --mc-tint-strong: #22385F;
+  --mc-highlight: #3A3216;
+  --mc-warn-bg: #2C2715;
+  --mc-warn-border: #6B5A1E;
+  --mc-shadow: rgba(0, 0, 0, .45);
+
+  --bs-body-bg: var(--mc-bg);
+  --bs-body-bg-rgb: 13, 21, 34;
+  --bs-body-color: var(--mc-ink);
+  --bs-body-color-rgb: 228, 234, 243;
+  --bs-secondary-bg: #18243A;
+  --bs-tertiary-bg: #152033;
+  --bs-border-color: var(--mc-line);
+  --bs-primary-rgb: 91, 142, 224;
+  --bs-danger-rgb: 224, 71, 90;
+  --bs-success-rgb: 46, 154, 101;
+  --bs-link-color-rgb: 141, 176, 238;
+  --bs-link-hover-color: var(--mc-red);
+  --bs-link-hover-color-rgb: 224, 71, 90;
+  --bs-primary-text-emphasis: #A9C4F2;
+  --bs-primary-bg-subtle: #16233B;
+  --bs-primary-border-subtle: #2C4A7E;
+  --bs-danger-text-emphasis: #F1939E;
+  --bs-danger-bg-subtle: #2C1418;
+  --bs-danger-border-subtle: #6E2731;
+  --bs-success-text-emphasis: #86D1AB;
+  --bs-success-bg-subtle: #10261B;
+  --bs-success-border-subtle: #22603F;
+}
+
+body {
+  font-family: var(--mc-font);
+  color: var(--mc-ink);
+  background: var(--mc-bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+#root { flex: 1 0 auto; display: flex; flex-direction: column; }
+.mc-main { flex: 1 0 auto; }
+
+h1, h2, h3, h4 { color: var(--mc-link); font-weight: 600; }
+a { color: var(--mc-link); }
+a:hover { color: var(--mc-red); }
+
+/* ── ปุ่ม ─────────────────────────────────────────────────────────────── */
+.btn { font-weight: 500; }
+.btn-primary {
+  --bs-btn-bg: var(--mc-blue); --bs-btn-border-color: var(--mc-blue);
+  --bs-btn-hover-bg: var(--mc-blue-dark); --bs-btn-hover-border-color: var(--mc-blue-dark);
+  --bs-btn-active-bg: var(--mc-blue-deep); --bs-btn-active-border-color: var(--mc-blue-deep);
+  --bs-btn-disabled-bg: var(--mc-blue); --bs-btn-disabled-border-color: var(--mc-blue);
+  --bs-btn-focus-shadow-rgb: 27, 79, 160;
+}
+.btn-outline-primary {
+  --bs-btn-color: var(--mc-blue); --bs-btn-border-color: var(--mc-blue);
+  --bs-btn-hover-bg: var(--mc-blue); --bs-btn-hover-border-color: var(--mc-blue);
+  --bs-btn-active-bg: var(--mc-blue-dark); --bs-btn-active-border-color: var(--mc-blue-dark);
+  --bs-btn-disabled-color: var(--mc-blue); --bs-btn-disabled-border-color: var(--mc-blue);
+  --bs-btn-focus-shadow-rgb: 27, 79, 160;
+}
+.btn-danger {
+  --bs-btn-bg: var(--mc-red); --bs-btn-border-color: var(--mc-red);
+  --bs-btn-hover-bg: var(--mc-red-dark); --bs-btn-hover-border-color: var(--mc-red-dark);
+  --bs-btn-active-bg: var(--mc-red-dark); --bs-btn-active-border-color: var(--mc-red-dark);
+  --bs-btn-disabled-bg: var(--mc-red); --bs-btn-disabled-border-color: var(--mc-red);
+  --bs-btn-focus-shadow-rgb: 196, 32, 50;
+}
+.btn-outline-danger {
+  --bs-btn-color: var(--mc-red); --bs-btn-border-color: var(--mc-red);
+  --bs-btn-hover-bg: var(--mc-red); --bs-btn-hover-border-color: var(--mc-red);
+  --bs-btn-active-bg: var(--mc-red-dark); --bs-btn-active-border-color: var(--mc-red-dark);
+  --bs-btn-disabled-color: var(--mc-red); --bs-btn-disabled-border-color: var(--mc-red);
+  --bs-btn-focus-shadow-rgb: 196, 32, 50;
+}
+.btn-success {
+  --bs-btn-bg: var(--mc-green); --bs-btn-border-color: var(--mc-green);
+  --bs-btn-hover-bg: var(--mc-green-dark); --bs-btn-hover-border-color: var(--mc-green-dark);
+  --bs-btn-active-bg: var(--mc-green-dark); --bs-btn-active-border-color: var(--mc-green-dark);
+  --bs-btn-disabled-bg: var(--mc-green); --bs-btn-disabled-border-color: var(--mc-green);
+  --bs-btn-focus-shadow-rgb: 31, 122, 77;
+}
+.btn-outline-success {
+  --bs-btn-color: var(--mc-green); --bs-btn-border-color: var(--mc-green);
+  --bs-btn-hover-bg: var(--mc-green); --bs-btn-hover-border-color: var(--mc-green);
+  --bs-btn-active-bg: var(--mc-green-dark); --bs-btn-active-border-color: var(--mc-green-dark);
+  --bs-btn-disabled-color: var(--mc-green); --bs-btn-disabled-border-color: var(--mc-green);
+  --bs-btn-focus-shadow-rgb: 31, 122, 77;
+}
+
+/* ── การ์ด / ตาราง / ฟอร์ม ────────────────────────────────────────────── */
+.card { border-color: var(--mc-line); border-radius: .5rem; }
+.card-header { background: var(--mc-surface); border-bottom: 2px solid var(--mc-blue); color: var(--mc-link); font-weight: 600; }
+
+.table > thead > tr > th,
+.table-dark > :not(caption) > * > * {
+  --bs-table-bg: var(--mc-blue);
+  --bs-table-color: #fff;
+  background-color: var(--mc-blue);
+  color: #fff;
+  border-color: var(--mc-blue-dark);
+  font-weight: 500;
+}
+.table-hover > tbody > tr:hover > * { --bs-table-bg-state: var(--mc-blue-soft); }
+
+.form-control:focus, .form-select:focus, .form-check-input:focus {
+  border-color: var(--mc-blue);
+  box-shadow: 0 0 0 .2rem rgba(27, 79, 160, .2);
+}
+.form-check-input:checked { background-color: var(--mc-blue); border-color: var(--mc-blue); }
+
+.nav-tabs .nav-link.active { color: var(--mc-link); border-top: 2px solid var(--mc-red); font-weight: 600; }
+.nav-tabs .nav-link { color: var(--mc-muted); }
+.pagination { --bs-pagination-color: var(--mc-blue); --bs-pagination-active-bg: var(--mc-blue); --bs-pagination-active-border-color: var(--mc-blue); }
+.progress { --bs-progress-bar-bg: var(--mc-blue); }
+
+/* sweetalert2 ใช้สีของตัวเอง — ให้ปุ่มยืนยันเป็นน้ำเงินตามธีม */
+.swal2-popup { font-family: var(--mc-font); }
+.swal2-styled.swal2-confirm { background-color: var(--mc-blue); }
+
+/* ── โลโก้ (components/layout/BrandLogo.js) ──────────────────────────── */
+.mc-logo { height: 52px; width: auto; display: block; }
+.mc-logo-fallback {
+  height: 52px; width: 52px; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: .5rem; background: var(--mc-blue); color: #fff;
+  font-weight: 700; font-size: 1.25rem; letter-spacing: .02em;
+  box-shadow: inset 0 -4px 0 var(--mc-red);
+}
+.mc-logo--sm { height: 40px; }
+.mc-logo-fallback.mc-logo--sm { height: 40px; width: 40px; font-size: 1rem; }
+
+/* ── Header 2 ชั้น (components/layout/SiteHeader.js) ─────────────────── */
+.mc-header { position: sticky; top: 0; z-index: 1030; background: var(--mc-surface); box-shadow: 0 2px 10px rgba(11, 31, 58, .06); }
+
+.mc-topbar { background: var(--mc-blue-deep); color: #fff; font-size: .8125rem; max-height: 6rem; overflow: hidden; transition: max-height .3s var(--mc-ease), opacity .2s; }
+.mc-topbar .container { display: flex; justify-content: flex-end; align-items: center; gap: 1.25rem; min-height: 34px; flex-wrap: wrap; }
+.mc-topbar a, .mc-topbar button { color: rgba(255, 255, 255, .85); text-decoration: none; background: none; border: 0; padding: 0; font: inherit; display: inline-flex; align-items: center; gap: .35rem; }
+.mc-topbar a:hover, .mc-topbar button:hover { color: #fff; }
+.mc-topbar__user { color: #fff; opacity: .95; }
+.mc-topbar__role { background: var(--mc-red); color: #fff; border-radius: 999px; padding: 0 .5rem; font-size: .6875rem; margin-left: .35rem; }
+
+.mc-mainbar { border-bottom: 3px solid var(--mc-red); }
+.mc-mainbar .navbar { padding: .65rem 0; transition: padding .3s var(--mc-ease); }
+.mc-brand { display: flex; align-items: center; gap: .75rem; text-decoration: none; color: var(--mc-ink); }
+.mc-brand:hover { color: var(--mc-ink); }
+.mc-brand__text { line-height: 1.15; }
+.mc-brand__title { display: block; font-weight: 700; font-size: 1.05rem; color: var(--mc-link); letter-spacing: .01em; }
+.mc-brand__sub { display: block; font-size: .78rem; color: var(--mc-muted); }
+
+.mc-nav .nav-link { color: var(--mc-ink); font-weight: 500; padding: .5rem .9rem !important; position: relative; }
+.mc-nav .nav-link:hover, .mc-nav .nav-link:focus, .mc-nav .show > .nav-link { color: var(--mc-link); }
+/* เส้นแดงใต้เมนู: ยืดออกจากกลาง · hover = เส้นบาง, หน้าที่อยู่ = เส้นหนา
+   วาดด้วย background ไม่ใช่ ::after — ::after ของ dropdown-toggle คือลูกศร ▾ ของ bootstrap */
+.mc-nav .nav-link {
+  background: linear-gradient(var(--mc-red), var(--mc-red)) no-repeat center bottom / 0 2px;
+  transition: color var(--mc-dur) var(--mc-ease), background-size .3s var(--mc-ease);
+}
+.mc-nav .nav-link:hover, .mc-nav .show > .nav-link { background-size: calc(100% - 1.8rem) 2px; }
+.mc-nav .nav-link.mc-active,
+.mc-nav .mc-active > .nav-link {
+  color: var(--mc-link);
+  background-size: calc(100% - 1.8rem) 3px;
+}
+
+/* dropdown แผงกว้าง — hover แล้ว [ ] สีแดงเลื่อนเข้ามาขนาบชื่อเมนู (เทคนิคเดียวกับต้นแบบ) */
+.mc-nav .dropdown-menu {
+  border: 0; border-top: 3px solid var(--mc-blue); border-radius: 0 0 .5rem .5rem;
+  box-shadow: 0 12px 28px rgba(11, 31, 58, .14); padding: .75rem 0; min-width: 16rem; margin-top: .65rem;
+}
+.mc-nav .dropdown-item { padding: .55rem 1.5rem; color: var(--mc-ink); transition: color .2s; }
+.mc-dd-title { position: relative; display: inline-block; }
+.mc-dd-title::before,
+.mc-dd-title::after {
+  position: absolute; top: 0; opacity: 0; color: var(--mc-red); font-weight: 600;
+  transition: opacity .2s, transform .3s;
+}
+.mc-dd-title::before { content: '['; right: 100%; margin-right: .35rem; transform: translateX(10px); }
+.mc-dd-title::after { content: ']'; left: 100%; margin-left: .35rem; transform: translateX(-10px); }
+.mc-nav .dropdown-item:hover, .mc-nav .dropdown-item:focus { background: transparent; color: var(--mc-link); }
+.mc-nav .dropdown-item:hover .mc-dd-title::before, .mc-nav .dropdown-item:focus .mc-dd-title::before,
+.mc-nav .dropdown-item:hover .mc-dd-title::after, .mc-nav .dropdown-item:focus .mc-dd-title::after { opacity: 1; transform: translateX(0); }
+.mc-nav .dropdown-item.active, .mc-nav .dropdown-item:active { background: var(--mc-blue-soft); color: var(--mc-link); }
+.mc-nav .dropdown-item small { display: block; color: var(--mc-muted); font-size: .75rem; }
+
+@media (max-width: 991.98px) {
+  .mc-nav { padding-top: .5rem; }
+  .mc-nav .dropdown-menu { box-shadow: none; border-top: 0; border-left: 3px solid var(--mc-blue); border-radius: 0; margin: 0 0 .5rem .9rem; }
+  .mc-nav .nav-link.mc-active, .mc-nav .mc-active > .nav-link { background: none; }
+  .mc-brand__title { font-size: .95rem; }
+}
+/* มือถือ: ให้ปุ่ม ☰ อยู่บรรทัดเดียวกับโลโก้ */
+@media (max-width: 575.98px) {
+  .mc-mainbar .navbar > .container { flex-wrap: wrap; }
+  .mc-brand { min-width: 0; flex: 1 1 0; margin-right: .5rem; white-space: normal; }
+  .mc-brand .mc-logo, .mc-brand .mc-logo-fallback { height: 40px; }
+  .mc-brand .mc-logo-fallback { width: 40px; font-size: 1rem; }
+  .mc-brand__title { font-size: .85rem; }
+  .mc-brand__sub { display: none; }
+  .mc-topbar .container { gap: .25rem 1rem; justify-content: center; }
+}
+/* โลโก้บริษัทกว้างมาก (~9:1) — จอแคบให้โลโก้หดตามที่ว่าง ชื่อระบบซ่อน ☰ ต้องอยู่บรรทัดเดียวกันเสมอ
+   992–1399px เมนูเต็มแถว: โลโก้ + ชื่อ + เมนู ต้องพอดี container (เช็คที่ 992 / 1024 / 1200 / 1280) */
+@media (min-width: 992px) and (max-width: 1399.98px) {
+  .mc-brand .mc-logo { height: 40px; }
+  .mc-brand__sub { display: none; }
+  .mc-brand__title { font-size: .9rem; }
+}
+@media (min-width: 992px) and (max-width: 1199.98px) {
+  .mc-brand .mc-logo { height: 34px; }
+  .mc-brand__text { display: none; }
+}
+@media (max-width: 991.98px) {
+  .mc-brand .mc-logo { height: 40px; }
+}
+@media (max-width: 767.98px) {
+  .mc-brand .mc-logo { height: auto; max-height: 36px; max-width: 100%; }
+  .mc-brand__text { display: none; }
+  .mc-footer__brand { flex-wrap: wrap; }
+}
+
+/* ── Footer (components/layout/SiteFooter.js) ────────────────────────── */
+.mc-footer { background: var(--mc-blue-deep); color: rgba(255, 255, 255, .8); border-top: 4px solid var(--mc-red); margin-top: 3rem; font-size: .9rem; }
+.mc-footer__inner { padding-top: 2.5rem; padding-bottom: 1.5rem; }
+.mc-footer h6 { color: #fff; font-weight: 600; margin-bottom: .75rem; font-size: .95rem; }
+.mc-footer ul { list-style: none; padding: 0; margin: 0; }
+.mc-footer li { margin-bottom: .4rem; }
+.mc-footer a { color: rgba(255, 255, 255, .8); text-decoration: none; }
+.mc-footer a:hover { color: #fff; text-decoration: underline; text-decoration-color: var(--mc-red); }
+.mc-footer__brand { display: flex; gap: .85rem; align-items: center; margin-bottom: 1rem; }
+.mc-footer__brand strong { color: #fff; display: block; font-size: 1.05rem; }
+.mc-footer__bottom { border-top: 1px solid rgba(255, 255, 255, .15); padding-top: .9rem; padding-bottom: .9rem; font-size: .8rem; display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
+.mc-footer__bottom b { color: #fff; }
+
+/* ── หน้าแรก (components/Home.js) ────────────────────────────────────── */
+/* main ของ App.js มี pt-4 — banner ต้องชิด header */
+.mc-hero {
+  margin-top: -1.5rem;
+  position: relative; overflow: hidden; color: #fff;
+  background: linear-gradient(120deg, var(--mc-blue) 0%, var(--mc-blue-dark) 55%, var(--mc-blue-deep) 100%);
+}
+/* แถบเฉียงแดง/ขาวจาง ๆ ด้านขวา */
+.mc-hero::before, .mc-hero::after { content: ''; position: absolute; top: -20%; bottom: -20%; transform: skewX(-18deg); pointer-events: none; }
+.mc-hero::before { right: 14%; width: 9rem; background: rgba(255, 255, 255, .06); }
+.mc-hero::after { right: 6%; width: .6rem; background: var(--mc-red); opacity: .9; }
+.mc-hero__inner { position: relative; z-index: 1; padding: 4.5rem 0 4rem; max-width: 46rem; }
+.mc-hero__eyebrow { display: inline-block; font-size: .8rem; letter-spacing: .12em; text-transform: uppercase; color: rgba(255, 255, 255, .8); border-left: 3px solid var(--mc-red); padding-left: .6rem; margin-bottom: 1rem; }
+.mc-hero h1 { color: #fff; font-size: clamp(1.9rem, 4.5vw, 3.1rem); font-weight: 700; line-height: 1.15; margin-bottom: .9rem; }
+.mc-hero p { font-size: 1.1rem; color: rgba(255, 255, 255, .88); margin-bottom: 1.75rem; }
+.mc-hero .btn-light { color: var(--mc-blue); font-weight: 600; }
+.mc-hero .btn-outline-light:hover { color: var(--mc-blue); }
+
+.mc-section { padding: 3rem 0 1rem; }
+.mc-section__head { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.mc-section__title { margin: 0; font-size: 1.75rem; position: relative; padding-bottom: .5rem; }
+.mc-section__title::after { content: ''; position: absolute; left: 0; bottom: 0; width: 3rem; height: 3px; background: var(--mc-red); }
+.mc-section__note { color: var(--mc-muted); font-size: .9rem; }
+
+.mc-tile {
+  display: flex; flex-direction: column; height: 100%;
+  background: var(--mc-surface); border: 1px solid var(--mc-line); border-top: 4px solid var(--mc-blue); border-radius: .5rem;
+  padding: 1.4rem 1.4rem 1.2rem; color: var(--mc-ink); text-decoration: none;
+  transition: transform .35s var(--mc-ease), box-shadow .35s var(--mc-ease), border-color .25s;
+}
+.mc-tile:hover, .mc-tile:focus { color: var(--mc-ink); transform: translateY(-4px); box-shadow: 0 14px 28px var(--mc-shadow); border-top-color: var(--mc-red); }
+.mc-tile__icon { width: 3rem; height: 3rem; border-radius: .5rem; background: var(--mc-blue-soft); color: var(--mc-link); display: inline-flex; align-items: center; justify-content: center; margin-bottom: 1rem; transition: background var(--mc-dur), color var(--mc-dur), transform .35s var(--mc-ease); }
+.mc-tile:hover .mc-tile__icon { background: var(--mc-blue); color: #fff; transform: translateY(-2px) scale(1.06); }
+.mc-tile__title { font-weight: 600; font-size: 1.1rem; color: var(--mc-link); margin-bottom: .35rem; }
+.mc-tile__desc { color: var(--mc-muted); font-size: .9rem; flex: 1 0 auto; margin-bottom: 1rem; }
+.mc-tile__go { font-size: .85rem; font-weight: 600; color: var(--mc-red); display: inline-flex; align-items: center; gap: .3rem; }
+
+.mc-flow { background: var(--mc-bg-soft); border-radius: .5rem; padding: 1.5rem; display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+.mc-flow__step { display: inline-flex; align-items: center; gap: .5rem; font-weight: 500; }
+.mc-flow__num { width: 1.75rem; height: 1.75rem; border-radius: 50%; background: var(--mc-blue); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: .85rem; }
+.mc-flow__step:last-child .mc-flow__num { background: var(--mc-green); }
+.mc-flow__arrow { color: var(--mc-red); }
+
+/* ── หน้า Login / Register ───────────────────────────────────────────── */
+.mc-auth { padding: 3rem 1rem; display: flex; justify-content: center; }
+.mc-auth .card { border-top: 4px solid var(--mc-blue); box-shadow: 0 10px 30px rgba(11, 31, 58, .08); }
+.mc-auth__head { display: flex; flex-direction: column; align-items: center; gap: .6rem; margin-bottom: 1.5rem; text-align: center; }
+.mc-auth__head h2 { margin: 0; }
+
+/* ── หน้าแบบหลายขั้นตอน (เช่น manage_bom/BomCheck.js) ───────────────── */
+/* แถบขั้นตอน: <ol className="mc-steps"><li className="done|active"><span className="mc-steps__num"/><span className="mc-steps__label"/></li> */
+.mc-steps { list-style: none; display: flex; gap: .5rem; padding: 0; margin: 0 0 1.25rem; flex-wrap: wrap; counter-reset: none; }
+.mc-steps li {
+  flex: 1 1 12rem; display: flex; align-items: center; gap: .6rem;
+  padding: .65rem .9rem; border-radius: .5rem; border: 1px solid var(--mc-line);
+  background: var(--mc-surface); color: var(--mc-muted); font-weight: 500;
+  transition: background-color var(--mc-dur) var(--mc-ease), border-color var(--mc-dur) var(--mc-ease), color var(--mc-dur);
+}
+.mc-steps__num {
+  flex: 0 0 auto; width: 1.75rem; height: 1.75rem; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--mc-bg-soft); color: var(--mc-muted); font-weight: 600; font-size: .85rem;
+}
+.mc-steps li.active { border-color: var(--mc-blue); color: var(--mc-link); background: var(--mc-tint); box-shadow: inset 0 -3px 0 var(--mc-red); }
+.mc-steps li.active .mc-steps__num { background: var(--mc-blue); color: #fff; }
+.mc-steps li.done { color: var(--mc-ink); }
+.mc-steps li.done .mc-steps__num { background: var(--mc-green); color: #fff; }
+
+/* หัวตารางกลุ่มคอลัมน์ (เช่น F/G) เข้มกว่าหัวปกติ · เซลล์กลุ่มเดียวกันพื้นอ่อน */
+.table > thead > tr > th.mc-th-group { background-color: var(--mc-blue-dark); --bs-table-bg: var(--mc-blue-dark); }
+.table > tbody > tr > td.mc-td-group { --bs-table-bg: var(--mc-surface-alt); }
+.mc-mono { font-family: Consolas, 'Courier New', monospace; letter-spacing: .5px; }
+/* คอลัมน์ปุ่ม (เช่น ลบ) ตรึงขอบขวาของตารางที่เลื่อนแนวนอน — กดได้โดยไม่ต้องเลื่อนไปสุด */
+.table > tbody > tr > td.mc-sticky-end,
+.table > thead > tr > th.mc-sticky-end { position: sticky; right: 0; z-index: 1; box-shadow: inset 1px 0 0 var(--mc-line); }
+.table > tbody > tr > td.mc-sticky-end { background-color: var(--mc-surface); }
+
+/* แถวหัวกลุ่มในตาราง (เช่น 1 รอบบันทึก BOM) + แถวที่ติ๊กเลือก
+   ⚠️ ระบายสีผ่าน --bs-table-bg ที่ td — bootstrap ทาพื้นที่ td จึงทับสีที่ตั้งไว้บน <tr> */
+.table > tbody > tr.mc-group-row > td { --bs-table-bg: var(--mc-tint); border-top: 2px solid var(--mc-blue); padding-top: .45rem; padding-bottom: .45rem; }
+.table > tbody > tr.mc-group-row .badge { font-size: .8rem; }
+.table > tbody > tr.mc-row-selected > td,
+.table > tbody > tr.mc-row-selected > td.mc-td-group { --bs-table-bg: var(--mc-highlight); }
+.table > tbody > tr.mc-row-selected > td.mc-sticky-end { background-color: var(--mc-highlight); }
+
+/* ชิปตัวกรองแบบกดเลือก (มีตัวเลขนับ) */
+.mc-filter-chip {
+  display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .8rem; border-radius: 999px;
+  border: 1px solid var(--mc-line); background: var(--mc-surface); color: var(--mc-ink); font: inherit; font-size: .85rem;
+  transition: background-color var(--mc-dur) var(--mc-ease), border-color var(--mc-dur) var(--mc-ease), color var(--mc-dur);
+}
+.mc-filter-chip:hover { border-color: var(--mc-blue); color: var(--mc-link); }
+.mc-filter-chip.active { background: var(--mc-blue); border-color: var(--mc-blue); color: #fff; }
+.mc-filter-chip__n { min-width: 1.4rem; padding: 0 .35rem; border-radius: 999px; background: var(--mc-bg-soft); color: var(--mc-muted); font-size: .75rem; text-align: center; }
+.mc-filter-chip.active .mc-filter-chip__n { background: rgba(255, 255, 255, .25); color: #fff; }
+
+/* แถบงานของรายการที่เลือก — ติดขอบล่างจอ (อยู่เหนือ footer, ต่ำกว่า modal) */
+.mc-selection-bar {
+  position: sticky; bottom: 1rem; z-index: 1020; margin-top: 1rem;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem;
+  padding: .75rem 1rem; border-radius: .5rem; border: 1px solid var(--mc-blue); border-left: 4px solid var(--mc-red);
+  background: var(--mc-surface); box-shadow: 0 10px 30px var(--mc-shadow);
+  animation: mc-rise .25s var(--mc-ease) both;
+}
+
+/* แผงปุ่มทำงานท้ายการ์ด (สร้าง MO / บันทึก) */
+.mc-action-panel { padding: 1rem; border-top: 1px solid var(--mc-line); background: var(--mc-surface-alt); border-radius: 0 0 .5rem .5rem; }
+
+/* ป้ายเล็กสรุปตัวเลข / ตัวอย่างค่า */
+.mc-chip { display: inline-flex; align-items: center; gap: .25rem; padding: .15rem .6rem; border-radius: 999px; border: 1px solid var(--mc-line); background: var(--mc-surface); color: var(--mc-ink); font-size: .8rem; white-space: nowrap; }
+.mc-chip--bad { border-color: var(--mc-red); color: var(--mc-red); }
+
+/* ── โหมดมืด: ส่วนที่ bootstrap ตรึงสีสว่างไว้ / โลโก้ ───────────────────── */
+[data-bs-theme="dark"] .card { --bs-card-bg: var(--mc-surface); --bs-card-cap-bg: var(--mc-surface); }
+[data-bs-theme="dark"] .dropdown-menu { --bs-dropdown-bg: var(--mc-surface); --bs-dropdown-link-color: var(--mc-ink); }
+[data-bs-theme="dark"] .modal { --bs-modal-bg: var(--mc-surface); }
+[data-bs-theme="dark"] .bg-white,
+[data-bs-theme="dark"] .bg-light { background-color: var(--mc-surface) !important; color: var(--mc-ink); }
+[data-bs-theme="dark"] .table-light { --bs-table-bg: var(--mc-surface-alt); --bs-table-color: var(--mc-ink); --bs-table-border-color: var(--mc-line); }
+[data-bs-theme="dark"] .text-dark { color: var(--mc-ink) !important; }
+[data-bs-theme="dark"] .btn-outline-primary { --bs-btn-color: var(--mc-link); --bs-btn-border-color: var(--mc-link); }
+[data-bs-theme="dark"] .btn-outline-dark { --bs-btn-color: var(--mc-ink); --bs-btn-border-color: var(--mc-muted); --bs-btn-hover-bg: var(--mc-ink); --bs-btn-hover-color: var(--mc-bg); }
+[data-bs-theme="dark"] .mc-header { box-shadow: 0 2px 12px rgba(0, 0, 0, .5); }
+[data-bs-theme="dark"] .mc-hero .btn-light { --bs-btn-bg: #fff; --bs-btn-color: var(--mc-blue); }
+[data-bs-theme="dark"] .swal2-popup { background: var(--mc-surface); color: var(--mc-ink); }
+[data-bs-theme="dark"] .swal2-title,
+[data-bs-theme="dark"] .swal2-html-container { color: var(--mc-ink); }
+/* โลโก้บริษัทเป็นตัวอักษรสีน้ำเงิน/แดงบนพื้นใส — บนพื้นเข้ม (footer, โหมดมืด) ต้องมีแผ่นขาวรอง */
+.mc-footer .mc-logo,
+[data-bs-theme="dark"] .mc-logo { background: #fff; padding: 4px 8px; border-radius: .375rem; }
+
+/* สลับธีม: สีค่อย ๆ เปลี่ยน (utils/theme.js ใส่คลาสนี้ที่ <html> ชั่วคราว ~350ms) */
+.mc-theme-switching,
+.mc-theme-switching *,
+.mc-theme-switching *::before,
+.mc-theme-switching *::after {
+  transition: background-color .35s var(--mc-ease), color .35s var(--mc-ease), border-color .35s var(--mc-ease), fill .35s var(--mc-ease) !important;
+}
+
+/* ── Motion ──────────────────────────────────────────────────────────── */
+/* เฉพาะ transform + opacity (ยกเว้นแถบบนที่พับ) — ตารางใหญ่จะได้ไม่กระตุก */
+@keyframes mc-page-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes mc-rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+@keyframes mc-drop { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+@keyframes mc-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes mc-stripe-in { from { opacity: 0; transform: translateX(8rem) skewX(-18deg); } to { opacity: .9; transform: skewX(-18deg); } }
+@keyframes mc-band-in { from { opacity: 0; transform: translateX(14rem) skewX(-18deg); } to { opacity: 1; transform: skewX(-18deg); } }
+
+html { scroll-behavior: smooth; }
+
+/* เปลี่ยนหน้า (components/layout/PageTransition.js) — ⚠️ ต้องจบที่ transform: none (ดูคอมเมนต์ในไฟล์ js) */
+.mc-page { animation: mc-page-in .38s var(--mc-ease) backwards; }
+
+/* ทั้งแอป: สี / พื้น / เส้น / focus ring ค่อย ๆ เปลี่ยน */
+.btn, .form-control, .form-select, .form-check-input, .page-link, .badge, .nav-tabs .nav-link, .list-group-item, a {
+  transition: color var(--mc-dur) var(--mc-ease), background-color var(--mc-dur) var(--mc-ease),
+              border-color var(--mc-dur) var(--mc-ease), box-shadow var(--mc-dur) var(--mc-ease);
+}
+.btn:active { transform: translateY(1px); }
+.table > tbody > tr > * { transition: box-shadow .2s var(--mc-ease), background-color .2s var(--mc-ease); }
+
+/* modal ของ bootstrap: ซูมเข้านิด ๆ แทนการเลื่อนลงจากบน */
+.modal.fade .modal-dialog { transform: translateY(8px) scale(.97); transition: transform .3s var(--mc-ease); }
+.modal.show .modal-dialog { transform: none; }
+
+/* header ย่อเมื่อเลื่อนลง (SiteHeader.js ใส่ mc-header--compact) */
+.mc-header { transition: box-shadow .3s var(--mc-ease); }
+.mc-brand .mc-logo, .mc-brand .mc-logo-fallback { transition: height .3s var(--mc-ease), width .3s var(--mc-ease); }
+.mc-header--compact { box-shadow: 0 6px 18px rgba(11, 31, 58, .14); }
+.mc-header--compact .mc-topbar { max-height: 0; opacity: 0; }
+.mc-header--compact .mc-mainbar .navbar { padding: .3rem 0; }
+.mc-header--compact .mc-brand .mc-logo { height: 40px; }
+.mc-header--compact .mc-brand .mc-logo-fallback { height: 40px; width: 40px; }
+
+/* dropdown: fade + เลื่อนลง แล้วรายการไล่โผล่ทีละตัว */
+.mc-nav .dropdown-menu.show { animation: mc-drop .22s var(--mc-ease) both; }
+.mc-nav .dropdown-menu.show > * { animation: mc-fade .25s var(--mc-ease) both; }
+.mc-nav .dropdown-menu.show > :nth-child(2) { animation-delay: .03s; }
+.mc-nav .dropdown-menu.show > :nth-child(3) { animation-delay: .06s; }
+.mc-nav .dropdown-menu.show > :nth-child(4) { animation-delay: .09s; }
+
+/* banner หน้าแรก: ข้อความไล่โผล่ + แถบเฉียงเลื่อนเข้าจากขวา */
+.mc-hero__inner > * { animation: mc-rise .6s var(--mc-ease) both; }
+.mc-hero__inner > :nth-child(2) { animation-delay: .09s; }
+.mc-hero__inner > :nth-child(3) { animation-delay: .18s; }
+.mc-hero__inner > :nth-child(4) { animation-delay: .27s; }
+.mc-hero::before { animation: mc-band-in .9s var(--mc-ease) .1s both; }
+.mc-hero::after { animation: mc-stripe-in .8s var(--mc-ease) .25s both; }
+
+/* โผล่เมื่อเลื่อนถึง (components/layout/useReveal.js) · การ์ดไล่กันตาม --i */
+.mc-reveal.mc-flow,
+.mc-reveal .mc-reveal__item {
+  opacity: 0; transform: translateY(22px);
+  transition: opacity .55s var(--mc-ease), transform .55s var(--mc-ease);
+  transition-delay: calc(var(--i, 0) * 70ms);
+}
+.mc-reveal.is-visible.mc-flow,
+.mc-reveal.is-visible .mc-reveal__item { opacity: 1; transform: none; }
+
+.mc-tile__go svg { transition: transform .3s var(--mc-ease); }
+.mc-tile:hover .mc-tile__go svg { transform: translateX(4px); }
+
+/* เครื่องที่ตั้งลดการเคลื่อนไหว — ปิดทุกอย่าง แสดงผลทันที */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: .01ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important; transition-delay: 0s !important;
+  }
+  .mc-reveal.mc-flow, .mc-reveal .mc-reveal__item { opacity: 1; transform: none; }
+}
+
+@media print {
+  .mc-header, .mc-footer { display: none !important; }
+  .mc-page, .mc-reveal.mc-flow, .mc-reveal .mc-reveal__item { animation: none; opacity: 1; transform: none; }
+}
+
+:root {
+  /* token ที่ตาราง (freeze / เรียง-กรอง) ใช้ — ผูกกับสีของ bootstrap จึงมีค่าโหมดมืดเอง */
+  --mc-radius-sm: 10px;
+  --mc-red-soft: var(--bs-danger-bg-subtle);
+  --mc-red-line: var(--bs-danger-border-subtle);
+  --mc-blue-line: var(--bs-primary-border-subtle);
+}
+
+/* ── Freeze header: กรอบตารางเลื่อนเอง + หัวตารางค้างบนสุด ───────────────
+ * ใส่ className="mc-freeze" ที่ div ที่ห่อ <table>/<Table> (ตัวที่เลื่อน)
+ * sticky ที่ thead (ไม่ใช่ th) เพราะหลายตารางตั้งพื้นหัวตารางไว้ที่ thead (inline) — พื้นต้องเลื่อนตามมาด้วย
+ * กรอบที่มี maxHeight แบบ inline (modal) ใช้ความสูงเดิม ได้แค่หัวตารางค้าง */
+.mc-freeze { overflow: auto; max-height: calc(100vh - 2rem); max-height: calc(100dvh - 2rem); -webkit-overflow-scrolling: touch; overscroll-behavior: contain; border-radius: var(--mc-radius-sm); }
+.mc-shell--mobile .mc-freeze { max-height: calc(100dvh - var(--mc-topbar-h) - 1.5rem); }
+.mc-freeze .table-responsive { overflow: visible; }
+.mc-freeze thead { position: sticky; top: 0; z-index: 3; background: var(--mc-surface); box-shadow: 0 2px 0 var(--mc-line); }
+@media print { .mc-freeze { max-height: none !important; overflow: visible !important; } }
+/* ── เรียง/กรองตาราง (components/table · useDataTable) ───────────────────────
+ * หัวตารางบางตารางพื้นน้ำเงินตัวขาว บางตารางพื้นอ่อน → ปุ่มในหัวใช้ color: inherit เสมอ
+ * กรวยที่กรองอยู่ = ป้ายแดงตัวขาว (แดงบนน้ำเงินอ่านไม่ออก) · popover อยู่ใน body ไม่โดนกรอบ .mc-freeze ตัด */
+.mc-th__in { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; vertical-align: middle; }
+.mc-th.text-center .mc-th__in, th.mc-th[style*="center"] .mc-th__in { justify-content: center; }
+.mc-th__sort { all: unset; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; font: inherit; color: inherit; min-height: 28px; border-radius: 6px; }
+.mc-th__label { white-space: inherit; }
+.mc-th__arrow { font-size: 0.62em; opacity: 0.45; }
+.mc-th__sort.on .mc-th__arrow { opacity: 1; }
+.mc-th__sort:focus-visible, .mc-th__filter:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.mc-th__filter { all: unset; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none; border-radius: 6px; cursor: pointer; color: inherit; opacity: 0.55; font-size: 0.78em; transition: opacity .15s, background-color .15s; }
+.mc-th__filter:hover { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); }
+.mc-th__filter.on { opacity: 1; background: var(--mc-red); color: #fff; }
+@media (pointer: coarse) { .mc-th__filter { width: 30px; height: 30px; } }
+
+.mc-colf-pop { --bs-popover-max-width: 300px; --bs-popover-bg: var(--mc-surface); --bs-popover-border-color: var(--mc-line); box-shadow: 0 10px 30px rgba(11, 31, 58, .18); z-index: 1090; }
+.mc-colf-pop .popover-body { padding: 10px; color: var(--mc-ink); }
+.mc-colf { width: 260px; max-width: calc(100vw - 32px); font-size: 0.85rem; }
+.mc-colf__sort { display: flex; gap: 6px; margin-bottom: 8px; }
+.mc-colf__sort button { flex: 1; border: 1px solid var(--mc-line); background: var(--mc-surface-alt); color: var(--mc-ink); border-radius: 8px; padding: 5px 6px; font-size: 0.8rem; cursor: pointer; }
+.mc-colf__sort button:hover { border-color: var(--mc-blue-line); }
+.mc-colf__sort button.on { background: var(--mc-blue); border-color: var(--mc-blue); color: #fff; }
+.mc-colf__search { margin-bottom: 6px; }
+.mc-colf__list { max-height: 260px; overflow: auto; overscroll-behavior: contain; border-top: 1px solid var(--mc-line); padding-top: 4px; }
+.mc-colf__item { display: flex; align-items: center; gap: 8px; padding: 4px 4px; border-radius: 6px; cursor: pointer; margin: 0; min-height: 30px; }
+.mc-colf__item:hover { background: var(--mc-tint); }
+.mc-colf__item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-colf__item small { color: var(--mc-muted); font-variant-numeric: tabular-nums; }
+.mc-colf__item input { accent-color: var(--mc-blue); width: 16px; height: 16px; flex: none; }
+.mc-colf__item--all { font-weight: 600; }
+.mc-colf__more { color: var(--mc-muted); font-size: 0.75rem; padding: 6px 4px; }
+.mc-colf__foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; border-top: 1px solid var(--mc-line); padding-top: 8px; }
+
+.mc-filterbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; padding: 6px 12px; border-radius: var(--mc-radius-sm); background: var(--mc-red-soft); border: 1px solid var(--mc-red-line); color: var(--mc-red); font-size: 0.82rem; font-weight: 600; }
+.mc-filterbar button { all: unset; cursor: pointer; margin-left: auto; text-decoration: underline; }
+@media print { .mc-th__filter, .mc-th__arrow, .mc-filterbar { display: none !important; } }
