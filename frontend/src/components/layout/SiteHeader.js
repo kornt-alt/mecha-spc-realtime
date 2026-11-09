@@ -82,7 +82,7 @@ const SiteHeader = () => {
   const roles = rolesOf(session);
   const showMaster = !session || hasRole(session, 'ADMIN');
 
-  const inspectActive = pathname === '/' || pathname === '/setup';
+  const inspectActive = ['/', '/inspect', '/setup'].includes(pathname);
   const analyseActive = ['/dashboard', '/sc', '/report'].includes(pathname);
   const setupBadge = <Count n={setupCount} title="งาน Set up ที่รอคุณ" />;
 
@@ -121,8 +121,9 @@ const SiteHeader = () => {
                   className={inspectActive ? 'mc-active' : ''}
                   title={<>ตรวจ{setupBadge}</>}
                 >
-                  <MenuItem to="/" title="ใบตรวจตามรอบ" desc="สแกน MO แล้วกรอกค่าวัด" active={pathname === '/'} />
-                  <MenuItem to="/setup" title="Set up / Last Piece" desc="PD ตรวจ → ส่ง QC ยืนยัน" active={pathname === '/setup'} badge={setupBadge} />
+                  <MenuItem to="/" title="เลือกหมวดที่จะตรวจ" desc="Inspection Record · Set up · Last Piece" active={pathname === '/'} />
+                  <MenuItem to={modelHref('/inspect', modelId)} title="Inspection Record" desc="ตรวจตามรอบ — สแกน MO แล้วกรอกค่าวัด" active={pathname === '/inspect'} />
+                  <MenuItem to="/setup?cat=2" title="Set up / Last Piece" desc="PD ตรวจ → ส่ง QC ยืนยัน" active={pathname === '/setup'} badge={setupBadge} />
                 </NavDropdown>
                 <NavDropdown id="mc-nav-analyse" title="วิเคราะห์" className={analyseActive ? 'mc-active' : ''}>
                   <MenuItem to={modelHref('/dashboard', modelId)} title="Dashboard" desc="สถานะทุกจุดตรวจของ item" active={pathname === '/dashboard'} />

@@ -537,7 +537,7 @@ const InspectionSheet = () => {
   return (
     <Container fluid className="page">
       <div className="page-head">
-        <h1>Check Station</h1>
+        <h1>Inspection Record <span className="page-head__sub">ตรวจตามรอบ</span></h1>
         {checkpoints.length > 0 && (
           <div className="page-head__meta num">{checkpoints.length} จุดตรวจ</div>
         )}

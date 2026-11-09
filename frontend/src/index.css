@@ -1555,3 +1555,83 @@ tbody th.mc-sticky-start {
 .mc-topbar__role + .mc-topbar__role {
   margin-left: 0.2rem;
 }
+
+/* ══ หน้าแรก: เลือกหมวดที่จะตรวจ (CategoryHome.js) ════════════════════════════
+ * การ์ดใหญ่ แตะง่ายบนจอหน้าไลน์ · ใช้ .mc-tile ของธีม (ยกขึ้นเมื่อชี้ ขอบบนเปลี่ยนแดง) */
+.cat-home .page-head {
+  border-bottom: 0;
+}
+
+.cat-tile {
+  gap: 0.35rem;
+  min-height: 15rem;
+  padding: 1.75rem 1.75rem 1.4rem;
+}
+
+.cat-tile__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.5rem;
+  height: 3.5rem;
+  margin-bottom: 0.75rem;
+  border-radius: 0.6rem;
+  background: var(--blue-tint);
+  color: var(--blue-text);
+  transition: background var(--mc-dur) var(--mc-ease), color var(--mc-dur) var(--mc-ease);
+}
+
+.cat-tile:hover .cat-tile__icon,
+.cat-tile:focus-visible .cat-tile__icon {
+  background: var(--blue);
+  color: #fff;
+}
+
+.cat-tile__title {
+  font-size: var(--fs-2xl);
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--blue-text);
+}
+
+.cat-tile__sub {
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.cat-tile__desc {
+  flex: 1 0 auto;
+  margin-top: 0.35rem;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.cat-tile__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-sm);
+}
+
+.cat-tile__waiting {
+  font-weight: 600;
+  color: var(--red);
+}
+
+.cat-tile__go {
+  font-weight: 600;
+  color: var(--red);
+  white-space: nowrap;
+}
+
+.page-head__sub {
+  margin-left: var(--sp-2);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--muted);
+}

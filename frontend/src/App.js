@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import { Container } from 'react-bootstrap';
 
 import InspectionSheet from './components/InspectionSheet';
+import CategoryHome from './components/CategoryHome';
 import Dashboard from './components/Dashboard';
 import ReportPage from './components/ReportPage';
 import ScSheet from './components/ScSheet';
@@ -51,7 +52,9 @@ const App = () => (
     <main className="mc-main">
       <PageTransition>
         <Routes>
-          <Route path="/" element={<InspectionSheet />} />
+          {/* หน้าแรก = เลือกหมวดที่จะตรวจ · ใบตรวจตามรอบย้ายไป /inspect (บุ๊กมาร์กเก่า /?model= ถูกพาไปเอง) */}
+          <Route path="/" element={<CategoryHome />} />
+          <Route path="/inspect" element={<InspectionSheet />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/sc" element={<ScSheet />} />
           <Route path="/report" element={<ReportPage />} />
