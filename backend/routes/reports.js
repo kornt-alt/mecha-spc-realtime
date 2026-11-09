@@ -95,7 +95,7 @@ router.get('/model/:modelId', wrap(async (req, res) => {
 
   // ทุก query ข้างบนไม่ขึ้นต่อกัน ยิงพร้อมกัน (pool มีหลาย connection)
   const [checkpoints, rowsByCheckpoint, baselinesByCheckpoint, targets, [[summary]], [inspections]] = await Promise.all([
-    fetchModelCheckpoints(modelId, { activeOnly: req.query.all !== '1' }),
+    fetchModelCheckpoints(modelId, { activeOnly: req.query.all !== '1', category: filter.category_id }),
     fetchModelRows(modelId, filter),
     fetchModelBaselines(modelId),
     fetchModelTargets(modelId),
@@ -179,7 +179,7 @@ router.get('/model/:modelId/grid', wrap(async (req, res) => {
   const filter = filterFrom(req.query);
   const { where, params } = buildInspectionFilter(filter, { includeVoided: true });
   const [checkpoints, [inspections]] = await Promise.all([
-    fetchModelCheckpoints(modelId, { activeOnly: req.query.all !== '1' }),
+    fetchModelCheckpoints(modelId, { activeOnly: req.query.all !== '1', category: filter.category_id }),
     query(
       `SELECT i.id, i.mo_no, i.lot_no, i.shift, i.subgroup_no, i.inspected_at, i.overall_result,
               i.voided_at, mc.code AS machine_code, ins.name AS inspector_name

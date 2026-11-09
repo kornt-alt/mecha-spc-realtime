@@ -13,7 +13,8 @@
     "user:add": "node scripts/user.js add",
     "user:passwd": "node scripts/user.js passwd",
     "user:disable": "node scripts/user.js disable",
-    "user:list": "node scripts/user.js list"
+    "user:list": "node scripts/user.js list",
+    "import:setup": "node scripts/import-setup-xlsx.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -60,14 +60,15 @@ router.post('/', wrap(async (req, res) => {
   const submitted = Array.isArray(b.results) ? b.results : [];
   if (submitted.length === 0) throw new AppError('ยังไม่ได้กรอกผลตรวจสักจุด', 400);
 
-  const checkpoints = await fetchModelCheckpoints(b.model_id);
+  // เฉพาะจุดของใบตรวจตามรอบ — จุดที่ตั้งไว้แค่ Set up / Last Piece (in_routine = 0) ส่งมาไม่ได้และไม่บังคับ
+  const checkpoints = await fetchModelCheckpoints(b.model_id, { routineOnly: true });
   if (checkpoints.length === 0) throw new AppError('item นี้ยังไม่ได้ตั้งจุดตรวจไว้', 400);
 
   const byId = new Map(checkpoints.map((c) => [c.id, c]));
   const submittedById = new Map();
   for (const item of submitted) {
     const cp = byId.get(Number(item.checkpoint_id));
-    if (!cp) throw new AppError(`จุดตรวจ id=${item.checkpoint_id} ไม่ได้อยู่ใน item นี้`, 400);
+    if (!cp) throw new AppError(`จุดตรวจ id=${item.checkpoint_id} ไม่ได้อยู่ในใบตรวจตามรอบของ item นี้ (หรือถูกปิดใช้งาน)`, 400);
     if (submittedById.has(cp.id)) throw new AppError(`ส่งจุดตรวจ "${cp.name}" ซ้ำ`, 400);
     submittedById.set(cp.id, item);
   }
@@ -440,7 +441,7 @@ router.get('/due', wrap(async (req, res) => {
   if (!isShift(shift)) throw new AppError('ต้องระบุกะ', 400);
 
   const [checkpoints, done] = await Promise.all([
-    fetchModelCheckpoints(modelId),
+    fetchModelCheckpoints(modelId, { routineOnly: true }),
     fetchDoneCheckpointIds({ modelId, machineId, shift }),
   ]);
   res.json({

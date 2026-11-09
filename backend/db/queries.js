@@ -112,12 +112,26 @@ const fetchCheckpoint = async (checkpointId) => {
   return rows[0] ?? null;
 };
 
-const fetchModelCheckpoints = async (modelId, { activeOnly = true } = {}) => {
+// จุดตรวจของ item ตามหมวด:
+//   routineOnly: true          = เฉพาะจุดในใบตรวจตามรอบ (checkpoints.in_routine) — บันทึก/ถึงรอบของตรวจตามรอบต้องส่ง
+//   category: <id>             = จุดของหมวดนั้น (routine → in_routine · หมวดอื่น → มีแถวใน checkpoint_category_settings)
+//   ไม่ส่งทั้งคู่               = ทุกจุด (หน้า Master)
+// ⚠️ ฝั่ง client มีกฎเดียวกันที่ isRoutinePoint() ใน frontend/src/utils/checkpointForm.js
+const fetchModelCheckpoints = async (modelId, { activeOnly = true, routineOnly = false, category } = {}) => {
+  const params = [Number(modelId)];
+  let extra = '';
+  const cat = category === undefined ? null : (Number(category) || ROUTINE_CATEGORY);
+  if (routineOnly || cat === ROUTINE_CATEGORY) {
+    extra = ' AND in_routine = 1';
+  } else if (cat) {
+    extra = ' AND id IN (SELECT checkpoint_id FROM checkpoint_category_settings WHERE category_id = ?)';
+    params.push(cat);
+  }
   const [rows] = await query(
     `SELECT * FROM checkpoints
-      WHERE model_id = ?${activeOnly ? ' AND is_active = 1' : ''}
+      WHERE model_id = ?${activeOnly ? ' AND is_active = 1' : ''}${extra}
       ORDER BY seq_no ASC`,
-    [Number(modelId)]
+    params
   );
   return rows;
 };

@@ -16,6 +16,7 @@ import {
 import SpecValue from './SpecValue';
 import AppDialog from './AppDialog';
 import UsersTab from './UsersTab';
+import CategoryMatrix from './master/CategoryMatrix';
 import SearchSelect from './SearchSelect';
 import { useDataTable, FilterBar } from './table/useDataTable';
 import Pager, { usePager } from './table/Pager';
@@ -341,41 +342,12 @@ const MasterSetup = () => {
     },
   });
 
-  // ── หมวดการตรวจของจุดนี้ (Set up / Last Piece × PD / QC) ─────────────────
-  //
-  // 1 ช่อง = จำนวนชิ้นของหมวด × ขั้น · เว้นว่าง = ขั้นนั้นไม่ตรวจจุดนี้ (PD กับ QC เช็คคนละจุดได้)
-  // ⚠️ ไม่ผ่าน generic CRUD — PUT /master/checkpoints/:id/categories แทนทั้งชุดของจุดนี้ในทีเดียว
-  // ⚠️ หมวด "ตรวจตามรอบ" ไม่อยู่ในกล่องนี้ — ใช้ n / ความถี่ ของจุดตรวจตามเดิม
-  const workflowCategories = (lookups.categories ?? []).filter((c) => Number(c.has_workflow));
-  const editCategories = (cp) => {
-    const current = (c, stage) => cp.category_settings?.find((x) => x.category_id === c.id && x.stage === stage);
-    const isAttr = cp.char_type === 'attribute';
-    showForm({
-      title: `หมวดการตรวจของ "${cp.name}"`,
-      body: isAttr
-        ? 'จุดตรวจด้วยตา: ใส่ 1 = ตรวจในขั้นนั้น · เว้นว่าง = ไม่ตรวจ'
-        : `ใส่จำนวนชิ้นที่ต้องวัด (1-10) · เว้นว่าง = ขั้นนั้นไม่ตรวจจุดนี้ (ตรวจตามรอบใช้ n = ${cp.sample_size})`,
-      confirmLabel: 'บันทึก',
-      fields: workflowCategories.flatMap((c) => ['pd', 'qc'].map((stage) => ({
-        name: `${c.id}_${stage}`,
-        label: `${c.name} — ${stage === 'pd' ? 'Production Check (PD)' : 'QC Confirm (QC)'}`,
-        type: 'number',
-        defaultValue: current(c, stage) ? String(current(c, stage).sample_qty) : '',
-      }))),
-      onConfirm: async (data) => {
-        const settings = Object.entries(data)
-          .filter(([, v]) => v !== '')
-          .map(([k, v]) => {
-            const [categoryId, stage] = k.split('_');
-            return { category_id: Number(categoryId), stage, sample_qty: isAttr ? 1 : Number(v) };
-          });
-        try {
-          await apiCall(`/master/checkpoints/${cp.id}/categories`, { method: 'PUT', body: { settings } });
-          say('success', `ตั้งหมวดการตรวจของ "${cp.name}" แล้ว`);
-          await loadCheckpoints(selectedModel);
-        } catch (e) { fail(e); }
-      },
-    });
+  // หมวดการตรวจทั้งหมด (รวมตรวจตามรอบ) — คอลัมน์ของตารางจุดตรวจ × หมวด (components/master/CategoryMatrix.js)
+  const allCategories = (lookups.categories ?? []).filter((c) => Number(c.is_active ?? 1));
+  const workflowCategories = allCategories.filter((c) => Number(c.has_workflow));
+  const matrixSaved = async (text) => {
+    say('success', text);
+    await loadCheckpoints(selectedModel);
   };
 
   return (
@@ -408,7 +380,7 @@ const MasterSetup = () => {
           checkpoints={checkpoints}
           onSave={save} onRemove={remove} onMove={moveCheckpoint} onPurgeVoided={purgeVoided}
           onPreviewBaseline={previewBaseline} onClearBaseline={clearBaseline}
-          onEditCategories={editCategories} categories={workflowCategories}
+          categories={workflowCategories} allCategories={allCategories} onMatrixSaved={matrixSaved}
           scopeName={scopeName}
           onAlert={showAlert}
         />
@@ -623,7 +595,7 @@ const ModelsTab = ({
   specMode, setSpecMode, tolForm, setTolForm,
   models, divisions, customers, selectedModel, setSelectedModel, checkpoints,
   onSave, onRemove, onMove, onPurgeVoided, onPreviewBaseline, onClearBaseline,
-  onEditCategories, categories = [],
+  categories = [], allCategories = [], onMatrixSaved,
   scopeName,
   onAlert,
 }) => {
@@ -780,7 +752,14 @@ const ModelsTab = ({
     target: numOrNull(cpForm.target),
   };
 
+  // "แก้จุดนี้" จากตารางหมวด → เปิดฟอร์มจุดตรวจด้านบนแล้วเลื่อนขึ้นไปหา
+  const editFromMatrix = (cp) => {
+    startEditCp(cp);
+    document.getElementById('cp-name')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   return (
+    <>
     <Row>
       {/* รุ่น */}
       <Col lg={4}>
@@ -1083,7 +1062,7 @@ const ModelsTab = ({
                 <tr>
                   <th className="mc-sticky-start" style={{ width: 70 }}>ลำดับ</th><th>จุดตรวจ</th><th>ชนิด</th>
                   <th>LSL ~ USL</th><th>n / ความถี่</th><th>Control limit</th>
-                  <th>Set up / Last Piece</th><th className="mc-sticky-end" style={{ width: 260 }}>จัดการ</th>
+                  <th>หมวดการตรวจ</th><th className="mc-sticky-end" style={{ width: 260 }}>จัดการ</th>
                 </tr>
               </thead>
               <tbody>
@@ -1145,7 +1124,10 @@ const ModelsTab = ({
                             : <Badge bg="warning">provisional</Badge>}
                       </td>
                       <td className="small text-nowrap">
-                        {/* PD 5 · QC 5 ต่อหมวด — ว่าง = ไม่ตรวจในหมวดนั้น */}
+                        {/* สรุปอ่านอย่างเดียว — แก้ที่ "ตารางหมวดการตรวจ" ใต้การ์ดนี้ */}
+                        <div className={Number(cp.in_routine ?? 1) ? '' : 'text-muted'}>
+                          ตามรอบ: {Number(cp.in_routine ?? 1) ? `${cp.char_type === 'attribute' ? 1 : cp.sample_size} / ${freqShort(cp.frequency)}` : 'ไม่ตรวจ'}
+                        </div>
                         {categories.map((c) => {
                           const pd = cp.category_settings?.find((x) => x.category_id === c.id && x.stage === 'pd');
                           const qc = cp.category_settings?.find((x) => x.category_id === c.id && x.stage === 'qc');
@@ -1156,14 +1138,9 @@ const ModelsTab = ({
                             </div>
                           );
                         })}
-                        {!cp.category_settings?.length && <span className="text-muted">—</span>}
                       </td>
                       <td className="mc-sticky-end text-nowrap">
                         <Button size="sm" variant="primary" className="me-1" onClick={() => startEditCp(cp)}>แก้</Button>
-                        {categories.length > 0 && (
-                          <Button size="sm" variant="outline-primary" className="me-1"
-                            onClick={() => onEditCategories(cp)}>หมวด</Button>
-                        )}
                         {/* ⚠️ ปุ่มเดียวเสมอ ไม่สลับเป็น "ล้าง" อีกแล้ว — จุดหนึ่งมี baseline ได้
                             หลายชุด กล่องที่เปิดขึ้นมาเป็นที่เลือกเองว่าจะล็อกของขอบเขตไหน
                             (ปุ่มล้างของแต่ละชุดอยู่ในช่อง Control limit) */}
@@ -1182,6 +1159,19 @@ const ModelsTab = ({
         </Card>
       </Col>
     </Row>
+
+    {/* ตารางจุดตรวจ × หมวด (แถว = จุด เรียงตามใบ · คอลัมน์ = หมวด) — Korn เลือกรูปนี้ 2026-11 */}
+    {selectedModel && (
+      <CategoryMatrix
+        modelId={selectedModel}
+        checkpoints={checkpoints}
+        categories={allCategories}
+        onSaved={onMatrixSaved}
+        onEditPoint={editFromMatrix}
+        onAlert={onAlert}
+      />
+    )}
+    </>
   );
 };
 

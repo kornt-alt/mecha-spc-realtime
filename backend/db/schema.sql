@@ -547,3 +547,10 @@ ALTER TABLE inspections ADD INDEX IF NOT EXISTS ix_inspections_job (job_id);
 -- inspector_id = ผู้ตรวจที่บัญชีนี้เป็น (PD/QC ต้องผูก ใบตรวจยังอ้าง inspectors เหมือนเดิม)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role SET('ADMIN','PD','QC') NOT NULL DEFAULT 'ADMIN';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS inspector_id INT NULL;
+
+-- ── จุดตรวจที่ไม่ต้องอยู่ในใบตรวจตามรอบ (2026-11) ────────────────────────────
+-- ใบ SET UP ของลูกค้ามีจุดตรวจ 50 จุด แต่ใบตรวจตามรอบ (Inspection Record) ใช้แค่จุด spc ไม่กี่จุด
+-- in_routine = 0 → จุดนี้ตรวจเฉพาะหมวดที่ตั้งไว้ใน checkpoint_category_settings (Set up / Last Piece)
+-- ⚠️ DEFAULT 1 — จุดเดิมทั้งหมดยังอยู่ในใบตรวจตามรอบเหมือนเดิม · ตัวเลือกจุดตามรอบมีที่เดียว:
+--    fetchModelCheckpoints({ routineOnly }) (backend) / isRoutinePoint() (frontend utils/checkpointForm.js)
+ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS in_routine TINYINT(1) NOT NULL DEFAULT 1;

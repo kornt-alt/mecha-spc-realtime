@@ -25,7 +25,7 @@ const REQUIRED = {
   ],
   checkpoints: [
     'id', 'model_id', 'seq_no', 'name', 'char_type',
-    'usl', 'lsl', 'target', 'sample_size', 'frequency', 'characteristic', 'is_active',
+    'usl', 'lsl', 'target', 'sample_size', 'frequency', 'characteristic', 'is_active', 'in_routine',
     // ⚠️ ไม่มี baseline_* ตรงนี้แล้ว ย้ายไปตาราง checkpoint_baselines (แยกรายเครื่อง)
     //    คอลัมน์เก่ายังค้างอยู่ใน DB จนกว่าจะรัน drop-legacy.sql แต่ไม่มีโค้ดไหนอ่านแล้ว
   ],

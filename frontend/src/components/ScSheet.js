@@ -19,6 +19,7 @@ import XbarRCharts, { fmt, fmtCap, capClass } from './XbarRCharts';
 import { apiCall } from '../utils/api';
 import { on, joinModel, leaveModel } from '../utils/socket';
 import { normalizeRows, normalizeCheckpoints, normalizeChart } from '../utils/normalize';
+import { pointsForCategory } from '../utils/checkpointForm';
 import { useModelParam, useUrlParam } from '../utils/useModelParam';
 import { RULE_BY_ID, RULE_SET_LABEL, chartLabel, rulesFor } from '../utils/spcRules';
 import { targetLabel } from '../utils/capability';
@@ -82,7 +83,9 @@ const ScSheet = () => {
   const [models, setModels] = useState([]);
   const [machines, setMachines] = useState([]);
   const [model, setModel] = useState(null);
-  const [checkpoints, setCheckpoints] = useState([]);
+  // ทุกจุด variable ของ item · checkpoints = เฉพาะจุดของหมวดที่ดูอยู่ (ตามรอบ / Set up / …)
+  const [allCheckpoints, setCheckpoints] = useState([]);
+  const checkpoints = useMemo(() => pointsForCategory(allCheckpoints, category), [allCheckpoints, category]);
   const [chart, setChart] = useState(null);
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(false);

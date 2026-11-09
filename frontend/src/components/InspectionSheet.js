@@ -24,6 +24,7 @@ import { Container, Row, Col, Form, Button, Alert, Spinner } from 'react-bootstr
 import { apiCall } from '../utils/api';
 import { on } from '../utils/socket';
 import { normalizeRows, normalizeCheckpoints, normalizeChart, judgeLocal, toNum } from '../utils/normalize';
+import { isRoutinePoint } from '../utils/checkpointForm';
 import { readStation, writeStation, reconcileStation, isStationReady } from '../utils/station';
 import { masterHref } from '../utils/useModelParam';
 import { useDialog } from '../utils/useDialog';
@@ -198,7 +199,8 @@ const InspectionSheet = () => {
       try {
         const { checkpoints: cps } = await apiCall(`/master/models/${modelId}`);
         if (cancelled) return;
-        const list = normalizeCheckpoints(cps);
+        // เฉพาะจุดของใบตรวจตามรอบ — จุดที่ตั้งไว้แค่ Set up / Last Piece ไม่ขึ้นในใบนี้ (server ก็ปฏิเสธ)
+        const list = normalizeCheckpoints(cps).filter(isRoutinePoint);
         setCheckpoints(list);
         setInputs(blankInputs(list));
         loadHistory(modelId);

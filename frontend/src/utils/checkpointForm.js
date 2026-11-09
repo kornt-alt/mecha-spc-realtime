@@ -233,3 +233,19 @@ export const clearCpMemory = () => {
     /* ไม่มีอะไรให้ทำต่อ */
   }
 };
+
+// ── จุดของหมวดการตรวจ ─────────────────────────────────────────────────────
+//
+// จุดนี้อยู่ในใบตรวจตามรอบ (Inspection Record) ไหม — checkpoints.in_routine
+// ไม่มีค่า (backend รุ่นก่อนมีคอลัมน์นี้) = อยู่ ตามค่าเริ่มของคอลัมน์
+// ⚠️ ฝั่ง server มีกฎเดียวกันที่ fetchModelCheckpoints({ routineOnly / category }) ใน backend/db/queries.js
+export const ROUTINE_CATEGORY_ID = 1;
+export const isRoutinePoint = (cp) => cp?.in_routine === undefined || cp?.in_routine === null
+  || Number(cp.in_routine) === 1;
+
+// จุดของหมวด: ตามรอบ → in_routine · หมวดอื่น → มีการตั้งใน category_settings (PD หรือ QC)
+export const pointsForCategory = (checkpoints, categoryId) => {
+  const cat = Number(categoryId) || ROUTINE_CATEGORY_ID;
+  if (cat === ROUTINE_CATEGORY_ID) return checkpoints.filter(isRoutinePoint);
+  return checkpoints.filter((c) => (c.category_settings ?? []).some((s) => Number(s.category_id) === cat));
+};

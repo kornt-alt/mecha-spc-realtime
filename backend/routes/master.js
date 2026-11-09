@@ -27,6 +27,8 @@ const ALLOWED_COLUMNS = {
     'usl', 'lsl', 'target', 'sample_size', 'is_critical', 'is_active',
     // frequency = 'shift' | 'day' (จุดไหนต้องกรอกในใบไหน ดู fetchDoneCheckpointIds)
     'frequency', 'characteristic',
+    // in_routine = อยู่ในใบตรวจตามรอบไหม (0 = ตรวจเฉพาะหมวด Set up / Last Piece ที่ตั้งไว้)
+    'in_routine',
   ],
 };
 const allowedTables = Object.keys(ALLOWED_COLUMNS);
@@ -235,45 +237,45 @@ router.delete('/delete', requireAdmin, wrap(async (req, res) => {
 
 // ── ลำดับจุดตรวจ ──────────────────────────────────────────────────────────
 
-// สลับ seq_no กับจุดที่อยู่ติดกัน — operator ต้องไล่ตรวจตามลำดับในแบบ ลำดับจึงเป็นข้อมูลจริง
-//
-// ⚠️ ต้องทำใน transaction และพักค่าไว้ที่เลขชั่วคราวก่อน เพราะมี UNIQUE(model_id, seq_no)
-//    ถ้า UPDATE ตรง ๆ ทีละแถวจะชนกันเองกลางคัน
-// ตั้งว่าจุดตรวจนี้ต้องตรวจในหมวด/ขั้นไหน กี่ชิ้น — แทนที่ทั้งชุดของจุดนี้
-// body: { settings: [{ category_id, stage: 'pd'|'qc', sample_qty }] }  (array ว่าง = ไม่ตรวจในหมวดไหนเลย)
+// ── หมวดการตรวจของจุดตรวจ ────────────────────────────────────────────────
 // ⚠️ ไม่ผ่าน generic CRUD (ตารางนี้ไม่มี id ที่หน้าเว็บถือไว้ และต้องแทนทั้งชุดใน transaction เดียว)
-// ⚠️ หมวด 1 (ตรวจตามรอบ) ไม่ใช้ตารางนี้ — ใช้ checkpoints.sample_size ตามเดิม จึงปฏิเสธ
+// ⚠️ หมวด 1 (ตรวจตามรอบ) ไม่ใช้ตาราง checkpoint_category_settings — ใช้ checkpoints.in_routine + sample_size
+//    จึงปฏิเสธในรายการ settings · กฎตรวจค่ามีชุดเดียว (settingRows) ใช้ทั้งรายจุดและทั้งตาราง
+
+const loadWorkflowCategories = async () => {
+  const [cats] = await query('SELECT id, name, has_workflow FROM check_categories');
+  return new Map(cats.map((c) => [c.id, c]));
+};
+
+// settings: [{ category_id, stage: 'pd'|'qc', sample_qty }] → แถวพร้อม INSERT · ผิดรูป = AppError 400
+const settingRows = (checkpointId, list, catById, label = '') => {
+  if (!Array.isArray(list)) throw new AppError(`settings${label} ต้องเป็น array`, 400);
+  const seen = new Set();
+  return list.map((x) => {
+    const cat = catById.get(Number(x.category_id));
+    if (!cat || !Number(cat.has_workflow)) throw new AppError(`หมวด id=${x.category_id} ตั้งรายจุดไม่ได้${label}`, 400);
+    if (x.stage !== 'pd' && x.stage !== 'qc') throw new AppError(`stage ต้องเป็น pd หรือ qc${label}`, 400);
+    const qty = Number(x.sample_qty);
+    if (!Number.isInteger(qty) || qty < 1 || qty > 10) throw new AppError(`จำนวนชิ้นของ ${cat.name} ต้องเป็น 1-10${label}`, 400);
+    const key = `${cat.id}:${x.stage}`;
+    if (seen.has(key)) throw new AppError(`ส่ง ${cat.name} (${x.stage}) ซ้ำ${label}`, 400);
+    seen.add(key);
+    return [checkpointId, cat.id, x.stage, qty];
+  });
+};
+
+// ตั้งหมวดของจุดเดียว (แทนทั้งชุดของจุดนี้) — body: { settings: [...] } · array ว่าง = ไม่ตรวจในหมวดไหนเลย
 router.put('/checkpoints/:id/categories', requireAdmin, wrap(async (req, res) => {
   if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
   const id = Number(req.params.id);
-  const list = Array.isArray(req.body?.settings) ? req.body.settings : null;
-  if (!list) throw new AppError('settings ต้องเป็น array', 400);
-
   const [[cp]] = await query('SELECT id FROM checkpoints WHERE id = ?', [id]);
   if (!cp) throw new AppError('ไม่พบจุดตรวจนี้', 404);
-  const [cats] = await query('SELECT id, name, has_workflow FROM check_categories');
-  const catById = new Map(cats.map((c) => [c.id, c]));
-
-  const seen = new Set();
-  const rows = list.map((x) => {
-    const cat = catById.get(Number(x.category_id));
-    if (!cat || !Number(cat.has_workflow)) throw new AppError(`หมวด id=${x.category_id} ตั้งรายจุดไม่ได้`, 400);
-    if (x.stage !== 'pd' && x.stage !== 'qc') throw new AppError('stage ต้องเป็น pd หรือ qc', 400);
-    const qty = Number(x.sample_qty);
-    if (!Number.isInteger(qty) || qty < 1 || qty > 10) throw new AppError(`จำนวนชิ้นของ ${cat.name} ต้องเป็น 1-10`, 400);
-    const key = `${cat.id}:${x.stage}`;
-    if (seen.has(key)) throw new AppError(`ส่ง ${cat.name} (${x.stage}) ซ้ำ`, 400);
-    seen.add(key);
-    return [id, cat.id, x.stage, qty];
-  });
+  const rows = settingRows(id, req.body?.settings, await loadWorkflowCategories());
 
   await withTransaction(async (conn) => {
     await conn.execute('DELETE FROM checkpoint_category_settings WHERE checkpoint_id = ?', [id]);
     if (rows.length) {
-      await conn.query(
-        'INSERT INTO checkpoint_category_settings (checkpoint_id, category_id, stage, sample_qty) VALUES ?',
-        [rows]
-      );
+      await conn.query('INSERT INTO checkpoint_category_settings (checkpoint_id, category_id, stage, sample_qty) VALUES ?', [rows]);
     }
   });
   logWrite(req, 'ตั้งหมวดการตรวจของ', 'checkpoints', id);
@@ -281,6 +283,72 @@ router.put('/checkpoints/:id/categories', requireAdmin, wrap(async (req, res) =>
   res.json({ success: true, count: rows.length });
 }));
 
+// ตารางจุดตรวจ × หมวด ของทั้ง item (หน้า Master) — บันทึกทีเดียวทั้งตาราง
+// body: { points: [{ id, in_routine, sample_size, frequency, settings: [...] }] }
+//   in_routine/sample_size/frequency = คอลัมน์ "Inspection Record" (ตรวจตามรอบ) · settings = หมวดอื่น (แทนทั้งชุดของจุดนั้น)
+// ⚠️ ทุก id ต้องเป็นจุดของ item นี้ · ทั้งหมดใน transaction เดียว
+// ⚠️ เปลี่ยน sample_size ของจุดที่มีผลตรวจแล้ว = n ของกราฟเปลี่ยน (buildSubgroups ปฏิเสธการผสม n) → คืนรายชื่อให้เตือน re-baseline
+router.put('/models/:id/category-matrix', requireAdmin, wrap(async (req, res) => {
+  if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const modelId = Number(req.params.id);
+  const points = Array.isArray(req.body?.points) ? req.body.points : null;
+  if (!points || points.length === 0) throw new AppError('points ต้องเป็น array ที่มีอย่างน้อย 1 จุด', 400);
+
+  const [cps] = await query('SELECT id, name, char_type, sample_size FROM checkpoints WHERE model_id = ?', [modelId]);
+  const byId = new Map(cps.map((c) => [c.id, c]));
+  const catById = await loadWorkflowCategories();
+
+  const seen = new Set();
+  const updates = [];
+  const settings = [];
+  for (const p of points) {
+    const cp = byId.get(Number(p.id));
+    if (!cp) throw new AppError(`จุดตรวจ id=${p.id} ไม่ได้อยู่ใน item นี้`, 400);
+    if (seen.has(cp.id)) throw new AppError(`ส่งจุด "${cp.name}" ซ้ำ`, 400);
+    seen.add(cp.id);
+    const label = ` (จุด "${cp.name}")`;
+    const inRoutine = p.in_routine ? 1 : 0;
+    // attribute มีผลเดียวต่อใบเสมอ — n ของจุด attribute = 1
+    const n = cp.char_type === 'attribute' ? 1 : Number(p.sample_size);
+    if (!Number.isInteger(n) || n < 1 || n > 10) throw new AppError(`จำนวนชิ้นตรวจตามรอบต้องเป็น 1-10${label}`, 400);
+    const freq = p.frequency === 'day' ? 'day' : 'shift';
+    updates.push({ id: cp.id, inRoutine, n, freq, nChanged: Number(cp.sample_size) !== n, name: cp.name });
+    settings.push(...settingRows(cp.id, p.settings ?? [], catById, label));
+  }
+
+  // จุดที่ n เปลี่ยนและมีผลตรวจอยู่แล้ว (นับรวมใบที่ยกเลิก — กราฟช่วงเก่ายังอ้าง n เดิม)
+  const changed = updates.filter((u) => u.nChanged);
+  let staleN = [];
+  if (changed.length) {
+    const [used] = await query(
+      'SELECT DISTINCT checkpoint_id FROM inspection_results WHERE checkpoint_id IN (?)',
+      [changed.map((u) => u.id)]
+    );
+    const usedIds = new Set(used.map((r) => r.checkpoint_id));
+    staleN = changed.filter((u) => usedIds.has(u.id)).map((u) => u.name);
+  }
+
+  await withTransaction(async (conn) => {
+    for (const u of updates) {
+      await conn.execute(
+        'UPDATE checkpoints SET in_routine = ?, sample_size = ?, frequency = ? WHERE id = ? AND model_id = ?',
+        [u.inRoutine, u.n, u.freq, u.id, modelId]
+      );
+    }
+    await conn.query('DELETE FROM checkpoint_category_settings WHERE checkpoint_id IN (?)', [updates.map((u) => u.id)]);
+    if (settings.length) {
+      await conn.query('INSERT INTO checkpoint_category_settings (checkpoint_id, category_id, stage, sample_qty) VALUES ?', [settings]);
+    }
+  });
+  logWrite(req, 'ตั้งตารางหมวดการตรวจของ', 'models', modelId);
+  notifyMasterChanged(req);
+  res.json({ success: true, points: updates.length, settings: settings.length, sampleSizeChangedWithData: staleN });
+}));
+
+// สลับ seq_no กับจุดที่อยู่ติดกัน — operator ต้องไล่ตรวจตามลำดับในแบบ ลำดับจึงเป็นข้อมูลจริง
+//
+// ⚠️ ต้องทำใน transaction และพักค่าไว้ที่เลขชั่วคราวก่อน เพราะมี UNIQUE(model_id, seq_no)
+//    ถ้า UPDATE ตรง ๆ ทีละแถวจะชนกันเองกลางคัน
 router.put('/checkpoints/:id/move', requireAdmin, wrap(async (req, res) => {
   const { id } = req.params;
   const { direction } = req.body;

@@ -1635,3 +1635,144 @@ tbody th.mc-sticky-start {
   font-weight: 500;
   color: var(--muted);
 }
+
+/* ══ ตารางจุดตรวจ × หมวดการตรวจ (components/master/CategoryMatrix.js) ══════════ */
+.cm-table th,
+.cm-table td {
+  vertical-align: middle;
+}
+
+.cm-table thead th.cm-group {
+  text-align: center;
+  border-left: 2px solid rgba(255, 255, 255, 0.25);
+}
+
+.cm-name {
+  min-width: 11rem;
+  white-space: nowrap;
+}
+
+.cm-cell {
+  min-width: 6.5rem;
+  text-align: center;
+}
+
+.cm-cell--on {
+  background: var(--blue-tint);
+}
+
+.cm-cell__in {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.cm-cell .form-check-input {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+  cursor: pointer;
+}
+
+.cm-qty {
+  width: 3.75rem;
+  text-align: right;
+}
+
+.cm-freq {
+  width: 5rem;
+}
+
+/* แถวที่แก้แล้วยังไม่บันทึก — เส้นซ้ายน้ำเงิน (ไม่ใช่แดง/เหลือง: ไม่ใช่สเปกหรือคอนโทรล) */
+.cm-table tbody tr.cm-row--dirty th.mc-sticky-start {
+  box-shadow: inset 4px 0 0 var(--blue), inset -1px 0 0 var(--line);
+}
+
+/* หัวตาราง 2 แถว (หมวด / PD·QC): ให้ thead ทั้งก้อนค้าง (theme .mc-freeze thead) ไม่ใช่ th ทีละช่อง
+ * — th ทุกช่องของ .sheet เป็น sticky top:0 จะทำให้แถวที่สองทับแถวแรก */
+.cm-table thead th {
+  position: static;
+}
+
+.cm-table thead th.mc-sticky-start {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+}
+
+/* มือถือ: gutter ของ .row ใน .page ล้นขอบจอ 4px — ตัดทิ้งแนวนอน (clip ไม่สร้างกล่องเลื่อน sticky ยังทำงาน) */
+.page {
+  overflow-x: clip;
+}
+
+/* กล่องเลื่อนของตารางหมวด เตี้ยกว่าจอ (หักแถบ header ที่ค้างอยู่) — หัวตารางที่ค้างจะไม่หลบไปใต้ header ของเว็บ */
+.category-matrix .mc-freeze {
+  max-height: calc(100vh - 12rem);
+  max-height: calc(100dvh - 12rem);
+}
+
+/* ช่อง 1–6 แบบฟอร์ม Excel — ช่องที่ติด ✓ = ชิ้นที่ต้องตรวจ · ช่องที่ใช้ไม่ได้ (ตรวจด้วยตา ช่อง 2+) = เทาทึบเหมือนฟอร์ม */
+.cm-table .cm-group {
+  border-left: 2px solid var(--line-strong);
+}
+
+.cm-table thead .cm-group {
+  border-left-color: rgba(255, 255, 255, 0.35);
+}
+
+.cm-slot {
+  width: 2.4rem;
+  min-width: 2.4rem;
+  padding: 0 !important;
+  text-align: center;
+}
+
+.cm-slot__btn {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 2.4rem;
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--blue-text);
+  transition: background-color 0.12s;
+}
+
+.cm-slot__btn:hover {
+  background: var(--blue-tint);
+}
+
+.cm-slot__btn:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+
+.cm-slot--on .cm-slot__btn {
+  background: var(--blue-tint);
+}
+
+.cm-slot--off {
+  background: var(--head-bg);
+}
+
+.cm-slot-head__btn {
+  all: unset;
+  display: block;
+  width: 100%;
+  cursor: pointer;
+  text-align: center;
+}
+
+.cm-slot-head__btn:hover {
+  text-decoration: underline;
+}
+
+.cm-maxmin div + div {
+  border-top: 1px dotted var(--line);
+}
+
+.cm-freq-cell {
+  padding: 0 0.25rem !important;
+}
