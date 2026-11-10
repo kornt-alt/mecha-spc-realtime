@@ -149,6 +149,10 @@ const MasterSetup = () => {
   //    ทุกครั้งที่สลับแท็บ กรอกจุดตรวจค้างไว้แล้วแวะไปแท็บอื่นจะหายเกลี้ยง
   const [cpForm, setCpForm] = useState(() => blankCheckpoint(readCpMemory()));
   const [editingCp, setEditingCp] = useState(null);
+  // กล่อง pop-up ของสองฟอร์ม — ยกขึ้นมาด้วยเหตุผลเดียวกัน (สลับแท็บแล้วกลับมา กล่องยังเปิด ของที่พิมพ์ยังอยู่)
+  // ⚠️ prefill จาก MO (?item_no=…) = เปิดกล่องเพิ่ม item ให้เลยตั้งแต่ mount
+  const [modelModal, setModelModal] = useState(() => Boolean(prefill));
+  const [cpModal, setCpModal] = useState(false);
   // เครื่องมือวัดที่เคยใช้ เอาไว้เป็นตัวเลือกใน <datalist> — อ่านจาก localStorage ครั้งเดียว
   // แล้วอัปเดตเองทุกครั้งที่บันทึกจุดตรวจสำเร็จ
   const [gaugeMemory, setGaugeMemory] = useState(() => readCpMemory().gauges);
@@ -239,10 +243,12 @@ const MasterSetup = () => {
   // ⚠️ editingCp ชี้ไปจุดตรวจของ item ที่เลือกอยู่ตอนกด "แก้" — สลับ item แล้วปล่อยค้างไว้
   //    จะกลายเป็นหัวการ์ดบอก item ใหม่แต่กดบันทึกไปแก้จุดของ item เก่า และตอนนี้ฟอร์ม
   //    ไม่ได้ unmount ตามแท็บอีกแล้ว สเตตที่ค้างจึงอยู่ได้นานกว่าเดิมมาก
-  useEffect(() => { resetCp(); }, [selectedModel, resetCp]);
+  useEffect(() => { resetCp(); setCpModal(false); }, [selectedModel, resetCp]);
 
   // ── CRUD กลาง ─────────────────────────────────────────────────────────
-  const save = async (table, data, id) => {
+  // { inline: true } = เรียกจากกล่อง pop-up → คืน { ok, id, error } ให้กล่องโชว์ error เอง
+  //   (แถบข้อความหัวหน้าอยู่หลัง backdrop มองไม่เห็น) · ไม่ส่ง = คืน true/false แบบเดิม (SimpleTab)
+  const save = async (table, data, id, { inline = false } = {}) => {
     try {
       const res = id
         ? await apiCall('/master/update', { method: 'PUT', body: { table, id, data } })
@@ -254,8 +260,11 @@ const MasterSetup = () => {
       }
       await loadAll();
       if (table === 'checkpoints') await loadCheckpoints(selectedModel);
-      return true;
-    } catch (e) { fail(e); return false; }
+      return inline ? { ok: true, id: res.id } : true;
+    } catch (e) {
+      if (inline) return { ok: false, error: e.message };
+      fail(e); return false;
+    }
   };
 
   const remove = (table, id, label) => showConfirm({
@@ -404,6 +413,8 @@ const MasterSetup = () => {
           editingModel={editingModel} setEditingModel={setEditingModel}
           cpForm={cpForm} setCpForm={setCpForm}
           editingCp={editingCp} setEditingCp={setEditingCp}
+          modelModal={modelModal} setModelModal={setModelModal}
+          cpModal={cpModal} setCpModal={setCpModal}
           resetCp={resetCp} onRemember={rememberMeasurement} gaugeMemory={gaugeMemory}
           specMode={specMode} setSpecMode={setSpecMode} tolForm={tolForm} setTolForm={setTolForm}
           models={models} divisions={lookups.divisions} customers={lookups.customers ?? []}
@@ -629,6 +640,7 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, onAlert, lab
 const ModelsTab = ({
   fromMo, modelForm, setModelForm, editingModel, setEditingModel,
   cpForm, setCpForm, editingCp, setEditingCp, resetCp, onRemember, gaugeMemory,
+  modelModal, setModelModal, cpModal, setCpModal,
   specMode, setSpecMode, tolForm, setTolForm,
   models, divisions, customers, selectedModel, setSelectedModel, checkpoints,
   onSave, onRemove, onMove, onPurgeVoided, onPreviewBaseline, onClearBaseline,
@@ -636,7 +648,14 @@ const ModelsTab = ({
   scopeName,
   onAlert,
 }) => {
-  const resetModel = () => { setModelForm(blankModel()); setEditingModel(null); };
+  // error ของกล่อง — ชั่วคราว หายตอนสลับแท็บได้ (ของที่พิมพ์ไม่หาย อยู่ที่ <MasterSetup>)
+  const [modelErr, setModelErr] = useState(null);
+  const [cpErr, setCpErr] = useState(null);
+  const resetModel = () => { setModelForm(blankModel()); setEditingModel(null); setModelErr(null); };
+  const closeModel = () => { resetModel(); setModelModal(false); };
+  const openAddModel = () => { resetModel(); setModelModal(true); };
+  const closeCp = () => { resetCp(); setCpErr(null); setCpModal(false); };
+  const openAddCp = () => { resetCp(); setCpErr(null); setCpModal(true); };
 
   // ค้นหา item ในตารางข้างล่าง — เป็นสเตตชั่วคราวของการมอง ไม่ใช่ของที่กรอกค้างไว้
   // จึงปล่อยให้หายตอนสลับแท็บได้ ต่างจาก modelForm/cpForm ที่ถูกยกขึ้นไปไว้ที่ <MasterSetup>
@@ -667,14 +686,11 @@ const ModelsTab = ({
   const submitModel = async (e) => {
     e.preventDefault();
     if (!modelForm.division_id || !modelForm.item_no || !modelForm.item_name) {
-      return onAlert({ title: 'กรอกข้อมูลไม่ครบ', body: 'กรอก Division / Item No. / ชื่อ item ให้ครบ' });
+      return setModelErr('กรอก Division / Item No. / ชื่อ item ให้ครบ');
     }
     const bad = MIN_FIELDS.find((f) => badMin(modelForm[f.key]));
     if (bad) {
-      return onAlert({
-        title: 'เกณฑ์ไม่ถูกต้อง',
-        body: `min ${bad.label} ต้องเป็นตัวเลขมากกว่า 0 และน้อยกว่า 100 — หรือเว้นว่างเพื่อใช้เกณฑ์ของลูกค้า`,
-      });
+      return setModelErr(`min ${bad.label} ต้องเป็นตัวเลขมากกว่า 0 และน้อยกว่า 100 — หรือเว้นว่างเพื่อใช้เกณฑ์ของลูกค้า`);
     }
     // ⚠️ ช่องว่างต้องเป็น null — '' ลงคอลัมน์ INT/DECIMAL ไม่ได้ และ NULL คือ "ตามลูกค้า"
     const data = {
@@ -682,7 +698,13 @@ const ModelsTab = ({
       customer_id: modelForm.customer_id || null,
       ...Object.fromEntries(MIN_FIELDS.map((f) => [f.key, numOrNull(modelForm[f.key])])),
     };
-    if (await onSave('models', data, editingModel)) resetModel();
+    setModelErr(null);
+    const r = await onSave('models', data, editingModel, { inline: true });
+    if (!r.ok) return setModelErr(r.error);
+    const newId = editingModel ? null : r.id;
+    closeModel();
+    // เพิ่ม item ใหม่แล้วเลือกให้เลย — ขั้นต่อไปคือเพิ่มจุดตรวจของมัน (item ไม่มีจุดตรวจ = กรอกใบตรวจไม่ได้)
+    if (newId) setSelectedModel(String(newId));
   };
 
   // ช่องเกณฑ์ที่เว้นว่างบอกว่าจะได้ค่าอะไร — คนกรอกต้องเห็นว่าไม่ override แล้วได้เลขไหน
@@ -693,10 +715,10 @@ const ModelsTab = ({
 
   const submitCp = async (e) => {
     e.preventDefault();
-    if (!selectedModel) return onAlert({ title: 'ยังไม่ได้เลือก item', body: 'เลือก item ก่อน' });
-    if (!cpForm.name) return onAlert({ title: 'กรอกข้อมูลไม่ครบ', body: 'กรอกชื่อจุดตรวจ' });
+    if (!selectedModel) return setCpErr('เลือก item ก่อน');
+    if (!cpForm.name) return setCpErr('กรอกชื่อจุดตรวจ');
     // สเปกกลับหัวบันทึกไปแล้วทุกชิ้นที่วัดจะเป็น NG และ judgment ถูก snapshot ไปแล้ว
-    if (issues.blocking) return onAlert({ title: 'สเปกไม่ถูกต้อง', body: issues.blocking });
+    if (issues.blocking) return setCpErr(issues.blocking);
 
     const isAttr = cpForm.char_type === 'attribute';
     const data = {
@@ -719,15 +741,18 @@ const ModelsTab = ({
     // seq_no ต่อท้ายอัตโนมัติตอนเพิ่มใหม่ — ลำดับปรับด้วยปุ่มลูกศรทีหลัง
     if (!editingCp) data.seq_no = (checkpoints.reduce((m, c) => Math.max(m, c.seq_no), 0) || 0) + 1;
 
-    if (await onSave('checkpoints', data, editingCp)) {
-      // ⚠️ ต้องจำก่อน resetCp เพราะ resetCp เติมฟอร์มจากสิ่งที่จำไว้
-      onRemember(data);
-      resetCp();
-    }
+    setCpErr(null);
+    const r = await onSave('checkpoints', data, editingCp, { inline: true });
+    if (!r.ok) return setCpErr(r.error);
+    // ⚠️ ต้องจำก่อน resetCp (ใน closeCp) เพราะ resetCp เติมฟอร์มจากสิ่งที่จำไว้
+    onRemember(data);
+    closeCp();
   };
 
   const startEditCp = (cp) => {
     setEditingCp(cp.id);
+    setCpErr(null);
+    setCpModal(true);
     // แก้ของเก่าต้องเห็นเลขที่เก็บอยู่จริงก่อนเสมอ — สลับไปโหมดพิกัดเองได้ทีหลัง
     setSpecMode('limits');
     setTolForm(EMPTY_TOL);
@@ -789,11 +814,8 @@ const ModelsTab = ({
     target: numOrNull(cpForm.target),
   };
 
-  // "แก้จุดนี้" จากตารางหมวด → เปิดฟอร์มจุดตรวจด้านบนแล้วเลื่อนขึ้นไปหา
-  const editFromMatrix = (cp) => {
-    startEditCp(cp);
-    document.getElementById('cp-name')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  };
+  // "แก้จุดนี้" จากตารางหมวด → เปิดกล่องแก้จุดตรวจตัวเดียวกับปุ่ม "แก้" ในตาราง
+  const editFromMatrix = startEditCp;
 
   return (
     <>
@@ -801,79 +823,11 @@ const ModelsTab = ({
       {/* รุ่น */}
       <Col lg={4}>
         <Card className="mb-3">
-          <Card.Header>รุ่น (Model)</Card.Header>
+          <Card.Header className="d-flex align-items-center gap-2">
+            <span>Item</span>
+            <Button size="sm" className="ms-auto" onClick={openAddModel}>+ เพิ่ม Item</Button>
+          </Card.Header>
           <Card.Body>
-            {fromMo && !editingModel && (
-              <Alert variant="info" className="py-2 px-3 mb-2 small">
-                ข้อมูลจาก MO เติมไว้ให้แล้ว — ตรวจดูแล้วกด <b>เพิ่ม Item</b> จากนั้นใส่จุดตรวจทางขวา
-                (เพิ่ม item เฉย ๆ ยังกรอกใบตรวจไม่ได้ ต้องมีจุดตรวจด้วย)
-              </Alert>
-            )}
-            <Form onSubmit={submitModel}>
-              <div className="mb-2">
-                <SearchSelect
-                  id="model-division"
-                  aria-label="Division ของ item"
-                  value={modelForm.division_id}
-                  onChange={(value) => setModelForm((f) => ({ ...f, division_id: value }))}
-                  placeholder="-- Division --"
-                  options={divisions.map((d) => ({ value: String(d.id), label: d.name }))}
-                />
-              </div>
-              <Form.Control className="mb-2" placeholder="Item No. เช่น AAB-1001-01"
-                value={modelForm.item_no} onChange={(e) => setModelForm((f) => ({ ...f, item_no: e.target.value }))} />
-              <Form.Control className="mb-2" placeholder="ชื่อ item"
-                value={modelForm.item_name} onChange={(e) => setModelForm((f) => ({ ...f, item_name: e.target.value }))} />
-              <Row className="g-2 mb-2">
-                <Col><Form.Control placeholder="เลขแบบ"
-                  value={modelForm.drawing_no} onChange={(e) => setModelForm((f) => ({ ...f, drawing_no: e.target.value }))} /></Col>
-                <Col xs={4}><Form.Control placeholder="Rev"
-                  value={modelForm.drawing_rev} onChange={(e) => setModelForm((f) => ({ ...f, drawing_rev: e.target.value }))} /></Col>
-              </Row>
-              {/* ลูกค้ากำหนดเกณฑ์ Cp/Cpk ต่างกัน — เลือกลูกค้าแล้วช่องข้างล่างว่างไว้ได้ (ใช้ของลูกค้า)
-                  ⚠️ ต้องมีแถว "ไม่ระบุ" จริงในลิสต์ ไม่งั้นเลือกลูกค้าไปแล้วถอยกลับไม่ได้ */}
-              <div className="mb-2">
-                <SearchSelect
-                  id="model-customer"
-                  aria-label="ลูกค้าของ item"
-                  value={modelForm.customer_id === null ? '' : String(modelForm.customer_id ?? '')}
-                  onChange={(value) => setModelForm((f) => ({ ...f, customer_id: value }))}
-                  placeholder="-- ลูกค้า --"
-                  options={[
-                    { value: '', label: 'ไม่ระบุลูกค้า' },
-                    ...customers.map((c) => ({
-                      value: String(c.id),
-                      label: c.name,
-                      hint: Number(c.is_active) === 0 ? 'ปิดใช้งาน' : '',
-                    })),
-                  ]}
-                />
-                {/* ชุดกฎ OCS มากับลูกค้า ไม่มี override ราย item — บอกไว้ตรงนี้ คนเลือกลูกค้าจะได้รู้ว่ากราฟจะใช้กี่กฎ */}
-                <div className="small text-muted mt-1">
-                  {formCustomer?.ocs_rule_set === 'full' ? 'กฎ OCS ครบ 8 ข้อ (ตามลูกค้า)' : 'กฎ OCS ข้อ 1–4'}
-                </div>
-              </div>
-              <div className="small text-muted mb-1">เกณฑ์ขั้นต่ำ (เว้นว่าง = ตามลูกค้า)</div>
-              <Row className="g-2 mb-2">
-                {MIN_FIELDS.map((f) => (
-                  <Form.Group as={Col} xs={6} key={f.key} controlId={`model-${f.key}`}>
-                    <Form.Label className="small mb-0">min {f.label}</Form.Label>
-                    <Form.Control
-                      type="number" step="0.01" min="0.01" size="sm"
-                      placeholder={minPlaceholder(f.key)}
-                      value={modelForm[f.key] ?? ''}
-                      onChange={(e) => setModelForm((m) => ({ ...m, [f.key]: e.target.value }))}
-                    />
-                  </Form.Group>
-                ))}
-              </Row>
-              <Button type="submit" className="w-100" variant={editingModel ? 'warning' : 'primary'}>
-                {editingModel ? 'บันทึกการแก้ไข' : 'เพิ่ม Item'}
-              </Button>
-              {editingModel && <Button variant="link" className="w-100" onClick={resetModel}>ยกเลิก</Button>}
-            </Form>
-
-            <hr />
             {/* ลิสต์ item ยาวเป็นร้อยแถว เลื่อนหาช้ากว่าพิมพ์ — ค้นได้ทั้งเลข item ชื่อ และ division */}
             <Form.Control
               className="mb-2"
@@ -906,7 +860,7 @@ const ModelsTab = ({
                     </td>
                     <td style={{ width: 96 }} className="text-end align-middle">
                       <Button size="sm" variant="outline-primary" className="me-1"
-                        onClick={() => { setEditingModel(m.id); setModelForm({
+                        onClick={() => { setEditingModel(m.id); setModelErr(null); setModelModal(true); setModelForm({
                           division_id: m.division_id ?? '', item_no: m.item_no ?? '',
                           item_name: m.item_name ?? '', drawing_no: m.drawing_no ?? '', drawing_rev: m.drawing_rev ?? '',
                           customer_id: m.customer_id ?? '',
@@ -928,169 +882,15 @@ const ModelsTab = ({
       {/* จุดตรวจ */}
       <Col lg={8}>
         <Card style={{ opacity: selectedModel ? 1 : 0.6 }}>
-          {/* ตอนแก้ ฟอร์มอยู่บนสุดแต่แถวอยู่ในตารางข้างล่าง ถ้าหัวการ์ดไม่บอกว่ากำลังแก้จุดไหน
-              สัญญาณเดียวที่มีคือปุ่มเปลี่ยนเป็นสีเหลือง ซึ่งมองข้ามง่ายมาก */}
-          <Card.Header>
-            {editingCpRow
-              ? <>กำลังแก้จุดที่ <b>{editingCpRow.seq_no}</b> — {editingCpRow.name}</>
-              : <>จุดตรวจ {selectedModel && `— ${models.find((m) => String(m.id) === selectedModel)?.item_no ?? ''}`}</>}
+          <Card.Header className="d-flex align-items-center gap-2">
+            <span>
+              จุดตรวจ {selectedModel
+                ? `— ${models.find((m) => String(m.id) === selectedModel)?.item_no ?? ''}`
+                : <span className="small text-muted fw-normal">— เลือก item ทางซ้ายก่อน</span>}
+            </span>
+            <Button size="sm" className="ms-auto" disabled={!selectedModel} onClick={openAddCp}>+ เพิ่มจุดตรวจ</Button>
           </Card.Header>
           <Card.Body>
-            <Form onSubmit={submitCp}>
-              <Row className="g-2 mb-2 align-items-end">
-                <Form.Group as={Col} md={3} controlId="cp-name">
-                  <Form.Label className="small mb-1">ชื่อจุดตรวจ</Form.Label>
-                  <Form.Control placeholder="เช่น Dimension 3.1" {...cpField('name')} disabled={!selectedModel} />
-                </Form.Group>
-                {/* Characteristic = แถว 11 ของชีต Input (Slot / OD / Rz) แยกจากชื่อจุด
-                    free text + <datalist> ตามหลักเดียวกับหน่วย/เครื่องมือวัด */}
-                <Form.Group as={Col} md={2} controlId="cp-characteristic">
-                  <Form.Label className="small mb-1">Characteristic</Form.Label>
-                  <Form.Control list="cp-char-options" placeholder="เช่น OD"
-                    {...cpField('characteristic')} disabled={!selectedModel} />
-                </Form.Group>
-                <Form.Group as={Col} md={2} controlId="cp-char-type">
-                  <Form.Label className="small mb-1">ชนิด</Form.Label>
-                  <Form.Select {...cpField('char_type')} disabled={!selectedModel}>
-                    {CHAR_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-                  </Form.Select>
-                </Form.Group>
-                {/* ⚠️ หน่วยกับเครื่องมือวัดเป็น <input list> โดยตั้งใจ ไม่ใช่ <Form.Select>
-                    ทั้งสองคอลัมน์เป็น free text มาแต่ไหนแต่ไร บังคับเลือกเมื่อไหร่ ค่าเก่าที่
-                    ไม่ตรงลิสต์จะแสดงเป็นช่องว่างแล้วถูกเขียนทับตอนกดบันทึกแก้อย่างอื่น */}
-                <Form.Group as={Col} md={2} controlId="cp-unit">
-                  <Form.Label className="small mb-1">หน่วย</Form.Label>
-                  <Form.Control list="cp-unit-options" placeholder="mm"
-                    {...cpField('unit')} disabled={!selectedModel || isAttr} />
-                </Form.Group>
-                <Form.Group as={Col} md={3} controlId="cp-gauge">
-                  <Form.Label className="small mb-1">เครื่องมือวัด</Form.Label>
-                  <Form.Control list="cp-gauge-options" placeholder="เช่น Micrometer"
-                    {...cpField('gauge')} disabled={!selectedModel} />
-                </Form.Group>
-              </Row>
-
-              <datalist id="cp-unit-options">
-                {unitOptions.map((u) => <option key={u} value={u} />)}
-              </datalist>
-              <datalist id="cp-gauge-options">
-                {gaugeOptions.map((g) => <option key={g} value={g} />)}
-              </datalist>
-              <datalist id="cp-char-options">
-                {charOptions.map((c) => <option key={c} value={c} />)}
-              </datalist>
-
-              {/* แบบส่วนใหญ่เขียนเป็นค่ากลาง + พิกัด (1.23 +0.5 -0.6) ไม่ใช่เลขสัมบูรณ์
-                  ให้บวกลบในหัวก่อนพิมพ์คือเปิดช่องให้บวกผิด ซึ่ง judgment ถูก snapshot
-                  ลงใบตรวจไปแล้วตอนตรวจ แก้ย้อนหลังไม่ได้ */}
-              {!isAttr && (
-                <div className="d-flex flex-wrap gap-3 mb-2" role="radiogroup" aria-label="รูปแบบการกรอกสเปก">
-                  {SPEC_MODES.map((m) => (
-                    <Form.Check
-                      key={m.value}
-                      type="radio"
-                      id={`cp-spec-mode-${m.value}`}
-                      name="cp-spec-mode"
-                      className="small"
-                      label={m.label}
-                      checked={specMode === m.value}
-                      disabled={!selectedModel}
-                      onChange={() => switchSpecMode(m.value)}
-                    />
-                  ))}
-                </div>
-              )}
-
-              <Row className="g-2 mb-2 align-items-end">
-                {tolMode ? (
-                  <>
-                    <Form.Group as={Col} md={2} controlId="cp-nominal">
-                      <Form.Label className="small mb-1">ค่ากลาง</Form.Label>
-                      <Form.Control type="number" step="0.0001" placeholder="1.23"
-                        {...tolField('nominal')} disabled={!selectedModel} />
-                    </Form.Group>
-                    {/* ⚠️ สองช่องนี้ต้องเป็น type="text" ห้ามเป็น type="number" —
-                        input type=number ถือว่า "+0.5" เป็นค่าไม่ถูกต้องตามสเปก HTML
-                        (อนุญาตแค่เครื่องหมายลบ) แล้วคืนค่าว่างเงียบ ๆ พิกัดบวกทั้งคู่
-                        (งานรู เช่น 10 +0.015 +0.005) จะกรอกไม่ได้เลย
-                        เหตุผลเดียวกับช่องกรอกค่าวัดใน InspectionSheet.js */}
-                    <Form.Group as={Col} md={2} controlId="cp-tol-upper">
-                      <Form.Label className="small mb-1">พิกัดบน</Form.Label>
-                      <Form.Control type="text" inputMode="decimal" placeholder="+0.5"
-                        {...tolField('tolUpper')} disabled={!selectedModel} />
-                    </Form.Group>
-                    <Form.Group as={Col} md={2} controlId="cp-tol-lower">
-                      <Form.Label className="small mb-1">พิกัดล่าง</Form.Label>
-                      <Form.Control type="text" inputMode="decimal" placeholder="-0.6"
-                        {...tolField('tolLower')} disabled={!selectedModel} />
-                    </Form.Group>
-                  </>
-                ) : (
-                  <>
-                    <Form.Group as={Col} md={2} controlId="cp-lsl">
-                      <Form.Label className="small mb-1">LSL</Form.Label>
-                      <Form.Control type="number" step="0.0001" {...cpField('lsl')} disabled={!selectedModel || isAttr} />
-                    </Form.Group>
-                    <Form.Group as={Col} md={2} controlId="cp-target">
-                      <Form.Label className="small mb-1">Target</Form.Label>
-                      <Form.Control type="number" step="0.0001" {...cpField('target')} disabled={!selectedModel || isAttr} />
-                    </Form.Group>
-                    <Form.Group as={Col} md={2} controlId="cp-usl">
-                      <Form.Label className="small mb-1">USL</Form.Label>
-                      <Form.Control type="number" step="0.0001" {...cpField('usl')} disabled={!selectedModel || isAttr} />
-                    </Form.Group>
-                  </>
-                )}
-                <Form.Group as={Col} md={2} controlId="cp-sample-size">
-                  {/* n = 1 → กราฟ I-MR · n >= 2 → กราฟ X-bar R (ตาราง A2/D3/D4 มีถึง 10) */}
-                  <Form.Label className="small mb-1">ชิ้น/ครั้ง</Form.Label>
-                  <Form.Control type="number" min="1" max="10"
-                    {...cpField('sample_size')} disabled={!selectedModel || isAttr} />
-                </Form.Group>
-                <Form.Group as={Col} md={2} controlId="cp-frequency">
-                  <Form.Label className="small mb-1">ความถี่</Form.Label>
-                  <Form.Select {...cpField('frequency')} disabled={!selectedModel}>
-                    {FREQUENCIES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
-                  </Form.Select>
-                </Form.Group>
-                <Col md="auto" className="d-flex align-items-center gap-3">
-                  <Form.Check label="SC point" checked={cpForm.is_critical} disabled={!selectedModel}
-                    onChange={(e) => setCpForm((f) => ({ ...f, is_critical: e.target.checked }))} />
-                  <Form.Check label="ใช้งาน" checked={cpForm.is_active} disabled={!selectedModel}
-                    onChange={(e) => setCpForm((f) => ({ ...f, is_active: e.target.checked }))} />
-                </Col>
-                <Col md="auto">
-                  <Button type="submit" variant={editingCp ? 'warning' : 'primary'} disabled={!selectedModel}>
-                    {editingCp ? 'บันทึก' : 'เพิ่มจุดตรวจ'}
-                  </Button>
-                  {editingCp && <Button variant="link" onClick={resetCp}>ยกเลิก</Button>}
-                </Col>
-              </Row>
-
-              {/* ⚠️ ห้ามเป็น <Alert> — ของ react-bootstrap มี role="alert" ติดมา แล้วจะกลายเป็น
-                  "คำเตือน" ทั้งที่เป็นแค่ผลลัพธ์ที่คำนวณได้ (มีเทสล็อกไว้ว่าสเปกด้านเดียว
-                  ต้องไม่มี alert สักตัว) */}
-              {tolMode && (
-                <div className="small text-muted mb-2 d-flex align-items-center gap-2">
-                  <span>จะบันทึกเป็น</span>
-                  <SpecValue checkpoint={specPreview} />
-                </div>
-              )}
-
-              {!isAttr && (
-                <div className="small text-muted mb-2">
-                  ชิ้น/ครั้ง 1 = กราฟ I-MR · ตั้งแต่ 2 = กราฟ X̄-R · เว้น LSL หรือ USL ว่างได้ถ้าแบบคุมด้านเดียว
-                  {tolMode && ' · ไม่ใส่เครื่องหมาย = พิกัดบนขึ้น พิกัดล่างลง · ใส่ + หรือ - เองได้ถ้าแบบเขียนไว้แบบนั้น (เช่น 10 -0.005 -0.015)'}
-                </div>
-              )}
-              {issues.blocking && (
-                <Alert variant="danger" className="py-2 px-3 mb-2 small">{issues.blocking}</Alert>
-              )}
-              {issues.warnings.map((w) => (
-                <Alert key={w} variant="warning" className="py-2 px-3 mb-2 small">{w}</Alert>
-              ))}
-            </Form>
-
             {/* ⚠️ ไม่มีเรียง/กรอง/แบ่งหน้าโดยตั้งใจ — ลำดับแถว = seq_no ของใบตรวจ และปุ่ม ▲▼ ย้ายตามลำดับนี้
                 เรียงใหม่บนจอเมื่อไหร่ "ย้ายขึ้น" จะดูเหมือนย้ายผิดที่ · ตรึงหัว + คอลัมน์ลำดับ/จัดการพอ */}
             <div className="mc-freeze">
@@ -1208,6 +1008,254 @@ const ModelsTab = ({
         onAlert={onAlert}
       />
     )}
+
+    {/* ── กล่องเพิ่ม/แก้ item ── animation={false} ตามกฎ AppDialog · ไม่ใช้ scrollable (ลิสต์ของ SearchSelect โดนตัด) */}
+    <Modal show={modelModal} onHide={closeModel} animation={false} backdrop="static">
+      <Modal.Header closeButton>
+        <Modal.Title>{editingModel ? `แก้ Item ${modelForm.item_no}` : 'เพิ่ม Item'}</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        {/* ⚠️ ในกล่องห้ามใช้ <Alert> (role="alert") — ใช้ .form-note */}
+        {fromMo && !editingModel && (
+          <div className="form-note form-note--info mb-2">
+            ข้อมูลจาก MO เติมไว้ให้แล้ว — ตรวจดูแล้วกด <b>เพิ่ม Item</b> จากนั้นเพิ่มจุดตรวจ
+            (เพิ่ม item เฉย ๆ ยังกรอกใบตรวจไม่ได้ ต้องมีจุดตรวจด้วย)
+          </div>
+        )}
+        <Form id="model-form" onSubmit={submitModel}>
+          <div className="mb-2">
+            <SearchSelect
+              id="model-division"
+              aria-label="Division ของ item"
+              value={modelForm.division_id}
+              onChange={(value) => setModelForm((f) => ({ ...f, division_id: value }))}
+              placeholder="-- Division --"
+              options={divisions.map((d) => ({ value: String(d.id), label: d.name }))}
+            />
+          </div>
+          <Form.Control className="mb-2" placeholder="Item No. เช่น AAB-1001-01"
+            value={modelForm.item_no} onChange={(e) => setModelForm((f) => ({ ...f, item_no: e.target.value }))} />
+          <Form.Control className="mb-2" placeholder="ชื่อ item"
+            value={modelForm.item_name} onChange={(e) => setModelForm((f) => ({ ...f, item_name: e.target.value }))} />
+          <Row className="g-2 mb-2">
+            <Col><Form.Control placeholder="เลขแบบ"
+              value={modelForm.drawing_no} onChange={(e) => setModelForm((f) => ({ ...f, drawing_no: e.target.value }))} /></Col>
+            <Col xs={4}><Form.Control placeholder="Rev"
+              value={modelForm.drawing_rev} onChange={(e) => setModelForm((f) => ({ ...f, drawing_rev: e.target.value }))} /></Col>
+          </Row>
+          {/* ลูกค้ากำหนดเกณฑ์ Cp/Cpk ต่างกัน — เลือกลูกค้าแล้วช่องข้างล่างว่างไว้ได้ (ใช้ของลูกค้า)
+              ⚠️ ต้องมีแถว "ไม่ระบุ" จริงในลิสต์ ไม่งั้นเลือกลูกค้าไปแล้วถอยกลับไม่ได้ */}
+          <div className="mb-2">
+            <SearchSelect
+              id="model-customer"
+              aria-label="ลูกค้าของ item"
+              value={modelForm.customer_id === null ? '' : String(modelForm.customer_id ?? '')}
+              onChange={(value) => setModelForm((f) => ({ ...f, customer_id: value }))}
+              placeholder="-- ลูกค้า --"
+              options={[
+                { value: '', label: 'ไม่ระบุลูกค้า' },
+                ...customers.map((c) => ({
+                  value: String(c.id),
+                  label: c.name,
+                  hint: Number(c.is_active) === 0 ? 'ปิดใช้งาน' : '',
+                })),
+              ]}
+            />
+            {/* ชุดกฎ OCS มากับลูกค้า ไม่มี override ราย item — บอกไว้ตรงนี้ คนเลือกลูกค้าจะได้รู้ว่ากราฟจะใช้กี่กฎ */}
+            <div className="small text-muted mt-1">
+              {formCustomer?.ocs_rule_set === 'full' ? 'กฎ OCS ครบ 8 ข้อ (ตามลูกค้า)' : 'กฎ OCS ข้อ 1–4'}
+            </div>
+          </div>
+          <div className="small text-muted mb-1">เกณฑ์ขั้นต่ำ (เว้นว่าง = ตามลูกค้า)</div>
+          <Row className="g-2 mb-2">
+            {MIN_FIELDS.map((f) => (
+              <Form.Group as={Col} xs={6} key={f.key} controlId={`model-${f.key}`}>
+                <Form.Label className="small mb-0">min {f.label}</Form.Label>
+                <Form.Control
+                  type="number" step="0.01" min="0.01" size="sm"
+                  placeholder={minPlaceholder(f.key)}
+                  value={modelForm[f.key] ?? ''}
+                  onChange={(e) => setModelForm((m) => ({ ...m, [f.key]: e.target.value }))}
+                />
+              </Form.Group>
+            ))}
+          </Row>
+        </Form>
+        {modelErr && <div className="form-note form-note--danger mt-2" role="status">{modelErr}</div>}
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="outline-secondary" onClick={closeModel}>ยกเลิก</Button>
+        <Button type="submit" form="model-form">{editingModel ? 'บันทึกการแก้ไข' : 'เพิ่ม Item'}</Button>
+      </Modal.Footer>
+    </Modal>
+
+    {/* ── กล่องเพิ่ม/แก้จุดตรวจ ── backdrop static: คลิกพลาดนอกกล่องต้องไม่ทิ้งสเปกที่พิมพ์ไว้ */}
+    <Modal show={cpModal && Boolean(selectedModel)} onHide={closeCp} animation={false} backdrop="static" size="xl">
+      <Modal.Header closeButton>
+        <Modal.Title>
+          {editingCpRow
+            ? <>แก้จุดที่ {editingCpRow.seq_no} — {editingCpRow.name}</>
+            : <>เพิ่มจุดตรวจ — {models.find((m) => String(m.id) === selectedModel)?.item_no ?? ''}</>}
+        </Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        <Form id="cp-form" onSubmit={submitCp}>
+          <Row className="g-2 mb-2 align-items-end">
+            <Form.Group as={Col} md={3} controlId="cp-name">
+              <Form.Label className="small mb-1">ชื่อจุดตรวจ</Form.Label>
+              <Form.Control placeholder="เช่น Dimension 3.1" {...cpField('name')} disabled={!selectedModel} />
+            </Form.Group>
+            {/* Characteristic = แถว 11 ของชีต Input (Slot / OD / Rz) แยกจากชื่อจุด
+                free text + <datalist> ตามหลักเดียวกับหน่วย/เครื่องมือวัด */}
+            <Form.Group as={Col} md={2} controlId="cp-characteristic">
+              <Form.Label className="small mb-1">Characteristic</Form.Label>
+              <Form.Control list="cp-char-options" placeholder="เช่น OD"
+                {...cpField('characteristic')} disabled={!selectedModel} />
+            </Form.Group>
+            <Form.Group as={Col} md={2} controlId="cp-char-type">
+              <Form.Label className="small mb-1">ชนิด</Form.Label>
+              <Form.Select {...cpField('char_type')} disabled={!selectedModel}>
+                {CHAR_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </Form.Select>
+            </Form.Group>
+            {/* ⚠️ หน่วยกับเครื่องมือวัดเป็น <input list> โดยตั้งใจ ไม่ใช่ <Form.Select>
+                ทั้งสองคอลัมน์เป็น free text มาแต่ไหนแต่ไร บังคับเลือกเมื่อไหร่ ค่าเก่าที่
+                ไม่ตรงลิสต์จะแสดงเป็นช่องว่างแล้วถูกเขียนทับตอนกดบันทึกแก้อย่างอื่น */}
+            <Form.Group as={Col} md={2} controlId="cp-unit">
+              <Form.Label className="small mb-1">หน่วย</Form.Label>
+              <Form.Control list="cp-unit-options" placeholder="mm"
+                {...cpField('unit')} disabled={!selectedModel || isAttr} />
+            </Form.Group>
+            <Form.Group as={Col} md={3} controlId="cp-gauge">
+              <Form.Label className="small mb-1">เครื่องมือวัด</Form.Label>
+              <Form.Control list="cp-gauge-options" placeholder="เช่น Micrometer"
+                {...cpField('gauge')} disabled={!selectedModel} />
+            </Form.Group>
+          </Row>
+
+          <datalist id="cp-unit-options">
+            {unitOptions.map((u) => <option key={u} value={u} />)}
+          </datalist>
+          <datalist id="cp-gauge-options">
+            {gaugeOptions.map((g) => <option key={g} value={g} />)}
+          </datalist>
+          <datalist id="cp-char-options">
+            {charOptions.map((c) => <option key={c} value={c} />)}
+          </datalist>
+
+          {/* แบบส่วนใหญ่เขียนเป็นค่ากลาง + พิกัด (1.23 +0.5 -0.6) ไม่ใช่เลขสัมบูรณ์
+              ให้บวกลบในหัวก่อนพิมพ์คือเปิดช่องให้บวกผิด ซึ่ง judgment ถูก snapshot
+              ลงใบตรวจไปแล้วตอนตรวจ แก้ย้อนหลังไม่ได้ */}
+          {!isAttr && (
+            <div className="d-flex flex-wrap gap-3 mb-2" role="radiogroup" aria-label="รูปแบบการกรอกสเปก">
+              {SPEC_MODES.map((m) => (
+                <Form.Check
+                  key={m.value}
+                  type="radio"
+                  id={`cp-spec-mode-${m.value}`}
+                  name="cp-spec-mode"
+                  className="small"
+                  label={m.label}
+                  checked={specMode === m.value}
+                  disabled={!selectedModel}
+                  onChange={() => switchSpecMode(m.value)}
+                />
+              ))}
+            </div>
+          )}
+
+          <Row className="g-2 mb-2 align-items-end">
+            {tolMode ? (
+              <>
+                <Form.Group as={Col} md={2} controlId="cp-nominal">
+                  <Form.Label className="small mb-1">ค่ากลาง</Form.Label>
+                  <Form.Control type="number" step="0.0001" placeholder="1.23"
+                    {...tolField('nominal')} disabled={!selectedModel} />
+                </Form.Group>
+                {/* ⚠️ สองช่องนี้ต้องเป็น type="text" ห้ามเป็น type="number" —
+                    input type=number ถือว่า "+0.5" เป็นค่าไม่ถูกต้องตามสเปก HTML
+                    (อนุญาตแค่เครื่องหมายลบ) แล้วคืนค่าว่างเงียบ ๆ พิกัดบวกทั้งคู่
+                    (งานรู เช่น 10 +0.015 +0.005) จะกรอกไม่ได้เลย
+                    เหตุผลเดียวกับช่องกรอกค่าวัดใน InspectionSheet.js */}
+                <Form.Group as={Col} md={2} controlId="cp-tol-upper">
+                  <Form.Label className="small mb-1">พิกัดบน</Form.Label>
+                  <Form.Control type="text" inputMode="decimal" placeholder="+0.5"
+                    {...tolField('tolUpper')} disabled={!selectedModel} />
+                </Form.Group>
+                <Form.Group as={Col} md={2} controlId="cp-tol-lower">
+                  <Form.Label className="small mb-1">พิกัดล่าง</Form.Label>
+                  <Form.Control type="text" inputMode="decimal" placeholder="-0.6"
+                    {...tolField('tolLower')} disabled={!selectedModel} />
+                </Form.Group>
+              </>
+            ) : (
+              <>
+                <Form.Group as={Col} md={2} controlId="cp-lsl">
+                  <Form.Label className="small mb-1">LSL</Form.Label>
+                  <Form.Control type="number" step="0.0001" {...cpField('lsl')} disabled={!selectedModel || isAttr} />
+                </Form.Group>
+                <Form.Group as={Col} md={2} controlId="cp-target">
+                  <Form.Label className="small mb-1">Target</Form.Label>
+                  <Form.Control type="number" step="0.0001" {...cpField('target')} disabled={!selectedModel || isAttr} />
+                </Form.Group>
+                <Form.Group as={Col} md={2} controlId="cp-usl">
+                  <Form.Label className="small mb-1">USL</Form.Label>
+                  <Form.Control type="number" step="0.0001" {...cpField('usl')} disabled={!selectedModel || isAttr} />
+                </Form.Group>
+              </>
+            )}
+            <Form.Group as={Col} md={2} controlId="cp-sample-size">
+              {/* n = 1 → กราฟ I-MR · n >= 2 → กราฟ X-bar R (ตาราง A2/D3/D4 มีถึง 10) */}
+              <Form.Label className="small mb-1">ชิ้น/ครั้ง</Form.Label>
+              <Form.Control type="number" min="1" max="10"
+                {...cpField('sample_size')} disabled={!selectedModel || isAttr} />
+            </Form.Group>
+            <Form.Group as={Col} md={2} controlId="cp-frequency">
+              <Form.Label className="small mb-1">ความถี่</Form.Label>
+              <Form.Select {...cpField('frequency')} disabled={!selectedModel}>
+                {FREQUENCIES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+              </Form.Select>
+            </Form.Group>
+            <Col md="auto" className="d-flex align-items-center gap-3">
+              <Form.Check label="SC point" checked={cpForm.is_critical} disabled={!selectedModel}
+                onChange={(e) => setCpForm((f) => ({ ...f, is_critical: e.target.checked }))} />
+              <Form.Check label="ใช้งาน" checked={cpForm.is_active} disabled={!selectedModel}
+                onChange={(e) => setCpForm((f) => ({ ...f, is_active: e.target.checked }))} />
+            </Col>
+          </Row>
+
+          {/* ⚠️ ห้ามเป็น <Alert> — ของ react-bootstrap มี role="alert" ติดมา แล้วจะกลายเป็น
+              "คำเตือน" ทั้งที่เป็นแค่ผลลัพธ์ที่คำนวณได้ (มีเทสล็อกไว้ว่าสเปกด้านเดียว
+              ต้องไม่มี alert สักตัว) */}
+          {tolMode && (
+            <div className="small text-muted mb-2 d-flex align-items-center gap-2">
+              <span>จะบันทึกเป็น</span>
+              <SpecValue checkpoint={specPreview} />
+            </div>
+          )}
+
+          {!isAttr && (
+            <div className="small text-muted mb-2">
+              ชิ้น/ครั้ง 1 = กราฟ I-MR · ตั้งแต่ 2 = กราฟ X̄-R · เว้น LSL หรือ USL ว่างได้ถ้าแบบคุมด้านเดียว
+              {tolMode && ' · ไม่ใส่เครื่องหมาย = พิกัดบนขึ้น พิกัดล่างลง · ใส่ + หรือ - เองได้ถ้าแบบเขียนไว้แบบนั้น (เช่น 10 -0.005 -0.015)'}
+            </div>
+          )}
+          {issues.blocking && (
+            <div className="form-note form-note--danger mb-2">{issues.blocking}</div>
+          )}
+          {issues.warnings.map((w) => (
+            <div key={w} className="form-note form-note--warning mb-2">{w}</div>
+          ))}
+        </Form>
+        {cpErr && <div className="form-note form-note--danger mt-2" role="status">{cpErr}</div>}
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="outline-secondary" onClick={closeCp}>ยกเลิก</Button>
+        <Button type="submit" form="cp-form" disabled={Boolean(issues.blocking)}>
+          {editingCp ? 'บันทึก' : 'เพิ่มจุดตรวจ'}
+        </Button>
+      </Modal.Footer>
+    </Modal>
     </>
   );
 };
