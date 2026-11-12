@@ -599,3 +599,7 @@ CREATE TABLE IF NOT EXISTS machine_items (
   CONSTRAINT fk_machine_items_machine FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE,
   CONSTRAINT fk_machine_items_model FOREIGN KEY (model_id) REFERENCES models(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ── ปิดใช้งาน Division (Master › ลบ = ปิดใช้งาน / ลบถาวร · 2026-11-12) ──
+-- DEFAULT 1 = พฤติกรรมเดิม · ปิดแล้วไม่ขึ้นในช่องเลือก division ของ master ใหม่ ของเดิมที่อ้างอยู่ยังแสดงปกติ
+ALTER TABLE divisions ADD COLUMN IF NOT EXISTS is_active TINYINT(1) NOT NULL DEFAULT 1;

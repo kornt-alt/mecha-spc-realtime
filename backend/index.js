@@ -25,7 +25,8 @@ const io = new Server(server, {
 // routes เข้าถึง io ผ่าน req.app.get('io') — ไม่ต้องส่ง io เข้าไปเป็นพารามิเตอร์ทุกไฟล์
 app.set('io', io);
 
-app.use(express.json());
+// 5 MB: นำเข้า item หลายร้อยตัวพร้อมจุดตรวจ (POST /master/items/bulk) เกิน 100 KB ค่าเริ่มของ express
+app.use(express.json({ limit: '5mb' }));
 app.use(cors());
 
 // ── socket.io: ใช้ room แยกตามรุ่น ─────────────────────────────────────────

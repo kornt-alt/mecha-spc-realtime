@@ -53,10 +53,16 @@ export const apiCall = async (endpoint, options = {}) => {
 // apiDownload — ใช้กับ endpoint ที่ตอบเป็นไฟล์ (Excel) ไม่ใช่ JSON
 // แยกจาก apiCall เพราะ apiCall บังคับ parse body เป็น JSON ใช้รับ blob ไม่ได้
 // ⚠️ แนบ Bearer ด้วย — เส้นที่กั้นด้วย requireMenu (เช่นแม่แบบจุดตรวจ หรือ Excel ตอน ADMIN ปิด GUEST ของรายงาน) ต้องรู้ว่าใครขอ
-export const apiDownload = async (endpoint, fallbackName = 'export.xlsx') => {
+// options = { method: 'POST', body } — body ส่งเป็น JSON (ดาวน์โหลด master ตามแถวที่กรอง: POST /master/export)
+export const apiDownload = async (endpoint, fallbackName = 'export.xlsx', { method = 'GET', body } = {}) => {
   const token = getToken();
   const response = await fetch(`${API_BASE}${endpoint}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    method,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
   });
   if (!response.ok) {
     if (response.status === 401) clearSession();

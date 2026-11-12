@@ -14,7 +14,7 @@ const env = require('../config/env');
 // คอลัมน์ที่ "โค้ดพึ่งพาจริง" เท่านั้น ไม่ต้องลิสต์ให้ครบทุกคอลัมน์
 // เอาไว้จับกรณีตารางชื่อตรงแต่เป็นรูปเก่า
 const REQUIRED = {
-  divisions: ['id', 'name', 'ipbass_dept'],
+  divisions: ['id', 'name', 'ipbass_dept', 'is_active'],
   // allow_all_items / synced_at + ตาราง machine_items = รอบดึงจาก Drawing Digital (โค้ดมี fallback แต่ควรรัน db:apply)
   machines: ['id', 'division_id', 'code', 'name', 'is_active', 'allow_all_items', 'synced_at'],
   machine_items: ['machine_id', 'model_id'],

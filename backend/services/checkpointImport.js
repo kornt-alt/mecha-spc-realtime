@@ -119,9 +119,10 @@ const parseSetupSheet = (ws) => {
 };
 
 // ตารางหัวคอลัมน์ → array ของแถว (ข้อความล้วน) ตัดแถวว่างหัว/ท้าย · ชีตชื่อ CHECKPOINTS มาก่อน ไม่มีใช้ชีตแรก
-const sheetToTable = (ws) => {
+// maxRows = จำนวนแถวข้อมูลสูงสุด (ไม่นับหัว) — ไฟล์ item ทั้งระบบมีจุดตรวจเป็นพันแถว ส่งค่ามากกว่าได้
+const sheetToTable = (ws, maxRows = MAX_TABLE_ROWS) => {
   const rows = [];
-  const last = Math.min(ws.rowCount, MAX_TABLE_ROWS + 1);
+  const last = Math.min(ws.rowCount, maxRows + 1);
   const width = Math.min(ws.columnCount, 60);
   for (let r = 1; r <= last; r += 1) {
     const row = [];
@@ -141,6 +142,10 @@ const sheetToTable = (ws) => {
 const parseWorkbook = async (buffer) => {
   const wb = await loadWorkbook(buffer);
   if (!wb || wb.worksheets.length === 0) return { format: null, reason: 'เปิดไฟล์ไม่ได้ — ต้องเป็นไฟล์ Excel .xlsx (ไฟล์ .xls รุ่นเก่าให้ Save As เป็น .xlsx ก่อน)' };
+  // ไฟล์ item (services/masterExport.js) มีจุดของหลาย item — ห้ามไหลเข้า item เดียว
+  if (wb.worksheets.some((w) => w.name.trim().toUpperCase() === 'ITEMS')) {
+    return { format: null, reason: 'ไฟล์นี้เป็นไฟล์ item หลายตัว (มีชีต ITEMS) — นำเข้าที่การ์ด Item › Excel › นำเข้า item จาก Excel' };
+  }
   const named = wb.worksheets.find((w) => w.name.trim().toUpperCase() === TEMPLATE_SHEET);
   if (named) return { format: 'table', rows: sheetToTable(named) };
   const first = wb.worksheets[0];
@@ -173,19 +178,45 @@ const TEMPLATE_COLUMNS = [
 const STAGE_LABEL = { pd: 'PD', qc: 'QC' };
 const FLOW_STAGES = { pd_qc: ['pd', 'qc'], pd: ['pd'], qc: ['qc'] };
 
+const numOrBlank = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+const yn = (v) => (Number(v) ? 'Y' : 'N');
+
+// จุดตรวจจาก DB → 1 แถวของแม่แบบ (ลำดับคอลัมน์ตรง TEMPLATE_COLUMNS + คอลัมน์หมวด)
+// ⚠️ ค่ากลาง/พิกัด เว้นว่างเสมอ — มีค่าแล้วตอนนำเข้า LSL/USL ถูกคำนวณซ้ำจากพิกัด
+const pointRow = (p, catCols) => {
+  const isAttr = p.char_type === 'attribute';
+  const qty = new Map((p.settings ?? []).map((s) => [`${s.category_id}:${s.stage}`, s.sample_qty]));
+  return [
+    p.name, p.characteristic ?? null, isAttr ? 'ตา' : 'วัด', isAttr ? null : (p.unit ?? null), p.gauge ?? null,
+    isAttr ? null : numOrBlank(p.lsl), isAttr ? null : numOrBlank(p.target), isAttr ? null : numOrBlank(p.usl),
+    null, null, null,
+    isAttr ? 1 : Number(p.sample_size), p.frequency === 'day' ? 'วัน' : 'กะ', yn(p.in_routine), yn(p.is_critical),
+    ...catCols.map((c) => qty.get(c.key) ?? null),
+  ];
+};
+
+// คอลัมน์หมวด (ขั้น PD/QC ตาม flow) — ⚠️ หัวต้องตรง categoryColumns() ของ utils/checkpointBulk.js
+const catColumns = (categories = []) => categories
+  .filter((c) => Number(c.has_workflow) && Number(c.is_active ?? 1))
+  .flatMap((c) => (FLOW_STAGES[c.flow] ?? FLOW_STAGES.pd_qc).map((s) => ({
+    key: `${c.id}:${s}`, header: `${c.name} ${STAGE_LABEL[s]}`, width: 14, example: [2, 1],
+  })));
+
 // categories = [{ id, name, flow, has_workflow, is_active }] → workbook (เขียนลง res ได้ตรง ๆ)
-const buildTemplate = (categories = []) => {
+// points (ไม่บังคับ) = จุดตรวจจาก DB พร้อม settings [{category_id, stage, sample_qty}] → ไฟล์ "จุดตรวจปัจจุบัน"
+//   ไว้โหลดไปแก้ใน Excel แล้วลากกลับมานำเข้า (โหมดอัปเดตจุดเดิม จับคู่ด้วยชื่อ) · ไม่ส่ง = แม่แบบเปล่ามีแถวตัวอย่าง
+const buildTemplate = (categories = [], points = null) => {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet(TEMPLATE_SHEET);
-  const catCols = categories
-    .filter((c) => Number(c.has_workflow) && Number(c.is_active ?? 1))
-    .flatMap((c) => (FLOW_STAGES[c.flow] ?? FLOW_STAGES.pd_qc).map((s) => ({
-      header: `${c.name} ${STAGE_LABEL[s]}`, width: 14, example: [2, 1],
-    })));
+  const catCols = catColumns(categories);
   const cols = [...TEMPLATE_COLUMNS, ...catCols];
   ws.columns = cols.map((c) => ({ header: c.header, width: c.width }));
-  ws.addRow(cols.map((c) => c.example[0]));
-  ws.addRow(cols.map((c) => c.example[1]));
+  if (points) {
+    for (const p of points) ws.addRow(pointRow(p, catCols));
+  } else {
+    ws.addRow(cols.map((c) => c.example[0]));
+    ws.addRow(cols.map((c) => c.example[1]));
+  }
   const head = ws.getRow(1);
   head.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   head.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1B4FA0' } };
@@ -202,6 +233,11 @@ const buildTemplate = (categories = []) => {
   list(15, 'Y,N');
   const note = wb.addWorksheet('วิธีกรอก');
   [
+    ...(points ? [
+      'ไฟล์นี้โหลดจากระบบ (จุดตรวจที่เปิดใช้งานอยู่) — แก้แล้วลากกลับมาวางที่การ์ดจุดตรวจ เลือก "อัปเดตจุดเดิม + เพิ่มจุดใหม่"',
+      'ระบบจับคู่ด้วยชื่อจุดตรวจ: เปลี่ยนชื่อ = กลายเป็นจุดใหม่ · ลบแถวทิ้ง = จุดนั้นไม่ถูกแตะ (ไม่ถูกปิด) · ล้างค่าช่องหมวด = เลิกตรวจหมวดนั้น',
+      '',
+    ] : []),
     'กรอกที่ชีต CHECKPOINTS 1 แถว = 1 จุดตรวจ (ลบแถวตัวอย่าง 2 แถวทิ้งได้) แล้วลากไฟล์มาวางที่การ์ดจุดตรวจในหน้า Master',
     'สเปก: กรอก LSL / Target / USL หรือ ค่ากลาง + พิกัดบน + พิกัดล่าง อย่างใดอย่างหนึ่ง',
     'พิกัดไม่ใส่เครื่องหมาย = พิกัดบนขึ้น พิกัดล่างลง · ใส่ + หรือ - เองได้ (เช่น 10 / -0.005 / -0.015)',
@@ -213,4 +249,8 @@ const buildTemplate = (categories = []) => {
   return wb;
 };
 
-module.exports = { parseWorkbook, parseSetupSheet, buildTemplate, TEMPLATE_SHEET };
+module.exports = {
+  parseWorkbook, parseSetupSheet, buildTemplate, TEMPLATE_SHEET,
+  // ใช้ต่อใน services/masterExport.js (ไฟล์ item + master) และ /items/import/parse
+  TEMPLATE_COLUMNS, catColumns, pointRow, sheetToTable, loadWorkbook,
+};

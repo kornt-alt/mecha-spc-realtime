@@ -1777,6 +1777,28 @@ tbody th.mc-sticky-start {
   padding: 0 0.25rem !important;
 }
 
+/* ลากระบายช่อง ✓ · ⧉ คัดลอกแถว · คลิกแถว = แก้จุด (CategoryMatrix) */
+.cm-slot { user-select: none; }
+.cm-painting, .cm-painting * { cursor: crosshair !important; }
+.cm-table td.cm-slot--painting { box-shadow: inset 0 0 0 2px var(--blue); }
+.cm-table td.cm-info { cursor: pointer; }
+.cm-table tbody tr:hover > td.cm-info,
+.cm-table tbody tr:hover > th.cm-name { --bs-table-bg: var(--blue-tint); background-color: var(--blue-tint); }
+.cm-name__btn {
+  all: unset; cursor: pointer; display: inline; text-align: left;
+}
+.cm-name__btn:hover b { text-decoration: underline; color: var(--blue-text); }
+.cm-name__btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.cm-copy {
+  cursor: copy; color: var(--muted); user-select: none; line-height: 1.4; padding-right: 0.15rem;
+}
+.cm-copy:hover { color: var(--blue-text); }
+.cm-table tr.cm-row--copy-target > td,
+.cm-table tr.cm-row--copy-target > th { box-shadow: inset 0 0 0 2px var(--blue); }
+.cm-table tr.cp-row--drop-before > th { box-shadow: inset 0 2px 0 var(--blue); }
+.cm-table tr.cp-row--drop-after > th { box-shadow: inset 0 -2px 0 var(--blue); }
+.cm-table tr.cp-row--dragging > th { opacity: 0.45; }
+
 /* ── ข้อความในกล่อง pop-up ของ Master (แทน <Alert> ที่มี role="alert") ── */
 .form-note {
   font-size: 0.875rem;
@@ -1857,3 +1879,10 @@ tr.cp-row--drop-after > td { box-shadow: inset 0 -2px 0 var(--blue); }
   display: inline-block; font-size: 0.7rem; padding: 0 0.4em; border-radius: 4px; margin-left: 0.3rem;
   background: var(--blue-tint); color: var(--blue-text); vertical-align: middle;
 }
+
+/* ── กล่องลบ master (DeleteMasterModal) — ลิสต์ใบ/งานที่อ้างอยู่ เลื่อนในกล่อง ── */
+.del-list { max-height: 40vh; }
+.del-list th, .del-list td { font-size: 0.85rem; }
+
+/* ── นำเข้า item จาก Excel (ItemImportModal) — คลิกแถว item = กางจุดตรวจ ── */
+.item-import__row { cursor: pointer; }

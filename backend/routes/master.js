@@ -6,7 +6,7 @@ const { query, execute, withTransaction } = require('../db/pool');
 const { fetchModelCheckpoints, fetchModelBaselines } = require('../db/queries');
 const { baselineOf } = require('../services/baseline');
 const { AppError, wrap } = require('../middleware/errorHandler');
-const { requireMenu } = require('../middleware/requireLogin');
+const { requireMenu, userHasRole } = require('../middleware/requireLogin');
 const drawingSync = require('../services/drawingSync');
 
 // generic CRUD เลือกเมนูตามตาราง — item/จุดตรวจ = master.items · ที่เหลือ = master.base
@@ -19,7 +19,7 @@ const router = express.Router();
 // ชื่อตารางและชื่อคอลัมน์ต่อเข้า SQL ตรง ๆ (parameterize ชื่อคอลัมน์ไม่ได้) จึงต้อง whitelist ทั้งคู่
 // ⚠️ เพิ่มฟิลด์ใหม่ที่หน้า MasterSetup ต้องมาเพิ่มที่นี่ด้วยเสมอ ไม่งั้นถูกตอบ 400
 const ALLOWED_COLUMNS = {
-  divisions:   ['name', 'ipbass_dept'],
+  divisions:   ['name', 'ipbass_dept', 'is_active'],
   machines:    ['division_id', 'code', 'name', 'is_active'],
   inspectors:  ['emp_code', 'name', 'division_id', 'is_active'],
   customers:   ['name', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf', 'ocs_rule_set', 'is_active'],
@@ -77,12 +77,19 @@ router.get('/lookups', wrap(async (req, res) => {
       if (e.code !== 'ER_BAD_FIELD_ERROR') throw e;
       return query(`SELECT id, division_id, code, name, is_active, 1 AS allow_all_items, NULL AS synced_at FROM machines${flag} ORDER BY code`);
     });
+  const divisionsQuery = query('SELECT id, name, ipbass_dept, is_active FROM divisions ORDER BY name')
+    .catch((e) => {
+      if (e.code !== 'ER_BAD_FIELD_ERROR') throw e;
+      return query('SELECT id, name, ipbass_dept, 1 AS is_active FROM divisions ORDER BY name');
+    });
   const linksQuery = query('SELECT machine_id, model_id FROM machine_items')
     .catch((e) => { if (e.code !== 'ER_NO_SUCH_TABLE') throw e; return [[]]; });
 
   const [[divisions], [machines], [inspectors], [customers], [categories], [machineItems]] = await Promise.all([
     // ipbass_dept ต้องมาด้วย — ฝั่ง client ใช้เลือก dept ตอนยิง MOPLAN
-    query('SELECT id, name, ipbass_dept FROM divisions ORDER BY name'),
+    // ⚠️ คืนทุก division (รวมที่ปิด) — เครื่อง/item เดิมยังอ้างอยู่ต้องแสดงชื่อได้ · หน้าเว็บกรองเฉพาะตอนเลือกให้ของใหม่
+    //    is_active มาจาก db:apply 2026-11-12 — ยังไม่รัน = ถือว่าเปิดทุกตัว
+    divisionsQuery,
     machinesQuery,
     query(`SELECT id, emp_code, name, division_id, is_active FROM inspectors${flag} ORDER BY name`),
     query(`SELECT id, name, min_cp, min_cpk, min_cp_ctf, min_cpk_ctf, ocs_rule_set, is_active FROM customers${flag} ORDER BY name`),
@@ -207,54 +214,210 @@ router.put('/update', requireMenu(menuOfTable), wrap(async (req, res) => {
   res.json({ success: true, baselineMayBeStale: affectsBaseline });
 }));
 
-router.delete('/delete', requireMenu(menuOfTable), wrap(async (req, res) => {
-  const { table, id } = req.body;
+// ── ลบ master: ดูผลกระทบก่อน · ปิดใช้งาน (soft) หรือ ลบถาวรพร้อมใบที่อ้าง (force) ───────────────
+//
+// FK ของทุกเส้นที่ชี้จากใบตรวจมาหา master เป็น RESTRICT โดยตั้งใจ — หลักฐานการตรวจต้องไม่หายเพราะมีคนลบ master
+// ค่าเริ่มของหน้าเว็บจึงเป็น "ปิดใช้งาน" (is_active = 0 ผ่าน PUT /update) · ลบถาวรพร้อมใบ = ADMIN + พิมพ์ชื่อยืนยัน
+// (Korn สั่ง 2026-11-12: "ให้โปรแกรมบอกได้มั้ยว่าใบอะไรที่ค้างอยู่ ให้เลือกเป็น soft delete และลบจริงได้")
+//
+// ⚠️ จุดตรวจที่มีผลวัด: ลบถาวร = ลบ "ทั้งใบ" ที่มีจุดนี้ ไม่ใช่ลบแค่แถวผล — ลบแค่แถวผลใบเก่าจะกลายเป็นใบที่กรอกไม่ครบ
+//    (สิ่งที่ validateSubmission ปฏิเสธไม่ให้เกิดตั้งแต่ตอนบันทึก)
+// ⚠️ Division ที่ยังมีเครื่อง/ผู้ตรวจ/item ลบถาวรไม่ได้ (ไม่ cascade ลบ master ทั้ง division) — ปิดใช้งานได้
+const REF_LIMIT = 50;
+const LABEL_SQL = {
+  divisions: 'SELECT name AS label, is_active FROM divisions WHERE id = ?',
+  machines: "SELECT CONCAT(code, ' — ', name) AS label, is_active FROM machines WHERE id = ?",
+  inspectors: 'SELECT name AS label, is_active FROM inspectors WHERE id = ?',
+  customers: 'SELECT name AS label, is_active FROM customers WHERE id = ?',
+  models: 'SELECT item_no AS label, is_active FROM models WHERE id = ?',
+  checkpoints: 'SELECT name AS label, is_active FROM checkpoints WHERE id = ?',
+};
+// ใบตรวจ / งาน Set up ที่อ้าง master นี้ — คืน { where, params } ต่อท้าย FROM inspections i / check_jobs j
+const inspectionRef = (table, id) => ({
+  models: { where: 'i.model_id = ?', params: [id] },
+  machines: { where: 'i.machine_id = ?', params: [id] },
+  inspectors: { where: 'i.inspector_id = ?', params: [id] },
+  checkpoints: { where: 'i.id IN (SELECT DISTINCT inspection_id FROM inspection_results WHERE checkpoint_id = ?)', params: [id] },
+}[table] ?? null);
+const jobRef = (table, id) => ({
+  models: { where: 'j.model_id = ?', params: [id] },
+  machines: { where: 'j.machine_id = ?', params: [id] },
+}[table] ?? null);
+
+// divisions.is_active มาจาก db:apply รอบนี้ — ยังไม่รัน = ถือว่าเปิดอยู่ (ปิดไม่ได้จนกว่าจะรัน)
+const loadTarget = async (q, table, id) => {
+  try {
+    const [[row]] = await q(LABEL_SQL[table], [id]);
+    return row ? { label: String(row.label), isActive: Number(row.is_active) === 1, softDelete: true } : null;
+  } catch (e) {
+    if (e.code !== 'ER_BAD_FIELD_ERROR' || table !== 'divisions') throw e;
+    const [[row]] = await q('SELECT name AS label FROM divisions WHERE id = ?', [id]);
+    return row ? { label: String(row.label), isActive: true, softDelete: false } : null;
+  }
+};
+
+const deleteImpact = async (table, id) => {
+  const target = await loadTarget(query, table, id);
+  if (!target) throw new AppError('ไม่พบรายการนี้ (อาจถูกลบไปแล้ว)', 404);
+  const out = {
+    table, id, ...target,
+    refs: { inspections: { total: 0, voided: 0, models: [], list: [] }, checkJobs: { total: 0, open: 0, list: [] } },
+    children: [], blockedReason: null,
+  };
+  const ir = inspectionRef(table, id);
+  if (ir) {
+    const [[c]] = await query(
+      `SELECT COUNT(*) AS total, COALESCE(SUM(i.voided_at IS NOT NULL), 0) AS voided FROM inspections i WHERE ${ir.where}`, ir.params
+    );
+    const [list] = await query(
+      `SELECT i.id, i.inspected_at, i.mo_no, i.overall_result, i.voided_at, i.model_id,
+              m.item_no, mc.code AS machine, cc.name AS category
+         FROM inspections i
+         JOIN models m ON m.id = i.model_id
+         LEFT JOIN machines mc ON mc.id = i.machine_id
+         LEFT JOIN check_categories cc ON cc.id = i.category_id
+        WHERE ${ir.where} ORDER BY i.inspected_at DESC, i.id DESC LIMIT ${REF_LIMIT}`, ir.params
+    );
+    const [models] = await query(
+      `SELECT DISTINCT m.id, m.item_no FROM inspections i JOIN models m ON m.id = i.model_id WHERE ${ir.where} ORDER BY m.item_no`, ir.params
+    );
+    out.refs.inspections = { total: Number(c.total), voided: Number(c.voided), models, list };
+  }
+  const jr = jobRef(table, id);
+  if (jr) {
+    const [[c]] = await query(
+      `SELECT COUNT(*) AS total, COALESCE(SUM(j.status NOT IN ('passed','cancelled')), 0) AS open FROM check_jobs j WHERE ${jr.where}`, jr.params
+    );
+    const [list] = await query(
+      `SELECT j.id, j.mo_no, j.status, j.round_no, j.opened_at, m.item_no, mc.code AS machine, cc.name AS category
+         FROM check_jobs j
+         JOIN models m ON m.id = j.model_id
+         LEFT JOIN machines mc ON mc.id = j.machine_id
+         LEFT JOIN check_categories cc ON cc.id = j.category_id
+        WHERE ${jr.where} ORDER BY j.opened_at DESC, j.id DESC LIMIT ${REF_LIMIT}`, jr.params
+    );
+    out.refs.checkJobs = { total: Number(c.total), open: Number(c.open), list };
+  }
+  const count = async (sql) => Number((await query(sql, [id]))[0][0].n);
+  if (table === 'models') {
+    const n = await count('SELECT COUNT(*) AS n FROM checkpoints WHERE model_id = ?');
+    if (n) out.children.push(`จุดตรวจ ${n} จุด (ถูกลบไปด้วย)`);
+  }
+  if (table === 'inspectors') {
+    const n = await count('SELECT COUNT(*) AS n FROM users WHERE inspector_id = ?');
+    if (n) out.children.push(`บัญชีผู้ใช้ที่ผูกผู้ตรวจนี้ ${n} บัญชี (จะถูกถอดผูก — PD/QC ต้องผูกใหม่ก่อนตรวจ)`);
+  }
+  if (table === 'customers') {
+    const n = await count('SELECT COUNT(*) AS n FROM models WHERE customer_id = ?');
+    if (n) out.children.push(`item ที่ตั้งลูกค้านี้ ${n} ตัว (จะเป็น "ไม่มีลูกค้า" — เกณฑ์ Cp/Cpk กลับเป็นค่าระบบ)`);
+  }
+  if (table === 'machines') {
+    const n = await count('SELECT COUNT(*) AS n FROM checkpoint_baselines WHERE machine_id = ?');
+    if (n) out.children.push(`baseline ที่ล็อกไว้ของเครื่องนี้ ${n} ชุด (ถูกลบไปด้วย)`);
+  }
+  if (table === 'divisions') {
+    const parts = [];
+    for (const [t, name] of [['machines', 'เครื่องจักร'], ['inspectors', 'ผู้ตรวจ'], ['models', 'item']]) {
+      const n = await count(`SELECT COUNT(*) AS n FROM ${t} WHERE division_id = ?`);
+      if (n) parts.push(`${name} ${n}`);
+    }
+    if (parts.length) {
+      out.children.push(`ใน division นี้มี ${parts.join(' · ')}`);
+      out.blockedReason = `ลบถาวรไม่ได้ — ยังมี ${parts.join(' · ')} อยู่ใน division นี้ ต้องลบหรือย้ายออกก่อน (ปิดใช้งานได้)`;
+    }
+  }
+  return out;
+};
+
+router.get('/delete-impact', requireMenu(menuOfTable), wrap(async (req, res) => {
+  const { table, id } = req.query;
   if (!allowedTables.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
   if (!isIntLike(id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  res.json(await deleteImpact(table, Number(id)));
+}));
 
-  // FK ของทุกเส้นที่ชี้จากใบตรวจมาหา master เป็น RESTRICT โดยตั้งใจ
-  // ลบ master ที่มีใบตรวจอ้างอยู่จะถูก DB ปฏิเสธ แล้ว errorHandler แปลงเป็นข้อความบอกให้ปิดใช้งานแทน
-  //
-  // สองตารางข้างล่างนับก่อนแล้วบอกทางไปต่อเอง — ข้อความกลาง ๆ จาก errorHandler
-  // บอกแค่ว่า "ลบไม่ได้" ซึ่งเป็นทางตัน คนที่เจอไม่รู้ว่าติดกี่ใบและต้องทำอะไรต่อ
-  if (table === 'models') {
-    const [[counts]] = await query(
-      `SELECT COUNT(*) AS total, SUM(voided_at IS NOT NULL) AS voided
-         FROM inspections WHERE model_id = ?`,
-      [Number(id)]
-    );
-    const total = Number(counts.total) || 0;
-    if (total > 0) {
-      const voided = Number(counts.voided) || 0;
+// body: { table, id, force?, confirm? }
+//   ไม่ force = ลบเมื่อไม่มีใครอ้าง (มีใบ/งานอ้าง = 409 · ที่เหลือ DB ตัดสินด้วย FK RESTRICT)
+//   force = ADMIN เท่านั้น + confirm ต้องตรงชื่อ → ลบใบตรวจ/งาน Set up ที่อ้าง + ตาม แล้วลบ master ใน transaction เดียว
+// ⚠️ ไม่ล้าง baseline ของ item อื่นให้เอง — ใบที่ถูกลบอาจอยู่ในช่วงที่ล็อกไว้ คืน staleBaselines ให้หน้าเว็บเตือน
+router.delete('/delete', requireMenu(menuOfTable), wrap(async (req, res) => {
+  const { table, id, force, confirm } = req.body ?? {};
+  if (!allowedTables.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
+  if (!isIntLike(id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const rowId = Number(id);
+  const impact = await deleteImpact(table, rowId);
+  const nIns = impact.refs.inspections.total;
+  const nJobs = impact.refs.checkJobs.total;
+
+  if (!force) {
+    if (nIns || nJobs) {
       throw new AppError(
-        `ลบไม่ได้ — item นี้มีใบตรวจ ${total} ใบ (ยกเลิกไปแล้ว ${voided} ใบ) · ` +
-        `ยกเลิกใบที่ไม่ต้องการก่อนแล้วกด "ล้างใบที่ยกเลิกแล้ว" หรือปิดใช้งาน item นี้แทนการลบ`,
-        400
+        `ลบไม่ได้ — มีใบตรวจ ${nIns} ใบ${nJobs ? ` และงาน Set up ${nJobs} งาน` : ''} อ้างอยู่ · ปิดใช้งานแทน หรือ ADMIN เลือกลบถาวรพร้อมใบพวกนี้`,
+        409
       );
     }
+    await execute(`DELETE FROM ${table} WHERE id = ?`, [rowId]);
+    logWrite(req, 'delete', table, rowId);
+    notifyMasterChanged(req);
+    return res.json({ success: true, deletedInspections: 0, deletedJobs: 0, staleBaselines: [] });
   }
-  if (table === 'checkpoints') {
-    // ⚠️ จุดตรวจที่มีผลตรวจแล้วลบไม่ได้ตลอดกาล และตั้งใจให้เป็นแบบนั้น
-    //    ลบทิ้งแล้วใบตรวจเก่าที่เคยบันทึก 5 จุดจะเหลือ 4 กลายเป็นใบที่กรอกไม่ครบย้อนหลัง
-    //    ซึ่งคือสิ่งที่ validateSubmission ปฏิเสธไม่ให้เกิดตั้งแต่ตอนบันทึก
-    const [[used]] = await query(
-      'SELECT COUNT(*) AS n FROM inspection_results WHERE checkpoint_id = ?',
-      [Number(id)]
-    );
-    if (Number(used.n) > 0) {
-      throw new AppError(
-        `ลบไม่ได้ — จุดตรวจนี้มีผลวัดบันทึกไว้แล้ว ${used.n} ค่า ลบทิ้งจะทำให้ใบตรวจเก่ากลายเป็นใบที่กรอกไม่ครบ · ` +
-        'ให้เอาเครื่องหมาย "ใช้งาน" ออกแทน จุดนี้จะไม่โผล่ในใบตรวจใบใหม่แต่ของเก่ายังอ่านได้',
-        400
-      );
+
+  if (!userHasRole(req.user, 'ADMIN')) throw new AppError('ลบถาวรพร้อมใบตรวจได้เฉพาะ ADMIN', 403);
+  if (String(confirm ?? '').trim().toLowerCase() !== impact.label.trim().toLowerCase()) {
+    throw new AppError(`พิมพ์ "${impact.label}" ให้ตรงเพื่อยืนยันการลบถาวร`, 400);
+  }
+  if (impact.blockedReason) throw new AppError(impact.blockedReason, 409);
+
+  const ir = inspectionRef(table, rowId);
+  const jr = jobRef(table, rowId);
+  const result = await withTransaction(async (conn) => {
+    let affected = [];
+    let deletedInspections = 0;
+    let deletedJobs = 0;
+    if (ir) {
+      // เลือก id ก่อนแล้วค่อยลบ (MariaDB ไม่ให้ DELETE อ้างตารางตัวเองใน subquery)
+      const [rows] = await conn.query(`SELECT i.id, i.model_id FROM inspections i WHERE ${ir.where} FOR UPDATE`, ir.params);
+      affected = [...new Set(rows.map((r) => r.model_id))];
+      if (rows.length) {
+        const [r] = await conn.query('DELETE FROM inspections WHERE id IN (?)', [rows.map((x) => x.id)]);
+        deletedInspections = r.affectedRows;
+      }
     }
+    if (jr) {
+      const [rows] = await conn.query(`SELECT j.id FROM check_jobs j WHERE ${jr.where} FOR UPDATE`, jr.params);
+      if (rows.length) {
+        const [r] = await conn.query('DELETE FROM check_jobs WHERE id IN (?)', [rows.map((x) => x.id)]);
+        deletedJobs = r.affectedRows;
+      }
+    }
+    if (table === 'machines') await conn.execute('DELETE FROM checkpoint_baselines WHERE machine_id = ?', [rowId]);
+    if (table === 'inspectors') await conn.execute('UPDATE users SET inspector_id = NULL WHERE inspector_id = ?', [rowId]);
+    if (table === 'customers') await conn.execute('UPDATE models SET customer_id = NULL WHERE customer_id = ?', [rowId]);
+    await conn.execute(`DELETE FROM ${table} WHERE id = ?`, [rowId]);
+    return { affected, deletedInspections, deletedJobs };
+  });
+
+  // item ที่โดนลบใบ (และยังอยู่) ที่มี baseline ล็อก = เส้นลิมิตอาจมาจากข้อมูลที่หายไป
+  const survivors = result.affected.filter((m) => !(table === 'models' && m === rowId));
+  let staleBaselines = [];
+  if (survivors.length) {
+    const [rows] = await query(
+      `SELECT DISTINCT m.id, m.item_no FROM checkpoint_baselines b
+         JOIN checkpoints c ON c.id = b.checkpoint_id JOIN models m ON m.id = c.model_id
+        WHERE m.id IN (?) ORDER BY m.item_no`, [survivors]
+    );
+    staleBaselines = rows;
   }
-
-  await execute(`DELETE FROM ${table} WHERE id = ?`, [Number(id)]);
-  logWrite(req, 'delete', table, id);
-
+  logWrite(req, `ลบถาวร (ใบตรวจ ${result.deletedInspections} ใบ · งาน ${result.deletedJobs} งาน)`, table, rowId);
+  const io = req.app.get('io');
+  for (const modelId of result.affected) {
+    io?.to(`model:${modelId}`).emit('inspection_saved', {
+      modelId, machineId: null, purged: result.deletedInspections, checkpointIds: [], ngCheckpointIds: [],
+    });
+  }
+  if (result.deletedJobs) io?.emit('check_job_updated', { action: 'deleted' });
   notifyMasterChanged(req);
-  res.json({ success: true });
+  res.json({ success: true, ...result, staleBaselines });
 }));
 
 // ── ลำดับจุดตรวจ ──────────────────────────────────────────────────────────
@@ -581,14 +744,31 @@ router.post('/models/:id/checkpoints/bulk', requireMenu('master.items'), wrap(as
   if (list.length > 300) throw new AppError('บันทึกได้ครั้งละไม่เกิน 300 จุด', 400);
   const mode = req.body?.mode ?? (req.body?.deactivateExisting ? 'replace' : 'add');
   if (!BULK_MODES.includes(mode)) throw new AppError('mode ต้องเป็น add / upsert / replace', 400);
-  const deactivateExisting = mode === 'replace';
 
   const [[model]] = await query('SELECT id FROM models WHERE id = ?', [modelId]);
   if (!model) throw new AppError('ไม่พบ item นี้', 404);
   const catById = await loadWorkflowCategories();
+  const points = prepareBulkPoints(list, catById);
 
+  const result = await withTransaction((conn) => upsertCheckpoints(conn, modelId, points, mode));
+  logWrite(req, `เพิ่มจุดตรวจ ${result.ids.length} จุด / แก้ ${result.updatedIds.length} จุด ให้`, 'models', modelId);
+  notifyMasterChanged(req);
+  res.json({
+    success: true,
+    added: result.ids.length,
+    ids: result.ids,
+    updated: result.updatedIds.length,
+    updatedIds: result.updatedIds,
+    deactivated: result.deactivated,
+    baselineMayBeStale: result.baselineMayBeStale,
+  });
+}));
+
+// แถวดิบจาก client → แถวที่ตรวจแล้ว (bulkPoint + settings) · ชื่อซ้ำกันเองในชุด = 409
+// labelPrefix ไว้บอกว่าเป็นของ item ไหน (นำเข้าหลาย item)
+const prepareBulkPoints = (list, catById, labelPrefix = '') => {
   const points = list.map((p, i) => {
-    const label = ` (แถว ${i + 1}${p?.name ? ` "${String(p.name).trim()}"` : ''})`;
+    const label = ` (${labelPrefix}แถว ${i + 1}${p?.name ? ` "${String(p.name).trim()}"` : ''})`;
     const row = bulkPoint(p, label);
     // ตรวจรูป settings ก่อนเข้า transaction (checkpoint_id ยังไม่มี — ใส่ 0 ไว้ก่อน)
     row.settings = settingRows(0, p.settings ?? [], catById, label).map(([, cat, stage, qty]) => [cat, stage, qty]);
@@ -597,11 +777,17 @@ router.post('/models/:id/checkpoints/bulk', requireMenu('master.items'), wrap(as
   const seenNames = new Set();
   for (const p of points) {
     const key = p.name.toLowerCase();
-    if (seenNames.has(key)) throw new AppError(`ชื่อจุด "${p.name}" ซ้ำกันในชุดที่ส่งมา`, 409);
+    if (seenNames.has(key)) throw new AppError(`ชื่อจุด "${p.name}" ซ้ำกันในชุดที่ส่งมา${labelPrefix ? ` (${labelPrefix.trim()})` : ''}`, 409);
     seenNames.add(key);
   }
+  return points;
+};
 
-  const result = await withTransaction(async (conn) => {
+// เขียนจุดตรวจชุดหนึ่งของ item เดียว (ใน transaction ของผู้เรียก) — ใช้ทั้ง /models/:id/checkpoints/bulk และ /items/bulk
+// ⚠️ แก้กฎ add/upsert/replace ที่นี่ที่เดียว
+const upsertCheckpoints = async (conn, modelId, points, mode) => {
+  const deactivateExisting = mode === 'replace';
+  {
     const [existing] = await conn.query(
       'SELECT id, name, seq_no, is_active, sample_size FROM checkpoints WHERE model_id = ? FOR UPDATE', [modelId]
     );
@@ -667,19 +853,8 @@ router.post('/models/:id/checkpoints/bulk', requireMenu('master.items'), wrap(as
       }
     }
     return { ids, deactivated, updatedIds, baselineMayBeStale };
-  });
-  logWrite(req, `เพิ่มจุดตรวจ ${result.ids.length} จุด / แก้ ${result.updatedIds.length} จุด ให้`, 'models', modelId);
-  notifyMasterChanged(req);
-  res.json({
-    success: true,
-    added: result.ids.length,
-    ids: result.ids,
-    updated: result.updatedIds.length,
-    updatedIds: result.updatedIds,
-    deactivated: result.deactivated,
-    baselineMayBeStale: result.baselineMayBeStale,
-  });
-}));
+  }
+};
 
 // เรียงจุดตรวจทั้ง item ใหม่ (ลากเรียงในหน้า Master) — body: { ids: [ลำดับใหม่ ครบทุกจุดของ item] }
 // ⚠️ UNIQUE(model_id, seq_no) — ย้ายไปเลขติดลบชั่วคราวก่อนแล้วค่อยเขียน 1..n (หลักเดียวกับ /checkpoints/:id/move)
@@ -755,6 +930,296 @@ router.get('/checkpoint-template', requireMenu('master.items'), wrap(async (req,
   );
   await wb.xlsx.write(res);
   res.end();
+}));
+
+// จุดตรวจปัจจุบันของ item เป็นไฟล์แม่แบบ (โหลดไปแก้ใน Excel แล้วลากกลับมา = อัปเดตจุดเดิมตามชื่อ)
+// เฉพาะจุดที่เปิดใช้งาน เรียงตาม seq_no · ⚠️ item_no sanitize ก่อนตั้งชื่อไฟล์ (กฎเดียวกับ routes/reports.js)
+router.get('/models/:id/checkpoints/export', requireMenu('master.items'), wrap(async (req, res) => {
+  if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const modelId = Number(req.params.id);
+  const [[model]] = await query('SELECT id, item_no FROM models WHERE id = ?', [modelId]);
+  if (!model) throw new AppError('ไม่พบ item นี้', 404);
+  const [cats] = await query('SELECT id, name, has_workflow, flow, is_active FROM check_categories ORDER BY sort_order, id');
+  const [points] = await query(
+    `SELECT id, name, characteristic, char_type, unit, gauge, lsl, target, usl, sample_size, frequency, in_routine, is_critical
+       FROM checkpoints WHERE model_id = ? AND is_active = 1 ORDER BY seq_no`, [modelId]
+  );
+  const [settings] = points.length
+    ? await query(
+      'SELECT checkpoint_id, category_id, stage, sample_qty FROM checkpoint_category_settings WHERE checkpoint_id IN (?)',
+      [points.map((p) => p.id)]
+    )
+    : [[]];
+  for (const p of points) p.settings = settings.filter((s) => s.checkpoint_id === p.id);
+  const wb = buildTemplate(cats, points);
+  const safeItemNo = String(model.item_no || 'item').replace(/[^\w.-]+/g, '_');
+  const fname = `${safeItemNo}-checkpoints.xlsx`;
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${fname}"; filename*=UTF-8''${encodeURIComponent(fname)}`);
+  await wb.xlsx.write(res);
+  res.end();
+}));
+
+// ── ดาวน์โหลด master / นำเข้า item หลายตัว (services/masterExport.js) ─────────────────────────────
+// ไฟล์ item = ชีต ITEMS + ITEM_CHECKPOINTS · ไฟล์ master รวม = Division/เครื่อง/ผู้ตรวจ/ลูกค้า + ไฟล์ item
+// ⚠️ ไฟล์ที่โหลดออกไปลากกลับมานำเข้า item ได้ (ชีตอื่นไม่สนใจ) — หน้าเว็บแมป/ตรวจ/merge เอง (utils/itemBulk.js)
+//    server รับค่าเต็มที่ merge แล้ว (หลักเดียวกับ checkpoints/bulk)
+const { buildMasterWorkbook, buildItemTemplate, ITEM_SHEET, ITEM_POINT_SHEET } = require('../services/masterExport');
+const { sheetToTable, loadWorkbook } = require('../services/checkpointImport');
+
+const EXPORT_TABLES = ['divisions', 'machines', 'inspectors', 'customers', 'models'];
+const ITEM_PARSE_ROWS = 20000;
+const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const sendWorkbook = async (res, wb, fname) => {
+  res.setHeader('Content-Type', XLSX_TYPE);
+  res.setHeader('Content-Disposition', `attachment; filename="${fname}"; filename*=UTF-8''${encodeURIComponent(fname)}`);
+  await wb.xlsx.write(res);
+  res.end();
+};
+// วันที่ตามเวลาไทยสำหรับชื่อไฟล์ (YYYYMMDD)
+const stamp = () => new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10).replace(/-/g, '');
+
+// ไฟล์รวม = ต้องมีสิทธิ์ทั้ง master.base และ master.items · รายแท็บ = เมนูของตารางนั้น
+const requireExportMenu = (req, res, next) => {
+  const t = req.body?.table;
+  if (t) return requireMenu(MENU_OF_TABLE[t] ?? 'master.base')(req, res, next);
+  return requireMenu('master.base')(req, res, (err) => (err ? next(err) : requireMenu('master.items')(req, res, next)));
+};
+
+const loadExportData = async (table, ids) => {
+  const where = ids ? 'WHERE x.id IN (?)' : '';
+  const p = ids ? [ids] : [];
+  switch (table) {
+    case 'divisions': {
+      const [rows] = await query(`SELECT x.* FROM divisions x ${where} ORDER BY x.name`, p);
+      return rows;
+    }
+    case 'machines': {
+      const [rows] = await query(
+        `SELECT x.*, d.name AS division_name FROM machines x LEFT JOIN divisions d ON d.id = x.division_id ${where} ORDER BY d.name, x.code`, p
+      );
+      return rows;
+    }
+    case 'inspectors': {
+      const [rows] = await query(
+        `SELECT x.*, d.name AS division_name FROM inspectors x LEFT JOIN divisions d ON d.id = x.division_id ${where} ORDER BY x.name`, p
+      );
+      return rows;
+    }
+    case 'customers': {
+      const [rows] = await query(`SELECT x.* FROM customers x ${where} ORDER BY x.name`, p);
+      return rows;
+    }
+    case 'models': {
+      const [items] = await query(
+        `SELECT x.*, d.name AS division_name, cu.name AS customer_name
+           FROM models x JOIN divisions d ON d.id = x.division_id LEFT JOIN customers cu ON cu.id = x.customer_id
+          ${where} ORDER BY d.name, x.item_no`, p
+      );
+      const points = await loadActivePoints(items.map((m) => m.id));
+      return { items, points };
+    }
+    default: return [];
+  }
+};
+
+// จุดตรวจที่เปิดใช้งานของหลาย item พร้อม settings (เรียง item → seq_no)
+const loadActivePoints = async (modelIds) => {
+  if (!modelIds.length) return [];
+  const [points] = await query(
+    `SELECT id, model_id, seq_no, name, characteristic, char_type, unit, gauge, lsl, target, usl, sample_size,
+            frequency, in_routine, is_critical, is_active
+       FROM checkpoints WHERE model_id IN (?) AND is_active = 1 ORDER BY model_id, seq_no`, [modelIds]
+  );
+  const [settings] = points.length
+    ? await query(
+      'SELECT checkpoint_id, category_id, stage, sample_qty FROM checkpoint_category_settings WHERE checkpoint_id IN (?)',
+      [points.map((x) => x.id)]
+    )
+    : [[]];
+  const byCp = new Map();
+  for (const s of settings) {
+    if (!byCp.has(s.checkpoint_id)) byCp.set(s.checkpoint_id, []);
+    byCp.get(s.checkpoint_id).push({ category_id: s.category_id, stage: s.stage, sample_qty: s.sample_qty });
+  }
+  for (const x of points) x.settings = byCp.get(x.id) ?? [];
+  return points;
+};
+
+const loadCategories = async () => {
+  const [cats] = await query('SELECT id, name, has_workflow, flow, is_active FROM check_categories ORDER BY sort_order, id');
+  return cats;
+};
+
+// body: { table?: ตารางเดียว, ids?: [แถวที่กรองบนจอ] } — ไม่ส่ง table = ไฟล์ master รวม (ทุกแถว รวมที่ปิดใช้งาน)
+router.post('/export', requireExportMenu, wrap(async (req, res) => {
+  const table = req.body?.table ?? null;
+  if (table && !EXPORT_TABLES.includes(table)) throw new AppError('ตารางไม่ถูกต้อง', 400);
+  let ids = null;
+  if (Array.isArray(req.body?.ids)) {
+    ids = req.body.ids.map(Number).filter(Number.isInteger);
+    if (ids.length === 0) throw new AppError('ไม่มีแถวให้ดาวน์โหลด', 400);
+    if (ids.length > 5000) throw new AppError('เลือกได้ไม่เกิน 5000 แถว', 400);
+  }
+  const sheets = table ? [table] : EXPORT_TABLES;
+  const data = {};
+  for (const s of sheets) {
+    const r = await loadExportData(s, table ? ids : null);
+    if (s === 'models') Object.assign(data, r);
+    else data[s] = r;
+  }
+  const categories = sheets.includes('models') ? await loadCategories() : [];
+  const wb = buildMasterWorkbook({ sheets, data, categories });
+  const prefix = table ? { divisions: 'divisions', machines: 'machines', inspectors: 'inspectors', customers: 'customers', models: 'items' }[table] : 'master';
+  console.log(`[master] ${req.user?.username ?? '-'} ดาวน์โหลด ${prefix}${ids ? ` ${ids.length} แถว` : ''}`);
+  await sendWorkbook(res, wb, `${prefix}-${stamp()}.xlsx`);
+}));
+
+// แม่แบบไฟล์ item เปล่า (แถวตัวอย่างใช้ชื่อ division แรกที่เปิดอยู่)
+router.get('/item-template', requireMenu('master.items'), wrap(async (req, res) => {
+  const [[div]] = await query('SELECT name FROM divisions ORDER BY id LIMIT 1');
+  const wb = buildItemTemplate({ categories: await loadCategories(), division: div?.name ?? 'Mecha 1' });
+  await sendWorkbook(res, wb, 'item-template.xlsx');
+}));
+
+// อ่านไฟล์ item (ไม่เขียน DB) → { items: ตารางข้อความ, checkpoints: ตารางข้อความ | [] }
+router.post(
+  '/items/import/parse',
+  requireMenu('master.items'),
+  express.raw({ type: () => true, limit: '5mb' }),
+  wrap(async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw new AppError('ไม่ได้รับไฟล์', 400);
+    const wb = await loadWorkbook(req.body);
+    if (!wb || wb.worksheets.length === 0) throw new AppError('เปิดไฟล์ไม่ได้ — ต้องเป็นไฟล์ Excel .xlsx', 400);
+    const find = (name) => wb.worksheets.find((w) => w.name.trim().toUpperCase() === name);
+    const wsItems = find(ITEM_SHEET);
+    if (!wsItems) {
+      throw new AppError('ไม่พบชีต ITEMS — ใช้ไฟล์จาก "ดาวน์โหลดแม่แบบ item" หรือ "ดาวน์โหลด item" · ไฟล์จุดตรวจของ item เดียวให้นำเข้าที่การ์ดจุดตรวจ', 400);
+    }
+    const wsPoints = find(ITEM_POINT_SHEET);
+    // ⚠️ ไฟล์ทั้งระบบ (ดาวน์โหลด Master) มีจุดตรวจเป็นพันแถว — อ่านได้ถึง ITEM_PARSE_ROWS · เกิน = ปฏิเสธ ไม่ตัดเงียบ ๆ
+    //    (POST /items/bulk จำกัดเฉพาะ item/จุดที่เปลี่ยน — หน้าเว็บไม่ส่งของที่ไม่เปลี่ยน)
+    const items = sheetToTable(wsItems, ITEM_PARSE_ROWS + 1);
+    const checkpoints = wsPoints ? sheetToTable(wsPoints, ITEM_PARSE_ROWS + 1) : [];
+    if (items.length > ITEM_PARSE_ROWS + 1 || checkpoints.length > ITEM_PARSE_ROWS + 1) {
+      throw new AppError(`ไฟล์ใหญ่เกิน ${ITEM_PARSE_ROWS} แถวต่อชีต — แบ่งเป็นหลายไฟล์`, 400);
+    }
+    res.json({ items, checkpoints });
+  })
+);
+
+// จุดตรวจที่เปิดใช้งานของหลาย item (หน้าเว็บใช้ merge/diff ตอนนำเข้า) — ?model_ids=1,2,3
+router.get('/checkpoints', requireMenu('master.items'), wrap(async (req, res) => {
+  const ids = String(req.query.model_ids ?? '').split(',').filter(Boolean).map(Number);
+  if (ids.some((x) => !Number.isInteger(x))) throw new AppError('model_ids ไม่ถูกต้อง', 400);
+  if (ids.length > 300) throw new AppError('ขอได้ครั้งละไม่เกิน 300 item', 400);
+  const points = await loadActivePoints(ids);
+  res.json(points.map(({ settings, ...p }) => ({ ...p, category_settings: settings })));
+}));
+
+// แถว item ที่ตรวจแล้ว · ผิด = AppError 400 (กฎเดียวกับฟอร์ม item / SimpleTab: min_* 0 < x < 100 หรือ null)
+const ITEM_MIN_KEYS = ['min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf'];
+const bulkItem = (it, label, { divisionIds, customerIds }) => {
+  const d = it?.data ?? {};
+  const divisionId = Number(it?.division_id);
+  if (!divisionIds.has(divisionId)) throw new AppError(`ไม่พบ Division${label}`, 400);
+  const itemNo = strOrNull(it?.item_no, 50);
+  if (!itemNo) throw new AppError(`ต้องมี Item No${label}`, 400);
+  const itemName = strOrNull(d.item_name, 150);
+  if (!itemName) throw new AppError(`ต้องมีชื่อ item${label}`, 400);
+  const customerId = d.customer_id === null || d.customer_id === undefined || d.customer_id === '' ? null : Number(d.customer_id);
+  if (customerId !== null && !customerIds.has(customerId)) throw new AppError(`ไม่พบลูกค้า${label}`, 400);
+  const row = {
+    division_id: divisionId,
+    item_no: itemNo,
+    item_name: itemName,
+    drawing_no: strOrNull(d.drawing_no, 100),
+    drawing_rev: strOrNull(d.drawing_rev, 20),
+    customer_id: customerId,
+    is_active: d.is_active === undefined || d.is_active === null ? 1 : (Number(d.is_active) ? 1 : 0),
+  };
+  for (const k of ITEM_MIN_KEYS) {
+    const v = d[k];
+    if (v === null || v === undefined || v === '') { row[k] = null; continue; }
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0 || n >= 100) throw new AppError(`${k} ต้องเป็นตัวเลขมากกว่า 0 และน้อยกว่า 100${label}`, 400);
+    row[k] = n;
+  }
+  return row;
+};
+const ITEM_WRITE_COLUMNS = ['item_name', 'drawing_no', 'drawing_rev', 'customer_id', ...ITEM_MIN_KEYS, 'is_active'];
+
+// body: { items: [{ division_id, item_no, data: {คอลัมน์ item ครบ}, points?: [แถวจุดตรวจเต็ม] }] }
+//   item: division + item_no ตรง = UPDATE · ไม่ตรง = INSERT · จุดตรวจ = upsertCheckpoints(…, 'upsert') ทีละ item
+//   ทั้งหมดใน transaction เดียว — แถวไหนผิด = ไม่บันทึกอะไรเลย
+router.post('/items/bulk', requireMenu('master.items'), wrap(async (req, res) => {
+  const list = Array.isArray(req.body?.items) ? req.body.items : null;
+  if (!list || list.length === 0) throw new AppError('ไม่มี item ให้บันทึก', 400);
+  if (list.length > 300) throw new AppError('บันทึกได้ครั้งละไม่เกิน 300 item', 400);
+  const totalPoints = list.reduce((n, it) => n + (Array.isArray(it?.points) ? it.points.length : 0), 0);
+  if (totalPoints > 3000) throw new AppError('จุดตรวจรวมต้องไม่เกิน 3000 จุดต่อครั้ง', 400);
+
+  const [[divs], [custs]] = await Promise.all([
+    query('SELECT id FROM divisions'), query('SELECT id FROM customers'),
+  ]);
+  const ctx = { divisionIds: new Set(divs.map((x) => x.id)), customerIds: new Set(custs.map((x) => x.id)) };
+  const catById = await loadWorkflowCategories();
+  const seen = new Set();
+  const prepared = list.map((it, i) => {
+    const label = ` (item แถว ${i + 1}${it?.item_no ? ` "${String(it.item_no).trim()}"` : ''})`;
+    const row = bulkItem(it, label, ctx);
+    const key = `${row.division_id}|${row.item_no.toLowerCase()}`;
+    if (seen.has(key)) throw new AppError(`item "${row.item_no}" ซ้ำกันในชุดที่ส่งมา`, 409);
+    seen.add(key);
+    const points = Array.isArray(it.points) && it.points.length
+      ? prepareBulkPoints(it.points, catById, `${row.item_no} `)
+      : [];
+    return { row, points };
+  });
+
+  const result = await withTransaction(async (conn) => {
+    const out = { added: [], updated: [], pointsAdded: 0, pointsUpdated: 0, baselineMayBeStale: [] };
+    for (const { row, points } of prepared) {
+      const [[cur]] = await conn.query(
+        'SELECT id FROM models WHERE division_id = ? AND item_no = ? FOR UPDATE', [row.division_id, row.item_no]
+      );
+      let modelId;
+      if (cur) {
+        modelId = cur.id;
+        await conn.execute(
+          `UPDATE models SET ${ITEM_WRITE_COLUMNS.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+          [...ITEM_WRITE_COLUMNS.map((k) => row[k]), modelId]
+        );
+        out.updated.push(modelId);
+      } else {
+        const cols = ['division_id', 'item_no', ...ITEM_WRITE_COLUMNS];
+        const [r] = await conn.execute(
+          `INSERT INTO models (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
+          cols.map((k) => row[k])
+        );
+        modelId = r.insertId;
+        out.added.push(modelId);
+      }
+      if (points.length) {
+        const r = await upsertCheckpoints(conn, modelId, points, 'upsert');
+        out.pointsAdded += r.ids.length;
+        out.pointsUpdated += r.updatedIds.length;
+        out.baselineMayBeStale.push(...r.baselineMayBeStale.map((b) => ({ ...b, item_no: row.item_no })));
+      }
+    }
+    return out;
+  });
+  logWrite(req, `นำเข้า item (เพิ่ม ${result.added.length} · แก้ ${result.updated.length} · จุดตรวจ +${result.pointsAdded} ~${result.pointsUpdated})`, 'models', '-');
+  notifyMasterChanged(req);
+  res.json({
+    success: true,
+    added: result.added.length,
+    updated: result.updated.length,
+    addedIds: result.added,
+    pointsAdded: result.pointsAdded,
+    pointsUpdated: result.pointsUpdated,
+    baselineMayBeStale: result.baselineMayBeStale,
+  });
 }));
 
 // ── ดึงเครื่องจักร / item / เครื่อง↔item จาก Drawing Digital (services/drawingSync.js) ──────────────

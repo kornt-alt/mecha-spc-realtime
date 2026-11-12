@@ -22,6 +22,8 @@ import PermissionsTab from './master/PermissionsTab';
 import CheckpointBulkModal, { importCheckpointFile } from './master/CheckpointBulkModal';
 import CopyFromItemModal from './master/CopyFromItemModal';
 import DrawingSyncModal from './master/DrawingSyncModal';
+import DeleteMasterModal from './master/DeleteMasterModal';
+import ItemImportModal from './master/ItemImportModal';
 import useMenuAccess, { MENU } from '../utils/useMenuAccess';
 import { useUrlParam } from '../utils/useModelParam';
 import SearchSelect from './SearchSelect';
@@ -280,19 +282,28 @@ const MasterSetup = () => {
     }
   };
 
-  const remove = (table, id, label) => showConfirm({
-    title: `ลบ "${label}" ?`,
-    body: 'ถ้ามีใบตรวจอ้างอิงอยู่ ระบบจะไม่ยอมลบ — ให้ปิดใช้งานแทน',
-    confirmLabel: 'ลบ',
-    onConfirm: async () => {
-      try {
-        await apiCall('/master/delete', { method: 'DELETE', body: { table, id } });
-        say('success', 'ลบแล้ว');
-        await loadAll();
-        if (table === 'checkpoints') await loadCheckpoints(selectedModel);
-      } catch (e) { fail(e); }
-    },
-  });
+  // ลบ master ทุกชนิด → กล่องบอกว่าใบไหนอ้างอยู่ แล้วเลือก ปิดใช้งาน / ลบถาวร (components/master/DeleteMasterModal.js)
+  const [delTarget, setDelTarget] = useState(null);
+  const remove = (table, id, label) => setDelTarget({ table, id, label });
+  const deleteDone = async (r) => {
+    const { table, id } = delTarget;
+    setDelTarget(null);
+    if (r.kind === 'soft') say('success', `ปิดใช้งาน "${r.label}" แล้ว`);
+    else if (r.kind === 'restore') say('success', `เปิดใช้งาน "${r.label}" แล้ว`);
+    else {
+      const extra = [
+        r.deletedInspections ? `ใบตรวจ ${r.deletedInspections} ใบ` : null,
+        r.deletedJobs ? `งาน Set up ${r.deletedJobs} งาน` : null,
+      ].filter(Boolean).join(' · ');
+      say('success', `ลบ "${r.label}" ถาวรแล้ว${extra ? ` พร้อม${extra}` : ''}`);
+      if (r.staleBaselines?.length) {
+        say('warning', `ใบที่ถูกลบอาจอยู่ในช่วง baseline ที่ล็อกไว้ของ ${r.staleBaselines.map((m) => m.item_no).join(', ')} — ตรวจและ Re-baseline`);
+      }
+      if (table === 'models' && String(id) === String(selectedModel)) setSelectedModel('');
+    }
+    await loadAll();
+    if (table === 'checkpoints' || table === 'models') await loadCheckpoints(selectedModel);
+  };
 
   // ชั้น 2 ของการลบ — ล้างใบที่ "ยกเลิกไปแล้ว" ออกจาก DB จริง
   //
@@ -415,6 +426,17 @@ const MasterSetup = () => {
   // หมวดการตรวจทั้งหมด (รวมตรวจตามรอบ) — คอลัมน์ของตารางจุดตรวจ × หมวด (components/master/CategoryMatrix.js)
   const allCategories = (lookups.categories ?? []).filter((c) => Number(c.is_active ?? 1));
   const workflowCategories = allCategories.filter((c) => Number(c.has_workflow));
+  const downloadMaster = () => apiDownload('/master/export', 'master.xlsx', { method: 'POST', body: {} })
+    .catch((e) => showAlert({ title: 'ดาวน์โหลด Master ไม่ได้', body: e.message }));
+  // นำเข้า item จาก Excel (components/master/ItemImportModal.js) เสร็จ
+  const itemsImported = async (r) => {
+    const stale = r.baselineMayBeStale ?? [];
+    say(stale.length ? 'warning' : 'success',
+      `นำเข้า item แล้ว: เพิ่ม ${r.added} · อัปเดต ${r.updated} · จุดตรวจเพิ่ม ${r.pointsAdded} · แก้ ${r.pointsUpdated}`
+      + (stale.length ? ` — เปลี่ยนชิ้น/ครั้งของ ${stale.map((b) => `${b.item_no} ${b.name}`).join(', ')} baseline เดิมอาจใช้ไม่ได้ ตรวจและ Re-baseline` : ''));
+    await loadAll();
+    await loadCheckpoints(selectedModel);
+  };
   const matrixSaved = async (text) => {
     say('success', text);
     await loadCheckpoints(selectedModel);
@@ -422,8 +444,14 @@ const MasterSetup = () => {
 
   return (
     <Container fluid className="page">
-      <div className="page-head">
+      <div className="page-head d-flex flex-wrap align-items-center gap-2">
         <h1>ตั้งค่า Master</h1>
+        {/* ไฟล์รวมทุกชีต (Division/เครื่อง/ผู้ตรวจ/ลูกค้า/item/จุดตรวจ) — server กั้นทั้ง master.base + master.items */}
+        {(!access.loaded || (access.can(MENU.masterBase) && access.can(MENU.masterItems))) && (
+          <Button size="sm" variant="outline-primary" className="ms-auto" onClick={downloadMaster}>
+            ดาวน์โหลด Master ทั้งหมด (.xlsx)
+          </Button>
+        )}
       </div>
       {msg && <Alert variant={msg.variant} dismissible onClose={() => setMsg(null)}>{msg.text}</Alert>}
 
@@ -465,7 +493,7 @@ const MasterSetup = () => {
           selectedModel={selectedModel} setSelectedModel={setSelectedModel}
           checkpoints={checkpoints}
           onSave={save} onRemove={remove} onMove={moveCheckpoint} onPurgeVoided={purgeVoided}
-          onReorder={reorderCheckpoints} onBulkSaved={bulkSaved}
+          onReorder={reorderCheckpoints} onBulkSaved={bulkSaved} onItemsImported={itemsImported}
           reloadCheckpoints={() => loadCheckpoints(selectedModel)}
           onPreviewBaseline={previewBaseline} onClearBaseline={clearBaseline}
           categories={workflowCategories} allCategories={allCategories} onMatrixSaved={matrixSaved}
@@ -480,6 +508,7 @@ const MasterSetup = () => {
             { key: 'name', label: 'ชื่อ', required: true },
             // dept ของ IPBASS — ว่างไว้ได้ แต่การยิง MO หา item จะใช้ไม่ได้จนกว่าจะตั้ง
             { key: 'ipbass_dept', label: 'IPBASS dept (เช่น T47183)' },
+            { key: 'is_active', label: 'ใช้งาน', type: 'check' },
           ]}
           onSave={save} onRemove={remove} onAlert={showAlert} labelOf={(r) => r.name}
         />
@@ -559,6 +588,7 @@ const MasterSetup = () => {
           await loadCheckpoints(selectedModel);
         }}
       />
+      <DeleteMasterModal target={delTarget} onHide={() => setDelTarget(null)} onDone={deleteDone} />
       <AppDialog dialog={dialog} onHide={closeDialog} />
     </Container>
   );
@@ -587,6 +617,9 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, onAlert, lab
   const pg = usePager(dt.rows, dt.resetKey);
 
   const reset = () => { setForm(blank()); setEditingId(null); };
+  // ดาวน์โหลดเฉพาะแถวที่เห็น (ตามตัวกรอง/ค้นหาหัวคอลัมน์) — ทุกหน้าของ pager ไม่ใช่แค่หน้านี้
+  const download = () => apiDownload('/master/export', `${table}.xlsx`, { method: 'POST', body: { table, ids: dt.rows.map((r) => r.id) } })
+    .catch((e) => onAlert({ title: 'ดาวน์โหลดไม่ได้', body: e.message }));
 
   const submit = async (e) => {
     e.preventDefault();
@@ -635,7 +668,10 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, onAlert, lab
                     value={form[c.key] ?? ''}
                     onChange={(value) => setForm((f) => ({ ...f, [c.key]: value }))}
                     placeholder="--"
-                    options={(c.options ?? []).map((o) => ({ value: String(o.id), label: o.name }))}
+                    // ตัวเลือกที่ปิดใช้งาน (เช่น division) ไม่ขึ้น — ยกเว้นตัวที่แถวนี้ใช้อยู่
+                    options={(c.options ?? [])
+                      .filter((o) => Number(o.is_active ?? 1) === 1 || String(o.id) === String(form[c.key]))
+                      .map((o) => ({ value: String(o.id), label: o.name }))}
                   />
                 ) : (
                   <Form.Control
@@ -657,7 +693,12 @@ const SimpleTab = ({ title, table, rows, columns, onSave, onRemove, onAlert, lab
           </Row>
         </Form>
 
-        <FilterBar dt={dt} className="mb-2" />
+        <div className="d-flex flex-wrap align-items-start gap-2 mb-2">
+          <FilterBar dt={dt} className="flex-grow-1" />
+          <Button size="sm" variant="outline-primary" className="ms-auto" onClick={download} disabled={dt.rows.length === 0}>
+            ดาวน์โหลด Excel ({dt.rows.length})
+          </Button>
+        </div>
         <div className="mc-freeze">
           <Table striped bordered hover size="sm" className="mb-0 text-nowrap">
             <thead>
@@ -702,7 +743,7 @@ const ModelsTab = ({
   specMode, setSpecMode, tolForm, setTolForm,
   models, divisions, customers, selectedModel, setSelectedModel, checkpoints,
   onSave, onRemove, onMove, onPurgeVoided, onPreviewBaseline, onClearBaseline,
-  onReorder, onBulkSaved, reloadCheckpoints,
+  onReorder, onBulkSaved, onItemsImported, reloadCheckpoints,
   categories = [], allCategories = [], onMatrixSaved,
   scopeName,
   onAlert,
@@ -710,6 +751,7 @@ const ModelsTab = ({
   // error ของกล่อง — ชั่วคราว หายตอนสลับแท็บได้ (ของที่พิมพ์ไม่หาย อยู่ที่ <MasterSetup>)
   const [modelErr, setModelErr] = useState(null);
   const [cpErr, setCpErr] = useState(null);
+  const [cpFromMatrix, setCpFromMatrix] = useState(false); // กล่องเปิดจากตารางหมวดที่ยังไม่บันทึก
   const resetModel = () => { setModelForm(blankModel()); setEditingModel(null); setModelErr(null); };
   const closeModel = () => { resetModel(); setModelModal(false); };
   const openAddModel = () => { resetModel(); setModelModal(true); };
@@ -726,6 +768,10 @@ const ModelsTab = ({
   const [dropActive, setDropActive] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const fileRef = useRef(null);
+  // นำเข้า item หลายตัวจาก Excel (ชีต ITEMS + ITEM_CHECKPOINTS) — ไฟล์ที่เลือก = เปิดกล่อง ItemImportModal
+  const [itemFile, setItemFile] = useState(null);
+  const [itemDrop, setItemDrop] = useState(false);
+  const itemFileRef = useRef(null);
   const bulkDefaults = useMemo(() => {
     const m = readCpMemory();
     return { unit: m.unit, gauge: m.gauge, sample_size: m.sampleSize };
@@ -743,6 +789,14 @@ const ModelsTab = ({
     } finally { setImportBusy(false); }
   };
   const downloadTemplate = () => apiDownload('/master/checkpoint-template', 'แม่แบบจุดตรวจ.xlsx')
+    .catch((e) => onAlert({ title: 'ดาวน์โหลดแม่แบบไม่ได้', body: e.message }));
+  // จุดตรวจปัจจุบันเป็น Excel → แก้ → ลากกลับมา (กล่องเพิ่มหลายจุด โหมดอัปเดตจุดเดิม)
+  const downloadCurrent = () => apiDownload(`/master/models/${selectedModel}/checkpoints/export`, 'checkpoints.xlsx')
+    .catch((e) => onAlert({ title: 'ดาวน์โหลดจุดตรวจไม่ได้', body: e.message }));
+  // item ที่เห็นในลิสต์ (ตามช่องค้นหา) + จุดตรวจ → ไฟล์ item (แก้แล้วลากกลับมานำเข้า item ได้)
+  const downloadItems = (ids) => apiDownload('/master/export', 'items.xlsx', { method: 'POST', body: { table: 'models', ids } })
+    .catch((e) => onAlert({ title: 'ดาวน์โหลด item ไม่ได้', body: e.message }));
+  const downloadItemTemplate = () => apiDownload('/master/item-template', 'item-template.xlsx')
     .catch((e) => onAlert({ title: 'ดาวน์โหลดแม่แบบไม่ได้', body: e.message }));
 
   // ลากไฟล์พลาดนอกการ์ด เบราว์เซอร์จะเปิดไฟล์แทนหน้าเว็บ (ฟอร์มที่กรอกค้างหาย) — กันไว้ทั้งหน้าตอนอยู่แท็บนี้
@@ -898,6 +952,7 @@ const ModelsTab = ({
   };
 
   const startEditCp = (cp) => {
+    setCpFromMatrix(false);
     setEditingCp(cp.id);
     setCpErr(null);
     setCpModal(true);
@@ -979,17 +1034,61 @@ const ModelsTab = ({
   };
 
   // "แก้จุดนี้" จากตารางหมวด → เปิดกล่องแก้จุดตรวจตัวเดียวกับปุ่ม "แก้" ในตาราง
-  const editFromMatrix = startEditCp;
+  // คลิกแถวในตารางหมวดการตรวจ → กล่องแก้จุด · แถวที่แก้ค้างในตาราง (ยังไม่บันทึก) = ส่วน ④ เอาค่าจากตาราง
+  const editFromMatrix = (cp, draftRow) => {
+    startEditCp(cp);
+    setCpFromMatrix(Boolean(draftRow));
+    if (draftRow) {
+      setCpForm((f) => ({
+        ...f,
+        in_routine: draftRow.in_routine,
+        sample_size: draftRow.sample_size,
+        frequency: draftRow.frequency,
+        settings: { ...draftRow.settings },
+      }));
+    }
+  };
 
   return (
     <>
     <Row>
       {/* รุ่น */}
       <Col lg={4}>
-        <Card className="mb-3">
+        {/* ลากไฟล์ item (ชีต ITEMS) มาวางที่การ์ดนี้ = นำเข้า item */}
+        <Card
+          className={`mb-3 cp-card${itemDrop ? ' cp-card--drop' : ''}`}
+          onDragEnter={(e) => { if (isFileDrag(e)) { e.preventDefault(); setItemDrop(true); } }}
+          onDragOver={(e) => { if (isFileDrag(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setItemDrop(false); }}
+          onDrop={(e) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            setItemDrop(false);
+            if (e.dataTransfer.files?.[0]) setItemFile(e.dataTransfer.files[0]);
+          }}
+        >
+          {itemDrop && <div className="cp-card__drop" aria-hidden="true">วางไฟล์ Excel ที่นี่ เพื่อนำเข้า item</div>}
           <Card.Header className="d-flex align-items-center gap-2">
             <span>Item</span>
-            <Button size="sm" className="ms-auto" onClick={openAddModel}>+ เพิ่ม Item</Button>
+            <Dropdown align="end" className="ms-auto">
+              <Dropdown.Toggle size="sm" variant="outline-primary">Excel</Dropdown.Toggle>
+              <Dropdown.Menu>
+                <Dropdown.Item onClick={() => itemFileRef.current?.click()}>
+                  นำเข้า item จาก Excel <small className="d-block text-muted">item + จุดตรวจ · ลากไฟล์มาวางที่การ์ดนี้ก็ได้</small>
+                </Dropdown.Item>
+                <Dropdown.Divider />
+                <Dropdown.Item onClick={() => downloadItems(visibleModels.map((m) => m.id))} disabled={visibleModels.length === 0}>
+                  ดาวน์โหลด item (แก้ใน Excel)
+                  <small className="d-block text-muted">
+                    {modelQuery.trim() ? `${visibleModels.length} item ตามที่ค้นหา` : `ทั้งหมด ${visibleModels.length} item`} พร้อมจุดตรวจ
+                  </small>
+                </Dropdown.Item>
+                <Dropdown.Item onClick={downloadItemTemplate}>ดาวน์โหลดแม่แบบ item เปล่า (.xlsx)</Dropdown.Item>
+              </Dropdown.Menu>
+            </Dropdown>
+            <input ref={itemFileRef} type="file" accept=".xlsx" hidden
+              onChange={(e) => { if (e.target.files?.[0]) setItemFile(e.target.files[0]); e.target.value = ''; }} />
+            <Button size="sm" onClick={openAddModel}>+ เพิ่ม Item</Button>
           </Card.Header>
           <Card.Body>
             {/* ลิสต์ item ยาวเป็นร้อยแถว เลื่อนหาช้ากว่าพิมพ์ — ค้นได้ทั้งเลข item ชื่อ และ division */}
@@ -1084,7 +1183,10 @@ const ModelsTab = ({
                     คัดลอกจาก item อื่น <small className="d-block text-muted">ดึงจุดตรวจที่ตั้งไว้แล้วมาแก้ต่อ</small>
                   </Dropdown.Item>
                   <Dropdown.Divider />
-                  <Dropdown.Item onClick={downloadTemplate}>ดาวน์โหลดแม่แบบ (.xlsx)</Dropdown.Item>
+                  <Dropdown.Item onClick={downloadCurrent} disabled={checkpoints.every((c) => !c.is_active)}>
+                    ดาวน์โหลดจุดตรวจ (แก้ใน Excel) <small className="d-block text-muted">แก้แล้วลากไฟล์กลับมา = อัปเดตจุดเดิมตามชื่อ</small>
+                  </Dropdown.Item>
+                  <Dropdown.Item onClick={downloadTemplate}>ดาวน์โหลดแม่แบบเปล่า (.xlsx)</Dropdown.Item>
                 </Dropdown.Menu>
               </Dropdown>
               <input ref={fileRef} type="file" accept=".xlsx" hidden
@@ -1256,6 +1358,8 @@ const ModelsTab = ({
         categories={allCategories}
         onSaved={onMatrixSaved}
         onEditPoint={editFromMatrix}
+        onReorder={onReorder}
+        onDownload={downloadCurrent}
         onAlert={onAlert}
       />
     )}
@@ -1279,6 +1383,11 @@ const ModelsTab = ({
       currentModelId={selectedModel}
       onPick={(initial) => { setCopyShow(false); openBulk(initial); }}
     />
+    <ItemImportModal
+      file={itemFile}
+      onHide={() => setItemFile(null)}
+      onDone={(res) => { setItemFile(null); onItemsImported(res); }}
+    />
 
     {/* ── กล่องเพิ่ม/แก้ item ── animation={false} ตามกฎ AppDialog · ไม่ใช้ scrollable (ลิสต์ของ SearchSelect โดนตัด) */}
     <Modal show={modelModal} onHide={closeModel} animation={false} backdrop="static">
@@ -1301,7 +1410,10 @@ const ModelsTab = ({
               value={modelForm.division_id}
               onChange={(value) => setModelForm((f) => ({ ...f, division_id: value }))}
               placeholder="-- Division --"
-              options={divisions.map((d) => ({ value: String(d.id), label: d.name }))}
+              options={divisions
+                // division ที่ปิดใช้งานไม่ขึ้นให้เลือก — ยกเว้นตัวที่ item นี้ใช้อยู่ (ช่องต้องไม่ว่างเอง)
+                .filter((d) => Number(d.is_active ?? 1) === 1 || String(d.id) === String(modelForm.division_id))
+                .map((d) => ({ value: String(d.id), label: d.name }))}
             />
           </div>
           <Form.Control className="mb-2" placeholder="Item No. เช่น AAB-1001-01"
@@ -1518,6 +1630,11 @@ const ModelsTab = ({
           {/* ④ ตรวจในหมวดไหนบ้าง — ตรวจตามรอบ = in_routine + ชิ้น/ครั้ง + ความถี่ (คอลัมน์ของ checkpoints)
               หมวดอื่น = checkpoint_category_settings (PUT /checkpoints/:id/categories หลังบันทึกจุด) · ว่าง = ไม่ตรวจ */}
           <div className="cp-section">④ หมวดการตรวจ</div>
+          {cpFromMatrix && editingCp && (
+            <div className="form-note form-note--warning mb-2">
+              ค่าหมวดในส่วนนี้มาจากตารางหมวดการตรวจที่ยังไม่บันทึก — กดบันทึกที่นี่ = บันทึกค่านี้ของจุดนี้เลย
+            </div>
+          )}
           <div className="cp-cats">
             <div className="cp-cats__row">
               <Form.Check id="cp-in-routine" className="cp-cats__name" label="ตรวจตามรอบ (Inspection Record)"
