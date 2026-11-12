@@ -6,7 +6,8 @@
 //
 // ⚠️ ต้อง login (RequireLogin ที่ App.js) · ปุ่มที่โชว์ตาม role เป็นแค่ UI ตัวกั้นจริงคือ requireRole ฝั่ง backend
 // ⚠️ ไม่ตัดสินอะไรเอง — สีแดงตอนพิมพ์คือ judgeLocal (advisory) ผลจริงมาจาก server
-// ⚠️ ตารางกรอก = จุดตรวจเป็นแถว ชิ้นเป็นคอลัมน์ ตามชีต SET UP (ต่างจากใบตรวจตามรอบที่กลับด้านตามชีต Input)
+// ⚠️ ตารางกรอกสลับได้ 2 แบบ (Korn สั่ง 2026-11): แนวตั้ง = จุดตรวจเป็นแถว ชิ้นเป็นคอลัมน์ ตามชีต SET UP (ค่าเริ่ม) ·
+//    แนวนอน = จุดตรวจเป็นคอลัมน์ ชิ้นเป็นแถว แบบใบตรวจตามรอบ (GridHead ตัวเดียวกัน) · จำใน localStorage spc.setupLayout
 // ⚠️ ?job= คือที่อยู่ของงานที่เปิดดู (useUrlParam) — QC กดจาก toast/คิวแล้วรีเฟรชได้ไม่หลุด
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -25,6 +26,10 @@ import AppDialog from './AppDialog';
 import MoLookupBar from './MoLookupBar';
 import SearchSelect from './SearchSelect';
 import SpecValue from './SpecValue';
+import { GridHead } from './InputGrid';
+import LayoutToggle, { useLayout } from './LayoutToggle';
+import { cleanDecimal, specAllowsMinus } from '../utils/numericInput';
+import { itemsForMachine, machinesForItem } from '../utils/machineItems';
 import { useDataTable, FilterBar } from './table/useDataTable';
 import Pager, { usePager } from './table/Pager';
 
@@ -105,12 +110,90 @@ export const isComplete = (cp, values) => (cp.char_type === 'attribute'
   ? Boolean(values[keyOf(cp.id, 1)])
   : Array.from({ length: cp.sample_size }, (_, i) => toNum(values[keyOf(cp.id, i + 1)])).every((v) => v !== null));
 
-const StageForm = ({ checkpoints, values, onChange, disabled }) => {
+// ── แนวตั้ง / แนวนอน ── ปุ่ม/hook กลางอยู่ที่ components/LayoutToggle.js (ใบตรวจตามรอบใช้ตัวเดียวกัน)
+// ⚠️ แค่วิธีวาด — values ('<cpId>:<piece>') ชุดเดียวกัน สลับกลางคันค่าไม่หาย · buildResults/isComplete ไม่รู้ว่ามีโหมด
+const LAYOUT_KEY = 'spc.setupLayout';
+const LAYOUT_DEFAULT = 'vertical';
+
+// Enter = ไปช่องถัดไปตามลำดับ "จุดตรวจ → ชิ้น" ทั้งสองแบบ (แนวตั้งไปทางขวา · แนวนอนลงล่าง)
+// ⚠️ ลำดับอ่านจาก data-cp / data-piece ของช่องเอง ไม่ใช่ array ของ ref (หลักเดียวกับ InspectionSheet)
+const onEnterNext = (e) => {
+  if (e.key !== 'Enter' || e.nativeEvent?.isComposing) return;
+  const root = e.currentTarget.closest('[data-grid]');
+  if (!root) return;
+  e.preventDefault();
+  const cells = Array.from(root.querySelectorAll('[data-cell]'))
+    .filter((el) => !el.disabled)
+    .sort((a, b) => Number(a.dataset.cp) - Number(b.dataset.cp) || Number(a.dataset.piece) - Number(b.dataset.piece));
+  const next = cells[cells.indexOf(e.currentTarget) + 1];
+  if (next) { next.focus(); if (typeof next.select === 'function') next.select(); }
+};
+
+// ช่องกรอก 1 ช่อง (จุด × ชิ้น) ใช้ร่วมสองแบบ — null = ไม่มีช่อง (เกินจำนวนชิ้น / attribute ชิ้นที่ 2+)
+const PieceInput = ({ cp, cpIndex, piece, values, set, disabled, compact = false }) => {
+  if (cp.char_type === 'attribute') {
+    if (piece > 1) return null;
+    const k = keyOf(cp.id, 1);
+    const cls = compact ? `cell${values[k] === 'NG' ? ' cell--ng' : ''}` : 'form-select form-select-sm';
+    return (
+      <select className={cls} value={values[k] ?? ''} disabled={disabled}
+        data-cell="" data-cp={cpIndex} data-piece={1} onKeyDown={onEnterNext}
+        aria-label={`${cp.name} ผล`} onChange={(e) => set(k, e.target.value)}>
+        <option value="">—</option>
+        <option value="OK">OK</option>
+        <option value="NG">NG</option>
+      </select>
+    );
+  }
+  if (piece > cp.sample_size) return null;
+  const k = keyOf(cp.id, piece);
+  const ng = judgeLocal(values[k], cp.usl, cp.lsl) === 'NG';
+  const cls = compact ? `cell${ng ? ' cell--ng' : ''}` : `form-control form-control-sm${ng ? ' is-invalid' : ''}`;
+  return (
+    <input className={cls} type="text" inputMode="decimal" autoComplete="off"
+      value={values[k] ?? ''} disabled={disabled}
+      data-cell="" data-cp={cpIndex} data-piece={piece} onKeyDown={onEnterNext}
+      aria-label={`${cp.name} ชิ้นที่ ${piece}`}
+      onChange={(e) => set(k, cleanDecimal(e.target.value, { allowMinus: specAllowsMinus(cp) }))} />
+  );
+};
+
+const StageForm = ({ checkpoints, values, onChange, disabled, layout }) => {
   const maxQty = Math.max(1, ...checkpoints.map((c) => c.sample_size));
   const set = (k, v) => onChange((prev) => ({ ...prev, [k]: v }));
+  const pieces = Array.from({ length: maxQty }, (_, i) => i + 1);
+
+  if (layout === 'horizontal') {
+    // แนวนอน = หน้าตาเดียวกับใบตรวจตามรอบ (GridHead + .igrid) · แถว = ชิ้น
+    return (
+      <div className="igrid-wrap" data-grid="">
+        <table className="igrid">
+          <GridHead checkpoints={checkpoints} leftCols={H_LEFT}
+            sizeLabel={(cp) => `${cp.char_type === 'attribute' ? 1 : cp.sample_size} pcs`} />
+          <tbody>
+            {pieces.map((piece) => (
+              <tr key={piece}>
+                <th scope="row" className="igrid__left igrid__meta text-end" style={H_LEFT_STYLE}>{piece}</th>
+                {checkpoints.map((cp, i) => {
+                  const has = cp.char_type === 'attribute' ? piece === 1 : piece <= cp.sample_size;
+                  // ช่องที่ไม่มี (เกินจำนวนชิ้น) ต้องว่างและ focus ไม่ได้ — เหมือนใบตรวจตามรอบ
+                  if (!has) return <td key={cp.id} className="igrid__entry" aria-hidden="true" />;
+                  return (
+                    <td key={cp.id} className="igrid__entry">
+                      <PieceInput cp={cp} cpIndex={i} piece={piece} values={values} set={set} disabled={disabled} compact />
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
 
   return (
-    <div className="mc-freeze setup-grid-wrap">
+    <div className="mc-freeze setup-grid-wrap" data-grid="">
       <Table size="sm" bordered className="align-middle mb-0 setup-grid">
         <thead>
           <tr>
@@ -118,47 +201,23 @@ const StageForm = ({ checkpoints, values, onChange, disabled }) => {
             <th className="mc-sticky-start">จุดตรวจ</th>
             <th>สเปก</th>
             <th>เครื่องมือวัด</th>
-            {Array.from({ length: maxQty }, (_, i) => (
-              <th key={i} className="text-center" style={{ width: 96 }}>{i + 1}</th>
+            {pieces.map((p) => (
+              <th key={p} className="text-center" style={{ width: 96 }}>{p}</th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {checkpoints.map((cp) => (
+          {checkpoints.map((cp, i) => (
             <tr key={cp.id}>
               <td>{cp.seq_no}</td>
               <td className="mc-sticky-start">{cp.name}{cp.is_critical ? <Badge bg="danger" className="ms-1">SC</Badge> : null}</td>
               <td className="small"><SpecValue checkpoint={cp} /></td>
               <td className="small text-muted">{cp.gauge || '—'}</td>
-              {Array.from({ length: maxQty }, (_, i) => {
-                const piece = i + 1;
-                if (cp.char_type === 'attribute') {
-                  if (piece > 1) return <td key={piece} className="bg-light" />;
-                  const k = keyOf(cp.id, 1);
-                  return (
-                    <td key={piece} colSpan={1}>
-                      <Form.Select size="sm" value={values[k] ?? ''} disabled={disabled}
-                        aria-label={`${cp.name} ผล`}
-                        onChange={(e) => set(k, e.target.value)}>
-                        <option value="">—</option>
-                        <option value="OK">OK</option>
-                        <option value="NG">NG</option>
-                      </Form.Select>
-                    </td>
-                  );
-                }
-                if (piece > cp.sample_size) return <td key={piece} className="bg-light" />;
-                const k = keyOf(cp.id, piece);
-                const ng = judgeLocal(values[k], cp.usl, cp.lsl) === 'NG';
-                return (
-                  <td key={piece}>
-                    <Form.Control size="sm" type="text" inputMode="decimal" autoComplete="off"
-                      value={values[k] ?? ''} disabled={disabled}
-                      aria-label={`${cp.name} ชิ้นที่ ${piece}`}
-                      isInvalid={ng}
-                      onChange={(e) => set(k, e.target.value)} />
-                  </td>
-                );
+              {pieces.map((piece) => {
+                const has = cp.char_type === 'attribute' ? piece === 1 : piece <= cp.sample_size;
+                return has
+                  ? <td key={piece}><PieceInput cp={cp} cpIndex={i} piece={piece} values={values} set={set} disabled={disabled} /></td>
+                  : <td key={piece} className="bg-light" />;
               })}
             </tr>
           ))}
@@ -168,8 +227,12 @@ const StageForm = ({ checkpoints, values, onChange, disabled }) => {
   );
 };
 
+// คอลัมน์ซ้ายของแนวนอน (ตรึง) — ความกว้างต้อง fix ตามกฎของ GridHead
+const H_LEFT = [{ key: 'piece', label: 'ชิ้น', width: 4.5 }];
+const H_LEFT_STYLE = { left: 0, width: '4.5rem', minWidth: '4.5rem' };
+
 // ── ผลที่บันทึกแล้ว: แถว = จุดตรวจ · คอลัมน์ = ชิ้นของแต่ละใบ (PD / QC ของรอบนั้นคู่กัน) ──────────
-const ResultsTable = ({ checkpoints, inspections }) => {
+const ResultsTable = ({ checkpoints, inspections, layout }) => {
   const cps = useMemo(() => {
     const map = new Map();
     for (const cp of [...checkpoints.pd, ...checkpoints.qc]) if (!map.has(cp.id)) map.set(cp.id, cp);
@@ -181,6 +244,42 @@ const ResultsTable = ({ checkpoints, inspections }) => {
     ins,
     n: Math.max(1, ...ins.results.map((r) => r.piece_no)),
   }));
+  const cellOf = (ins, cp, piece) => ins.results.find((x) => x.checkpoint_id === cp.id && x.piece_no === piece);
+  const ngStyle = (r) => (r?.judgment === 'NG' ? { color: 'var(--red)', fontWeight: 600 } : undefined);
+
+  if (layout === 'horizontal') {
+    // แนวนอน: คอลัมน์ = จุดตรวจ · แถว = ใบ × ชิ้น (ชื่อแถวบอกรอบ/ขั้น/ผู้ตรวจ)
+    return (
+      <div className="table-responsive">
+        <Table size="sm" bordered className="align-middle small mb-0">
+          <thead>
+            <tr>
+              <th>รอบ · ขั้น</th>
+              <th className="text-center">ชิ้น</th>
+              {cps.map((cp) => <th key={cp.id} className="text-center text-nowrap">{cp.name}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {cols.flatMap(({ ins, n }) => Array.from({ length: n }, (_, i) => (
+              <tr key={`${ins.id}-${i}`}>
+                {i === 0 && (
+                  <td rowSpan={n} className="text-nowrap">
+                    รอบ {ins.round_no ?? '?'} · {ins.stage === 'pd' ? 'Production Check' : 'QC Confirm'}
+                    <div className="text-muted">{ins.inspector_name} · {fmtDateTime(ins.inspected_at)}</div>
+                  </td>
+                )}
+                <td className="text-center">{i + 1}</td>
+                {cps.map((cp) => {
+                  const r = cellOf(ins, cp, i + 1);
+                  return <td key={cp.id} className="text-center" style={ngStyle(r)}>{r ? (r.value ?? r.judgment) : ''}</td>;
+                })}
+              </tr>
+            )))}
+          </tbody>
+        </Table>
+      </div>
+    );
+  }
 
   return (
     <div className="table-responsive">
@@ -206,12 +305,10 @@ const ResultsTable = ({ checkpoints, inspections }) => {
             <tr key={cp.id}>
               <td>{cp.seq_no}. {cp.name}</td>
               {cols.flatMap(({ ins, n }) => Array.from({ length: n }, (_, i) => {
-                const r = ins.results.find((x) => x.checkpoint_id === cp.id && x.piece_no === i + 1);
-                const text = r ? (r.value ?? r.judgment) : '';
+                const r = cellOf(ins, cp, i + 1);
                 return (
-                  <td key={`${ins.id}-${i}`} className="text-center"
-                    style={r?.judgment === 'NG' ? { color: 'var(--red)', fontWeight: 600 } : undefined}>
-                    {text}
+                  <td key={`${ins.id}-${i}`} className="text-center" style={ngStyle(r)}>
+                    {r ? (r.value ?? r.judgment) : ''}
                   </td>
                 );
               }))}
@@ -228,6 +325,7 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [values, setValues] = useState({});
+  const [layout, setLayout] = useLayout(LAYOUT_KEY, LAYOUT_DEFAULT);
   const [busy, setBusy] = useState(false);
   const reqRef = useRef(0);
 
@@ -352,14 +450,15 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
       {/* ── ขั้นที่ต้องทำตอนนี้ ── */}
       {stage && (
         <Card className="mb-3">
-          <Card.Header>
-            {stage === 'pd' ? `Production Check — รอบ ${job.round_no}` : `QC Confirm — รอบ ${job.round_no}`}
+          <Card.Header className="d-flex flex-wrap align-items-center gap-2">
+            <span>{stage === 'pd' ? `Production Check — รอบ ${job.round_no}` : `QC Confirm — รอบ ${job.round_no}`}</span>
+            <span className="ms-auto"><LayoutToggle layout={layout} onChange={setLayout} /></span>
           </Card.Header>
           <Card.Body>
             {stageCps.length === 0 ? (
               <div className="small text-muted">ยังไม่ได้ตั้งจุดตรวจของขั้นนี้ — ให้ ADMIN ตั้งที่ Master › จุดตรวจ</div>
             ) : (
-              <StageForm checkpoints={stageCps} values={values} onChange={setValues} disabled={busy} />
+              <StageForm checkpoints={stageCps} values={values} onChange={setValues} disabled={busy} layout={layout} />
             )}
             {/* แถบปุ่มติดขอบล่าง (ตัวเดียวกับใบตรวจตามรอบ) — ฟอร์มยาวไม่ต้องเลื่อนลงไปหาปุ่ม */}
             <div className="savebar">
@@ -400,8 +499,11 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
       )}
 
       <Card className="mb-3">
-        <Card.Header>ผลตรวจที่บันทึกแล้ว</Card.Header>
-        <Card.Body><ResultsTable checkpoints={checkpoints} inspections={inspections} /></Card.Body>
+        <Card.Header className="d-flex flex-wrap align-items-center gap-2">
+          <span>ผลตรวจที่บันทึกแล้ว</span>
+          {!stage && <span className="ms-auto"><LayoutToggle layout={layout} onChange={setLayout} /></span>}
+        </Card.Header>
+        <Card.Body><ResultsTable checkpoints={checkpoints} inspections={inspections} layout={layout} /></Card.Body>
       </Card>
 
       <Card className="mb-3">
@@ -447,10 +549,18 @@ const OpenJob = ({ categoryId, lookups, models, onOpened, showAlert }) => {
   const [busy, setBusy] = useState(false);
 
   const model = models.find((m) => String(m.id) === modelId);
-  const machines = (lookups.machines ?? []).filter((m) => !model || String(m.division_id) === String(model.division_id));
+  const divisionMachines = useMemo(
+    () => (lookups.machines ?? []).filter((m) => !model || String(m.division_id) === String(model.division_id)),
+    [lookups.machines, model]
+  );
   useEffect(() => {
-    if (machineId && !machines.some((m) => String(m.id) === machineId)) setMachineId('');
-  }, [machineId, machines]);
+    if (machineId && !divisionMachines.some((m) => String(m.id) === machineId)) setMachineId('');
+  }, [machineId, divisionMachines]);
+  // เครื่อง↔item ที่รันได้ (Drawing Digital) — ตัวช่วยเลือก ไม่ใช่ตัวกั้น (utils/machineItems.js)
+  const machineItems = lookups.machineItems ?? [];
+  const machine = divisionMachines.find((m) => String(m.id) === machineId);
+  const machines = machinesForItem(divisionMachines, modelId, machineItems, machineId).list;
+  const itemScope = itemsForMachine(models, machine, machineItems, modelId);
 
   const pickModel = useCallback((m) => setModelId(String(m.id)), []);
   const ready = moNo.trim() && modelId && machineId && shift;
@@ -492,7 +602,8 @@ const OpenJob = ({ categoryId, lookups, models, onOpened, showAlert }) => {
           <Col md={5}>
             <Form.Label className="small mb-1">Item</Form.Label>
             <SearchSelect id="setup-model" value={modelId} onChange={setModelId} aria-label="Item"
-              options={models.map((m) => ({ value: String(m.id), label: `${m.item_no} ${m.item_name}`, hint: m.division_name }))} />
+              options={itemScope.list.map((m) => ({ value: String(m.id), label: `${m.item_no} ${m.item_name}`, hint: m.division_name }))} />
+            {itemScope.filtered && <div className="small text-muted mt-1">เฉพาะ item ที่เครื่อง {machine?.code} รันได้ (Drawing Digital)</div>}
           </Col>
           <Col md={3}>
             <Form.Label className="small mb-1">เครื่องจักร</Form.Label>

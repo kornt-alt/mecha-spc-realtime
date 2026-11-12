@@ -9,6 +9,7 @@ import { SHIFTS } from '../utils/config';
 import { useDialog } from '../utils/useDialog';
 import SearchSelect from './SearchSelect';
 import AppDialog from './AppDialog';
+import { itemsForMachine, machinesForItem, isRunnable } from '../utils/machineItems';
 
 const shiftLabel = (code) => SHIFTS.find((s) => s.code === code)?.label ?? '—';
 
@@ -22,9 +23,11 @@ const scopeToDivision = (list, divisionId) => {
 };
 
 const StationBar = ({
-  station, models, machines, inspectors, divisions = [], onChange, onAddInspector, ready,
+  station, models, machines, inspectors, divisions = [], machineItems = [], onChange, onAddInspector, ready,
 }) => {
   const [editing, setEditing] = useState(false);
+  // ปิดตัวกรอง "item ที่เครื่องนี้รันได้" (เครื่องใหม่ที่ Drawing ยังไม่ผูก / รันชั่วคราว)
+  const [showAllItems, setShowAllItems] = useState(false);
   const { dialog, showAlert, showForm, closeDialog } = useDialog();
 
   const model = models.find((m) => String(m.id) === station.modelId);
@@ -32,7 +35,11 @@ const StationBar = ({
   const inspector = inspectors.find((i) => String(i.id) === station.inspectorId);
 
   const divisionId = model?.division_id;
-  const machineOptions = scopeToDivision(machines, divisionId);
+  // เครื่อง↔item ที่รันได้ (จาก Drawing Digital · utils/machineItems.js) — ตัวช่วยเลือก ไม่ใช่ตัวกั้น · ตัวที่เลือกไว้อยู่ในลิสต์เสมอ
+  const machineScope = machinesForItem(scopeToDivision(machines, divisionId), station.modelId, machineItems, station.machineId);
+  const machineOptions = machineScope.list;
+  const itemScope = showAllItems ? { list: models, filtered: false } : itemsForMachine(models, machine, machineItems, station.modelId);
+  const notLinked = model && machine && !isRunnable(machine, model.id, machineItems);
   const inspectorOptions = scopeToDivision(inspectors, divisionId);
 
   // ยังตั้งไม่ครบ = กางแผงค้างไว้ ไม่ต้องให้กดหา
@@ -57,7 +64,7 @@ const StationBar = ({
 
   // ⚠️ hint ไม่ใช่ของประดับ — ชื่อผู้ตรวจซ้ำกันได้และ item เลขเดียวกันมีได้ทั้งสอง division
   //    ข้อความตรงนี้คือสิ่งเดียวที่แยกสองแถวที่หน้าตาเหมือนกันออกจากกัน (และค้นหาได้ด้วย)
-  const modelOpts = models.map((m) => ({
+  const modelOpts = itemScope.list.map((m) => ({
     value: String(m.id),
     label: `${m.item_no} — ${m.item_name}`,
     hint: m.division_name ?? '',
@@ -184,6 +191,16 @@ const StationBar = ({
               addNewLabel="เพิ่มผู้ตรวจใหม่"
             />
           </Col>
+          {(itemScope.filtered || showAllItems || notLinked) && (
+            <Col xs={12} className="small d-flex flex-wrap gap-3 align-items-center">
+              {itemScope.filtered && <span className="text-muted">item แสดงเฉพาะที่เครื่อง {machine?.code} รันได้ (ตาม Drawing Digital)</span>}
+              {(itemScope.filtered || showAllItems) && (
+                <Form.Check id="station-all-items" label="แสดง item ทั้งหมด" checked={showAllItems}
+                  onChange={(e) => setShowAllItems(e.target.checked)} />
+              )}
+              {notLinked && <span className="station__warn">item นี้ไม่ได้ผูกกับเครื่อง {machine.code} ใน Drawing Digital — ตรวจได้ แต่ดูให้แน่ใจว่าเลือกถูก</span>}
+            </Col>
+          )}
           <Col xs={12}>
             <div className="small text-muted">
               ค่าที่เลือกไว้จะถูกจำไว้ในเครื่องนี้ เปิดหน้าครั้งหน้าไม่ต้องเลือกใหม่ ·

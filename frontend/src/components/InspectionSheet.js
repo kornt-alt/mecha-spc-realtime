@@ -29,18 +29,23 @@ import { readStation, writeStation, reconcileStation, isStationReady } from '../
 import { masterHref } from '../utils/useModelParam';
 import { useDialog } from '../utils/useDialog';
 import AppDialog from './AppDialog';
-import { decimalsOf } from './SpecValue';
 import MoLookupBar from './MoLookupBar';
 import InspectionList from './InspectionList';
 import StationBar from './StationBar';
 import ControlChart from './ControlChart';
-import InputGrid, { GridHead, cpDecimals } from './InputGrid';
+import InputGrid, { GridHead, cpDecimals, freqLabel } from './InputGrid';
+import SpecValue, { decimalsOf } from './SpecValue';
+import LayoutToggle, { useLayout } from './LayoutToggle';
+import { cleanDecimal, specAllowsMinus } from '../utils/numericInput';
 
 // ── ทิศของ Enter ────────────────────────────────────────────────────────
 // 'down'  = ไล่ชิ้นที่ 1..n ของจุดเดียวจนจบแล้วค่อยไปจุดถัดไป (วัดด้วยเกจเดียวทีละจุด)
 // 'right' = ไล่ทุกจุดของชิ้นที่ 1 แล้วค่อยขึ้นชิ้นที่ 2 (แบบกรอกชีต Input ของ Excel)
 // ⚠️ ค่าตั้งต้นของทั้งระบบอยู่ที่ตัวแปรนี้ที่เดียว — ผู้ใช้สลับเองได้บนหน้าจอแล้วเครื่องจำไว้
 export const ENTER_DIR_DEFAULT = 'down';
+// แนวตั้ง/แนวนอนของตารางกรอก (components/LayoutToggle.js) — ค่าเริ่ม = แนวนอนแบบชีต Input เดิม
+const SHEET_LAYOUT_KEY = 'spc.sheetLayout';
+const SHEET_LAYOUT_DEFAULT = 'horizontal';
 const ENTER_DIR_KEY = 'spc.enterDir';
 
 // ⚠️ try/catch ทั้งอ่านและเขียน — กฎเดียวกับ utils/station.js (private mode / บล็อก storage throw ได้)
@@ -111,6 +116,8 @@ const InspectionSheet = () => {
   // Set ของ checkpoint id ที่ทำแล้วรอบนี้ · null = ยังไม่รู้ (ถือว่าถึงรอบทุกจุด server ตัดสินซ้ำอยู่ดี)
   const [doneIds, setDoneIds] = useState(null);
   const [enterDir, setEnterDir] = useState(readEnterDir);
+  const [layout, setLayout] = useLayout(SHEET_LAYOUT_KEY, SHEET_LAYOUT_DEFAULT);
+  const vertical = layout === 'vertical';
   const [gridKey, setGridKey] = useState(0);
   // กำลัง "แก้เป็นใบใหม่" แทนใบไหน · null = ใบตรวจปกติ
   // { id, subgroup_no, mo_no, checkpointIds: Set } — checkpointIds = จุดที่ใบเดิมมี (บังคับกรอกแทนรอบปกติ)
@@ -320,15 +327,13 @@ const InspectionSheet = () => {
     if (typeof el.select === 'function') el.select();
   };
 
-  // Enter: เดินตามลำดับที่เลือก — 'right' = ลำดับ DOM (ทีละแถว) · 'down' = ทีละคอลัมน์
+  // Enter: 'down' = ชิ้นถัดไปของจุดเดียว (col → row) · 'right' = จุดถัดไปของชิ้นเดียว (row → col)
+  // ⚠️ เรียงเองเสมอ ไม่พึ่งลำดับ DOM — แนวตั้ง/แนวนอนวาดคนละทิศ แต่ความหมายของ Enter ต้องเท่าเดิม
   const moveFocus = (from, delta) => {
-    let cells = allCells();
-    if (enterDir === 'down') {
-      cells = cells
-        .map((el) => ({ el, ...cellPos(el) }))
-        .sort((a, b) => a.col - b.col || a.row - b.row)
-        .map((x) => x.el);
-    }
+    const cells = allCells()
+      .map((el) => ({ el, ...cellPos(el) }))
+      .sort((a, b) => (enterDir === 'down' ? a.col - b.col || a.row - b.row : a.row - b.row || a.col - b.col))
+      .map((x) => x.el);
     const i = cells.indexOf(from);
     if (i === -1) return false;
     const next = cells[i + delta];
@@ -367,14 +372,16 @@ const InspectionSheet = () => {
     }
     // <select> ของจุด attribute ใช้ลูกศรขึ้น/ลงเปลี่ยนค่าเอง ไม่แย่ง
     const isSelect = el.tagName === 'SELECT';
-    if (e.key === 'ArrowDown' && !isSelect) { e.preventDefault(); moveGrid(el, 1, 0); return; }
-    if (e.key === 'ArrowUp' && !isSelect) { e.preventDefault(); moveGrid(el, -1, 0); return; }
+    // ลูกศรเดินตามที่ตาเห็น — แนวตั้ง: ขึ้น/ลง = จุดตรวจ (col) · ซ้าย/ขวา = ชิ้น (row)
+    const go = (dUp, dSide) => (vertical ? moveGrid(el, dSide, dUp) : moveGrid(el, dUp, dSide));
+    if (e.key === 'ArrowDown' && !isSelect) { e.preventDefault(); go(1, 0); return; }
+    if (e.key === 'ArrowUp' && !isSelect) { e.preventDefault(); go(-1, 0); return; }
     // ซ้าย/ขวา ย้ายช่องเฉพาะตอนเคอร์เซอร์อยู่สุดขอบข้อความ ไม่งั้นแก้ตัวเลขกลางค่าไม่ได้
     const len = el.value?.length ?? 0;
     const atStart = isSelect || (el.selectionStart === 0 && el.selectionEnd === 0);
     const atEnd = isSelect || (el.selectionStart === len && el.selectionEnd === len);
-    if (e.key === 'ArrowLeft' && atStart) { e.preventDefault(); moveGrid(el, 0, -1); return; }
-    if (e.key === 'ArrowRight' && atEnd) { e.preventDefault(); moveGrid(el, 0, 1); }
+    if (e.key === 'ArrowLeft' && atStart) { e.preventDefault(); go(0, -1); return; }
+    if (e.key === 'ArrowRight' && atEnd) { e.preventDefault(); go(0, 1); }
   };
 
   const toggleEnterDir = () => {
@@ -512,6 +519,63 @@ const InspectionSheet = () => {
     1
   );
   const pieceRows = Array.from({ length: maxPieces }, (_, i) => i);
+
+  // ── ช่องกรอก 1 ช่อง (จุด × ชิ้น) — ใช้ทั้งแนวนอนและแนวตั้ง ไม่ copy ─────────────
+  // data-row = ชิ้น · data-col = ลำดับจุด (moveFocus/moveGrid อ่านจากตรงนี้ ทั้งสองโหมด)
+  const renderCell = (cp, col, idx, cls) => {
+    const v = verdicts[cp.id] ?? {};
+    if (cp.char_type === 'attribute') {
+      // จุดตรวจด้วยตา มีผลเดียวต่อใบ อยู่ช่องชิ้นที่ 1
+      if (idx > 0) return <td key={idx + ':' + cp.id} className={cls} aria-hidden="true" />;
+      return (
+        <td key={idx + ':' + cp.id} className={cls}>
+          <select
+            data-cell=""
+            data-row={idx}
+            data-col={col}
+            className={`cell${v.judgment === 'NG' ? ' cell--ng' : ''}`}
+            aria-label={`ผลตรวจ ${cp.name}`}
+            value={inputs[cp.id]?.judgment ?? 'OK'}
+            onChange={(e) =>
+              setInputs((prev) => ({ ...prev, [cp.id]: { judgment: e.target.value, touched: true } }))
+            }
+            onKeyDown={onCellKeyDown}
+          >
+            <option value="OK">OK</option>
+            <option value="NG">NG</option>
+          </select>
+        </td>
+      );
+    }
+    const n = cp.sample_size || 1;
+    if (idx >= n) {
+      // จุดนี้สุ่มน้อยชิ้นกว่าจุดอื่น — ช่องที่เกินต้องว่างและ focus ไม่ได้
+      return <td key={idx + ':' + cp.id} className={`${cls} cell-none`} aria-hidden="true" />;
+    }
+    return (
+      <td key={idx + ':' + cp.id} className={cls}>
+        <input
+          data-cell=""
+          data-row={idx}
+          data-col={col}
+          className={`cell${v.pieces?.[idx] === 'NG' ? ' cell--ng' : ''}`}
+          // ⚠️ type="text" ไม่ใช่ number — อ่าน selectionStart บน input[type=number]
+          //    จะ throw ทำให้จับตำแหน่งเคอร์เซอร์ไม่ได้ และลูกศร/ลูกกลิ้งเมาส์
+          //    ไปแก้ค่าที่กรอกไว้แล้วโดยไม่รู้ตัว · toNum ฝั่งเรากับ server แปลงให้อยู่แล้ว
+          // ⚠️ รับแค่ตัวเลขกับจุด (cleanDecimal) — "-" เฉพาะจุดที่สเปกติดลบ
+          type="text"
+          inputMode="decimal"
+          autoComplete="off"
+          aria-label={`${cp.name} ชิ้นที่ ${idx + 1}`}
+          value={inputs[cp.id]?.pieces?.[idx] ?? ''}
+          onChange={(e) => setPiece(cp.id, idx, cleanDecimal(e.target.value, { allowMinus: specAllowsMinus(cp) }))}
+          onKeyDown={onCellKeyDown}
+        />
+      </td>
+    );
+  };
+
+
   const doneClass = (cp) => (isDone(cp) ? 'igrid__col--done' : '');
 
   const setMoNo = useCallback((v) => setEntry((prev) => ({ ...prev, mo_no: v })), []);
@@ -563,6 +627,7 @@ const InspectionSheet = () => {
         machines={lookups.machines ?? []}
         inspectors={lookups.inspectors ?? []}
         divisions={lookups.divisions ?? []}
+        machineItems={lookups.machineItems ?? []}
         onChange={setStation}
         onAddInspector={addInspector}
         ready={ready}
@@ -607,15 +672,69 @@ const InspectionSheet = () => {
           <div className="d-flex align-items-center gap-2 mb-2 flex-wrap">
             <Button size="sm" variant="outline-secondary" onClick={toggleEnterDir}
               title="สลับทิศที่ Enter พาไปช่องถัดไป (Shift+Enter = ย้อนกลับ)">
-              {enterDir === 'down' ? 'Enter ↓ ชิ้นถัดไป' : 'Enter → จุดถัดไป'}
+              {enterDir === 'down'
+                ? `Enter ${vertical ? '→' : '↓'} ชิ้นถัดไป`
+                : `Enter ${vertical ? '↓' : '→'} จุดถัดไป`}
             </Button>
+            <LayoutToggle layout={layout} onChange={setLayout} />
             {doneCount > 0 && (
               <span className="small text-muted">
-                คอลัมน์สีเทา = ทำแล้วรอบนี้ ({doneCount} จุด) ไม่บังคับกรอก — กรอกเพิ่มได้ แต่ต้องครบทุกชิ้น
+                {vertical ? 'แถว' : 'คอลัมน์'}สีเทา = ทำแล้วรอบนี้ ({doneCount} จุด) ไม่บังคับกรอก — กรอกเพิ่มได้ แต่ต้องครบทุกชิ้น
               </span>
             )}
           </div>
 
+          {vertical ? (
+            // ── แนวตั้ง: 1 แถวต่อจุดตรวจ (แบบฟอร์ม SET UP) — ช่องกรอกตัวเดียวกับแนวนอน (renderCell) ──
+            <div className="mc-freeze setup-grid-wrap" ref={gridRef}>
+              <table className="table table-sm table-bordered align-middle mb-0 setup-grid sheet-vgrid">
+                <thead>
+                  <tr>
+                    <th style={{ width: 40 }}>No</th>
+                    <th className="mc-sticky-start">จุดตรวจ</th>
+                    <th>Spec</th>
+                    <th>เครื่องมือวัด</th>
+                    <th>Sample size</th>
+                    {pieceRows.map((idx) => <th key={idx} className="text-center" style={{ width: 96 }}>{idx + 1}</th>)}
+                    <th className="text-center">X̄</th>
+                    <th className="text-center">R</th>
+                    <th className="text-center">ผล</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {checkpoints.map((cp, col) => {
+                    const v = verdicts[cp.id] ?? {};
+                    const done = isDone(cp);
+                    const j = v.judgment ?? null;
+                    return (
+                      <tr key={cp.id} className={done ? 'sheet-vgrid__done' : ''}>
+                        <td>{cp.seq_no}</td>
+                        <td className="mc-sticky-start">
+                          {cp.characteristic && <div className="small text-muted">{cp.characteristic}</div>}
+                          {cp.name}
+                          {cp.is_critical && <span className="igrid__ctf ms-1" title="จุดวิกฤต — SC point">SC point</span>}
+                          {done && <div><span className="igrid__due-badge">ทำแล้วรอบนี้</span></div>}
+                        </td>
+                        <td className="small text-nowrap"><SpecValue checkpoint={cp} /></td>
+                        <td className="small text-muted">{cp.gauge || '—'}</td>
+                        <td className="small text-nowrap">{freqLabel(cp)}</td>
+                        {pieceRows.map((idx) => renderCell(cp, col, idx, 'sheet-vgrid__cell'))}
+                        <td className="num text-center" aria-live="off">
+                          {cp.char_type !== 'attribute' && typeof v.xbar === 'number' ? v.xbar.toFixed(cpDecimals(cp) + 1) : ''}
+                        </td>
+                        <td className="num text-center" aria-live="off">
+                          {cp.char_type !== 'attribute' && typeof v.range === 'number' ? v.range.toFixed(cpDecimals(cp)) : ''}
+                        </td>
+                        <td className="text-center">
+                          <span className={`verdict ${j === 'NG' ? 'verdict--ng' : j === 'OK' ? 'verdict--ok' : 'verdict--empty'}`}>{j ?? '—'}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
           <div className="igrid-wrap" ref={gridRef}>
             <table className="igrid">
               <GridHead
@@ -630,60 +749,7 @@ const InspectionSheet = () => {
                     <th scope="row" className="igrid__left igrid__meta text-end" style={{ left: 0, width: '4.5rem', minWidth: '4.5rem' }}>
                       {idx + 1}
                     </th>
-                    {checkpoints.map((cp, col) => {
-                      const v = verdicts[cp.id] ?? {};
-                      const cls = `igrid__entry ${doneClass(cp)}`;
-
-                      if (cp.char_type === 'attribute') {
-                        // จุดตรวจด้วยตา มีผลเดียวต่อใบ อยู่แถวชิ้นที่ 1
-                        if (idx > 0) return <td key={cp.id} className={cls} aria-hidden="true" />;
-                        return (
-                          <td key={cp.id} className={cls}>
-                            <select
-                              data-cell=""
-                              data-row={idx}
-                              data-col={col}
-                              className={`cell${v.judgment === 'NG' ? ' cell--ng' : ''}`}
-                              aria-label={`ผลตรวจ ${cp.name}`}
-                              value={inputs[cp.id]?.judgment ?? 'OK'}
-                              onChange={(e) =>
-                                setInputs((prev) => ({ ...prev, [cp.id]: { judgment: e.target.value, touched: true } }))
-                              }
-                              onKeyDown={onCellKeyDown}
-                            >
-                              <option value="OK">OK</option>
-                              <option value="NG">NG</option>
-                            </select>
-                          </td>
-                        );
-                      }
-
-                      const n = cp.sample_size || 1;
-                      if (idx >= n) {
-                        // จุดนี้สุ่มน้อยชิ้นกว่าจุดอื่น — ช่องที่เกินต้องว่างและ focus ไม่ได้
-                        return <td key={cp.id} className={cls} aria-hidden="true" />;
-                      }
-                      return (
-                        <td key={cp.id} className={cls}>
-                          <input
-                            data-cell=""
-                            data-row={idx}
-                            data-col={col}
-                            className={`cell${v.pieces?.[idx] === 'NG' ? ' cell--ng' : ''}`}
-                            // ⚠️ type="text" ไม่ใช่ number — อ่าน selectionStart บน input[type=number]
-                            //    จะ throw ทำให้จับตำแหน่งเคอร์เซอร์ไม่ได้ และลูกศร/ลูกกลิ้งเมาส์
-                            //    ไปแก้ค่าที่กรอกไว้แล้วโดยไม่รู้ตัว · toNum ฝั่งเรากับ server แปลงให้อยู่แล้ว
-                            type="text"
-                            inputMode="decimal"
-                            autoComplete="off"
-                            aria-label={`${cp.name} ชิ้นที่ ${idx + 1}`}
-                            value={inputs[cp.id]?.pieces?.[idx] ?? ''}
-                            onChange={(e) => setPiece(cp.id, idx, e.target.value)}
-                            onKeyDown={onCellKeyDown}
-                          />
-                        </td>
-                      );
-                    })}
+                    {checkpoints.map((cp, col) => renderCell(cp, col, idx, `igrid__entry ${doneClass(cp)}`))}
                   </tr>
                 ))}
 
@@ -718,6 +784,7 @@ const InspectionSheet = () => {
               </tbody>
             </table>
           </div>
+          )}
 
           <div className="savebar">
             <span className="savebar__count">

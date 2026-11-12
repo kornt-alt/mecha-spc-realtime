@@ -584,3 +584,18 @@ ALTER TABLE check_categories ADD COLUMN IF NOT EXISTS description VARCHAR(200) N
 ALTER TABLE check_categories ADD COLUMN IF NOT EXISTS flow ENUM('pd_qc','pd','qc') NOT NULL DEFAULT 'pd_qc';
 -- flow pd: PD ตัดสินผลเอง → event pd_pass / pd_reject (MODIFY รันซ้ำได้ ค่าเดิมยังอยู่ครบ)
 ALTER TABLE check_job_events MODIFY action ENUM('open','pd_submit','qc_accept','qc_pass','qc_reject','pd_pass','pd_reject','cancel') NOT NULL;
+
+-- ── อิงเครื่องจักร / item / เครื่อง↔item จากระบบ Drawing Digital (2026-11 · services/drawingSync.js) ─────
+-- synced_at NULL = ไม่ได้มาจาก Drawing (ตั้งมือ / Mecha 2) · allow_all_items 1 = เครื่องนี้รันได้ทุก item (ค่าเริ่ม = พฤติกรรมเดิม)
+-- machine_items = สำเนาของ machine_models ใน Drawing (เฉพาะเครื่องที่ allow_all_items = 0) · ใช้กรองตัวเลือกหน้าใบตรวจ/Set up เท่านั้น ไม่กั้นการบันทึก
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS allow_all_items TINYINT(1) NOT NULL DEFAULT 1;
+ALTER TABLE machines ADD COLUMN IF NOT EXISTS synced_at DATETIME NULL;
+ALTER TABLE models ADD COLUMN IF NOT EXISTS synced_at DATETIME NULL;
+CREATE TABLE IF NOT EXISTS machine_items (
+  machine_id  INT NOT NULL,
+  model_id    INT NOT NULL,
+  PRIMARY KEY (machine_id, model_id),
+  KEY ix_machine_items_model (model_id),
+  CONSTRAINT fk_machine_items_machine FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE,
+  CONSTRAINT fk_machine_items_model FOREIGN KEY (model_id) REFERENCES models(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

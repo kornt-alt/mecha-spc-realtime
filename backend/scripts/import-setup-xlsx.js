@@ -17,13 +17,11 @@
 // ⚠️ กันรันซ้ำ: มีจุดที่เปิดใช้งานชื่อเดียวกันอยู่แล้ว = ปฏิเสธ · Item No ในใบต้องตรงกับ item ที่สั่ง
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
-const ExcelJS = require('exceljs');
 const mysql = require('mysql2/promise');
 const env = require('../config/env');
-
-const FIRST_ROW = 16;
-const COL = { no: 1, crit: 3, sym: 4, nominal: 6, unitSym: 8, sign: 9, tol: 10, limit: 11, gauge: 12, pcs: 16 };
+const { parseWorkbook } = require('../services/checkpointImport');
 
 const args = process.argv.slice(2);
 const file = args.find((a) => !a.startsWith('--') && !/^\d+(,\d+)*$/.test(a));
@@ -37,77 +35,12 @@ const deactivate = typeof flag('deactivate') === 'string' ? flag('deactivate').s
 
 const fail = (msg) => { console.error(`✗ ${msg}`); process.exit(1); };
 
-// ค่าของเซลล์: สูตร → ผลที่ Excel คำนวณไว้ · rich text → ข้อความ · ว่าง → null
-const val = (ws, r, c) => {
-  const v = ws.getCell(r, c).value;
-  if (v === null || v === undefined) return null;
-  if (typeof v === 'object') {
-    if ('result' in v) return v.result ?? null;
-    if (Array.isArray(v.richText)) return v.richText.map((t) => t.text).join('');
-    if ('text' in v) return v.text;
-  }
-  return v;
-};
-const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-const text = (v) => (v === null || v === undefined ? '' : String(v).replace(/\s+/g, ' ').trim());
-const round = (v) => (v === null ? null : Math.round(v * 1e6) / 1e6);
-
-const UNIT_BY_SYMBOL = { Surface: 'μm', Angle: '°' }; // ⚠️ μ = U+03BC (ตัวเดียวกับ UNIT_OPTIONS ฝั่งหน้าเว็บ)
-
+// ตัวอ่านอยู่ที่ services/checkpointImport.js (ใช้ร่วมกับหน้า Master ที่ลากไฟล์มาวาง) — error รายแถว = หยุดทั้งไฟล์
 const parse = async (xlsx) => {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(xlsx);
-  const ws = wb.worksheets[0];
-  const itemNo = text(val(ws, 8, 8));
-  const points = [];
-  for (let r = FIRST_ROW; r <= ws.rowCount; r += 2) {
-    // ⚠️ เซลล์ที่ merge ไว้ exceljs คืนค่าของเซลล์หลักให้ทุกช่อง — แถวที่ A เป็นส่วนต่อของ merge = ไม่ใช่จุดใหม่
-    const noCell = ws.getCell(r, COL.no);
-    if (noCell.isMerged && noCell.master.address !== noCell.address) continue;
-    const no = text(val(ws, r, COL.no));
-    if (!no) continue;
-    const sym = text(val(ws, r, COL.sym)).split(/[\s(]/)[0];
-    const nominalRaw = val(ws, r, COL.nominal);
-    const nominal = num(nominalRaw);
-    const maxV = num(val(ws, r, COL.limit));
-    const minV = num(val(ws, r + 1, COL.limit));
-    const pcs = Number(String(text(val(ws, r, COL.pcs))).match(/\d+/)?.[0]);
-    const isAttr = maxV === null && minV === null;
-    // ชื่อจุด = เลขข้อ + สัญลักษณ์ ("8.1 Ø") · จุดตรวจด้วยตาใช้ข้อความในใบ ("33 Screw Nut", "34 Appearance")
-    const attrLabel = ((nominal === null && text(nominalRaw)) || text(val(ws, r, COL.sym))).split('(')[0].trim();
-    const name = (isAttr ? `${no} ${attrLabel}` : `${no} ${sym}`).trim();
-
-    // ตรวจไขว้ K กับ F ± J (เฉพาะแถวที่มีพิกัดตัวเลข)
-    const signU = text(val(ws, r, COL.sign));
-    const tolU = val(ws, r, COL.tol);
-    const signL = text(val(ws, r + 1, COL.sign));
-    const tolL = num(val(ws, r + 1, COL.tol));
-    if (!isAttr && nominal !== null && typeof tolU === 'number') {
-      const expU = signU === '+' ? nominal + tolU : signU === '-' ? nominal - tolU : nominal;
-      const expL = tolL === null ? null : signL === '-' ? nominal - tolL : signL === '+' ? nominal + tolL : nominal;
-      if (maxV !== null && Math.abs(expU - maxV) > 1e-9) fail(`แถว ${r} (${no}): Max ใน Excel = ${maxV} แต่ F±J ได้ ${expU}`);
-      if (expL !== null && minV !== null && Math.abs(expL - minV) > 1e-9) fail(`แถว ${r + 1} (${no}): Min ใน Excel = ${minV} แต่ F±J ได้ ${expL}`);
-    }
-    if (!Number.isInteger(pcs) || pcs < 1 || pcs > 10) fail(`แถว ${r} (${no}): อ่านจำนวนชิ้น "${text(val(ws, r, COL.pcs))}" ไม่ได้`);
-
-    const spc = text(val(ws, r, COL.crit)).toLowerCase() === 'spc';
-    points.push({
-      row: r,
-      name: name.slice(0, 150),
-      characteristic: isAttr ? null : (sym || null),
-      char_type: isAttr ? 'attribute' : 'variable',
-      unit: isAttr ? null : (UNIT_BY_SYMBOL[sym] ?? 'mm'),
-      gauge: text(val(ws, r, COL.gauge)).replace(/[.,]+$/, '').slice(0, 100) || null,
-      usl: isAttr ? null : round(maxV),
-      lsl: isAttr ? null : round(minV),
-      target: isAttr ? null : round(nominal),
-      sample_size: isAttr ? 1 : pcs,
-      qty: isAttr ? 1 : pcs,
-      is_critical: spc ? 1 : 0,
-      in_routine: spc ? 1 : 0,
-    });
-  }
-  return { itemNo, points };
+  const r = await parseWorkbook(fs.readFileSync(xlsx));
+  if (r.format !== 'setup') fail(r.reason ?? 'ไฟล์นี้ไม่ใช่ใบ SET UP (ไฟล์ตาราง/แม่แบบ ให้นำเข้าที่หน้า Master)');
+  if (r.errors.length) fail(r.errors.map((e) => `แถว ${e.row} (${e.name}): ${e.message}`).join('\n  '));
+  return r;
 };
 
 const main = async () => {

@@ -9,6 +9,7 @@
 //    401 ระหว่างบันทึก (token หมดอายุ) apiCall ล้าง session ให้แล้ว กล่องสลับไปหน้า login เอง
 //    ค่าที่พิมพ์ค้างอยู่ใน state ของกล่อง login เสร็จกดบันทึกซ้ำได้เลย
 import React, { useEffect, useMemo, useState } from 'react';
+import { cleanDecimal, specAllowsMinus } from '../utils/numericInput';
 import { Modal, Button, Form, Spinner } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
 import useSession from '../utils/useSession';
@@ -177,7 +178,7 @@ const EditInspectionModal = ({ inspectionId, onHide, onSaved }) => {
                                 className={`cell${j === 'NG' ? ' cell--ng' : ''}`}
                                 aria-label={`${head.checkpoint_name} ชิ้นที่ ${r.piece_no}`}
                                 value={v}
-                                onChange={(e) => setValues((p) => ({ ...p, [k]: e.target.value }))} />
+                                onChange={(e) => setValues((p) => ({ ...p, [k]: cleanDecimal(e.target.value, { allowMinus: specAllowsMinus({ lsl: r.lsl_used, usl: r.usl_used }) }) }))} />
                             </td>
                           );
                         })}

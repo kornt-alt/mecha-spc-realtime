@@ -65,10 +65,17 @@ const requireLoginUnless = (pred, guard = requireLogin) => (req, res, next) =>
 // ⚠️ ทุกเส้นที่เคยเป็น requireLogin (แก้ master / baseline / ล้างใบ / แก้ค่า / users) ต้องเป็น
 //    requireRole('ADMIN') — บัญชี PD/QC ที่เพิ่มมาเพื่อหน้า Set up ห้ามเข้าไปแก้ Master ได้
 //    กั้นที่ server จริง ไม่ใช่ซ่อนปุ่มฝั่ง client อย่างเดียว
+// ⚠️ ADMIN ผ่านทุก role (Korn สั่ง 2026-11: ADMIN ตรวจได้ทั้ง PD และ QC) — ตัวเดียวกับ hasRole ฝั่ง client
+//    ทางกลับไม่จริง: requireRole('ADMIN') ยังกั้น PD/QC ออกจาก Master เหมือนเดิม
+const userHasRole = (user, ...roles) => {
+  const mine = user?.roles ?? [];
+  return mine.includes('ADMIN') || mine.some((r) => roles.includes(r));
+};
+
 const makeRequireRole = (guard) => (...roles) => (req, res, next) =>
   guard(req, res, (err) => {
     if (err) return next(err);
-    if (!req.user.roles.some((r) => roles.includes(r))) {
+    if (!userHasRole(req.user, ...roles)) {
       return next(new AppError(`บัญชีนี้ไม่มีสิทธิ์ (ต้องเป็น ${roles.join(' หรือ ')})`, 403));
     }
     next();
@@ -114,5 +121,5 @@ const requireMenu = (key) => async (req, res, next) => {
 
 module.exports = {
   requireLogin, requireLoginUnless, requireRole, requireAdmin, requireMenu, optionalUser,
-  makeRequireLogin, makeRequireRole, rolesOf, tokenOf, NEED_LOGIN,
+  makeRequireLogin, makeRequireRole, rolesOf, tokenOf, NEED_LOGIN, userHasRole,
 };

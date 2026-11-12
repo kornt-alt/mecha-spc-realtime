@@ -7,6 +7,7 @@ const { fetchModelCheckpoints, fetchModelBaselines } = require('../db/queries');
 const { baselineOf } = require('../services/baseline');
 const { AppError, wrap } = require('../middleware/errorHandler');
 const { requireMenu } = require('../middleware/requireLogin');
+const drawingSync = require('../services/drawingSync');
 
 // generic CRUD เลือกเมนูตามตาราง — item/จุดตรวจ = master.items · ที่เหลือ = master.base
 // ⚠️ เพิ่มผู้ตรวจจากหน้าใบตรวจ (ปุ่ม "+ เพิ่มผู้ตรวจใหม่") ใช้สิทธิ์ของเมนูใบตรวจ (inspect) ไม่ใช่ Master
@@ -69,17 +70,33 @@ router.get('/lookups', wrap(async (req, res) => {
   const activeOnly = req.query.all !== '1';
   const flag = activeOnly ? ' WHERE is_active = 1' : '';
 
-  const [[divisions], [machines], [inspectors], [customers], [categories]] = await Promise.all([
+  // ⚠️ คอลัมน์ allow_all_items / synced_at + ตาราง machine_items มาจาก db:apply รอบ Drawing sync —
+  //    ยังไม่รันก็ต้องไม่ทำให้หน้าใบตรวจพัง (fallback เป็นค่าเดิม: ทุกเครื่องรันได้ทุก item)
+  const machinesQuery = query(`SELECT id, division_id, code, name, is_active, allow_all_items, synced_at FROM machines${flag} ORDER BY code`)
+    .catch((e) => {
+      if (e.code !== 'ER_BAD_FIELD_ERROR') throw e;
+      return query(`SELECT id, division_id, code, name, is_active, 1 AS allow_all_items, NULL AS synced_at FROM machines${flag} ORDER BY code`);
+    });
+  const linksQuery = query('SELECT machine_id, model_id FROM machine_items')
+    .catch((e) => { if (e.code !== 'ER_NO_SUCH_TABLE') throw e; return [[]]; });
+
+  const [[divisions], [machines], [inspectors], [customers], [categories], [machineItems]] = await Promise.all([
     // ipbass_dept ต้องมาด้วย — ฝั่ง client ใช้เลือก dept ตอนยิง MOPLAN
     query('SELECT id, name, ipbass_dept FROM divisions ORDER BY name'),
-    query(`SELECT id, division_id, code, name, is_active FROM machines${flag} ORDER BY code`),
+    machinesQuery,
     query(`SELECT id, emp_code, name, division_id, is_active FROM inspectors${flag} ORDER BY name`),
     query(`SELECT id, name, min_cp, min_cpk, min_cp_ctf, min_cpk_ctf, ocs_rule_set, is_active FROM customers${flag} ORDER BY name`),
     // หมวดการตรวจ (id 1 = ตรวจตามรอบ) — ตัวกรอง ?category= ของ Dashboard/SC/รายงาน และหน้า Set up ใช้
     query(`SELECT id, code, name, description, has_workflow, flow, sort_order, is_active FROM check_categories${flag} ORDER BY sort_order, id`),
+    linksQuery,
   ]);
 
-  res.json({ divisions, machines, inspectors, customers, categories });
+  // machineItems = [[machine_id, model_id]] (เครื่อง allow_all_items = 0 เท่านั้นที่มีแถว) · drawingSync = เปิดฟีเจอร์ดึงจาก Drawing ไหม
+  res.json({
+    divisions, machines, inspectors, customers, categories,
+    machineItems: machineItems.map((l) => [l.machine_id, l.model_id]),
+    drawingSync: drawingSync.enabled(),
+  });
 }));
 
 router.get('/models', wrap(async (req, res) => {
@@ -500,6 +517,264 @@ router.put('/categories/:id', requireMenu('master.categories'), wrap(async (req,
   logWrite(req, 'แก้หมวดการตรวจ', 'check_categories', id);
   notifyMasterChanged(req);
   res.json({ success: true });
+}));
+
+// ── ตั้งจุดตรวจทีละหลายจุด (หน้า Master: วางจาก Excel / นำเข้าไฟล์ / คัดลอกจาก item อื่น) ─────────
+// ⚠️ ทุกทางเข้าจบที่ POST /models/:id/checkpoints/bulk เส้นเดียว — parse ไม่เขียน DB (หน้าเว็บโชว์ให้ตรวจก่อน)
+const { parseWorkbook, buildTemplate } = require('../services/checkpointImport');
+
+const SPEC_COLUMNS = ['usl', 'lsl', 'target'];
+const strOrNull = (v, max) => {
+  const t = v === null || v === undefined ? '' : String(v).trim();
+  return t ? t.slice(0, max) : null;
+};
+
+// แถวเดียว → ค่าที่พร้อม INSERT · ผิด = AppError 400 (label บอกว่าแถวไหน) — กฎเดียวกับฟอร์มจุดตรวจ (submitCp)
+const bulkPoint = (p, label) => {
+  const name = strOrNull(p?.name, 150);
+  if (!name) throw new AppError(`ต้องมีชื่อจุดตรวจ${label}`, 400);
+  if (p.char_type && !['variable', 'attribute'].includes(p.char_type)) throw new AppError(`ชนิดต้องเป็น variable หรือ attribute${label}`, 400);
+  const charType = p.char_type === 'attribute' ? 'attribute' : 'variable';
+  const isAttr = charType === 'attribute';
+  const spec = {};
+  for (const k of SPEC_COLUMNS) {
+    const v = p[k];
+    if (isAttr || v === null || v === undefined || v === '') { spec[k] = null; continue; }
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new AppError(`${k.toUpperCase()} ต้องเป็นตัวเลข${label}`, 400);
+    spec[k] = n;
+  }
+  // สเปกกลับหัว = ทุกชิ้นเป็น NG และ judgment ถูก snapshot ลงใบตรวจ แก้ย้อนหลังไม่ได้
+  if (spec.lsl !== null && spec.usl !== null && spec.lsl > spec.usl) throw new AppError(`LSL มากกว่า USL${label}`, 400);
+  const n = isAttr ? 1 : Number(p.sample_size);
+  if (!Number.isInteger(n) || n < 1 || n > 10) throw new AppError(`ชิ้น/ครั้ง ต้องเป็น 1-10${label}`, 400);
+  return {
+    name,
+    char_type: charType,
+    unit: isAttr ? null : strOrNull(p.unit, 20),
+    gauge: strOrNull(p.gauge, 100),
+    characteristic: strOrNull(p.characteristic, 64),
+    ...spec,
+    sample_size: n,
+    frequency: p.frequency === 'day' ? 'day' : 'shift',
+    is_critical: p.is_critical ? 1 : 0,
+    in_routine: p.in_routine === undefined || p.in_routine === null ? 1 : (p.in_routine ? 1 : 0),
+  };
+};
+
+// body: { points: [{ name, char_type, unit, gauge, characteristic, usl, lsl, target, sample_size, frequency,
+//                    is_critical, in_routine, settings: [{ category_id, stage, sample_qty }] }],
+//         mode: 'add' | 'upsert' | 'replace' }  (เดิม deactivateExisting: true = replace — ยังรับอยู่)
+//   add     = เพิ่มต่อท้าย (seq_no) · ชื่อซ้ำจุดที่เปิดอยู่ = 409 ทั้งชุด (กันนำเข้าไฟล์เดิมสองรอบ)
+//   upsert  = ชื่อตรงจุดที่เปิดอยู่ (trim + ไม่สนตัวพิมพ์) → UPDATE จุดนั้น (id/seq_no/ผลตรวจ/baseline คงเดิม)
+//             + แทน category settings ของจุดนั้น · ชื่อใหม่ = เพิ่มต่อท้าย · จุดที่ไม่อยู่ในชุด = ไม่แตะ
+//             ⚠️ แต่ละแถวต้องเป็นค่าเต็ม (หน้าเว็บ merge จุดเดิมกับช่องที่วางมาให้แล้ว — utils/checkpointBulk.js mergeOnto)
+//   replace = ปิดใช้งานจุดเดิมทั้งหมด (ไม่ลบ — จุดที่มีผลวัดแล้วต้องอยู่เป็นหลักฐาน) แล้วเพิ่มชุดนี้
+// ซ้ำกันเองในชุด = 409 ทุกโหมด · ทั้งหมดใน transaction เดียว
+// ⚠️ เปลี่ยน sample_size ของจุดเดิม = คืน baselineMayBeStale (กฎเดียวกับ PUT /update) — ห้ามล้าง baseline ให้เอง
+const BULK_MODES = ['add', 'upsert', 'replace'];
+router.post('/models/:id/checkpoints/bulk', requireMenu('master.items'), wrap(async (req, res) => {
+  if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const modelId = Number(req.params.id);
+  const list = Array.isArray(req.body?.points) ? req.body.points : null;
+  if (!list || list.length === 0) throw new AppError('ไม่มีจุดตรวจให้บันทึก', 400);
+  if (list.length > 300) throw new AppError('บันทึกได้ครั้งละไม่เกิน 300 จุด', 400);
+  const mode = req.body?.mode ?? (req.body?.deactivateExisting ? 'replace' : 'add');
+  if (!BULK_MODES.includes(mode)) throw new AppError('mode ต้องเป็น add / upsert / replace', 400);
+  const deactivateExisting = mode === 'replace';
+
+  const [[model]] = await query('SELECT id FROM models WHERE id = ?', [modelId]);
+  if (!model) throw new AppError('ไม่พบ item นี้', 404);
+  const catById = await loadWorkflowCategories();
+
+  const points = list.map((p, i) => {
+    const label = ` (แถว ${i + 1}${p?.name ? ` "${String(p.name).trim()}"` : ''})`;
+    const row = bulkPoint(p, label);
+    // ตรวจรูป settings ก่อนเข้า transaction (checkpoint_id ยังไม่มี — ใส่ 0 ไว้ก่อน)
+    row.settings = settingRows(0, p.settings ?? [], catById, label).map(([, cat, stage, qty]) => [cat, stage, qty]);
+    return row;
+  });
+  const seenNames = new Set();
+  for (const p of points) {
+    const key = p.name.toLowerCase();
+    if (seenNames.has(key)) throw new AppError(`ชื่อจุด "${p.name}" ซ้ำกันในชุดที่ส่งมา`, 409);
+    seenNames.add(key);
+  }
+
+  const result = await withTransaction(async (conn) => {
+    const [existing] = await conn.query(
+      'SELECT id, name, seq_no, is_active, sample_size FROM checkpoints WHERE model_id = ? FOR UPDATE', [modelId]
+    );
+    // ชื่อของจุดที่เปิดอยู่ → แถว (ชื่อซ้ำในจุดที่เปิดอยู่เอง = เอาตัวแรกตาม seq — ไม่ควรมี)
+    const activeByName = new Map();
+    for (const c of [...existing].sort((a, b) => a.seq_no - b.seq_no)) {
+      const k = c.name.trim().toLowerCase();
+      if (c.is_active && !activeByName.has(k)) activeByName.set(k, c);
+    }
+    if (mode === 'add') {
+      const dup = points.filter((p) => activeByName.has(p.name.toLowerCase()));
+      if (dup.length) {
+        throw new AppError(`มีจุดชื่อนี้เปิดใช้งานอยู่แล้ว: ${dup.map((p) => p.name).join(', ')} — เปลี่ยนชื่อ หรือเลือก "อัปเดตจุดเดิม"`, 409);
+      }
+    }
+    let deactivated = 0;
+    if (deactivateExisting) {
+      const [r] = await conn.execute('UPDATE checkpoints SET is_active = 0 WHERE model_id = ? AND is_active = 1', [modelId]);
+      deactivated = r.affectedRows;
+    }
+    // upsert: แก้จุดเดิมก่อน (ไม่แตะ seq_no / is_active) แล้วที่เหลือไปเพิ่ม
+    const updatedIds = [];
+    const baselineMayBeStale = [];
+    const toInsert = [];
+    for (const p of points) {
+      const cur = mode === 'upsert' ? activeByName.get(p.name.toLowerCase()) : null;
+      if (!cur) { toInsert.push(p); continue; }
+      await conn.execute(
+        `UPDATE checkpoints SET name = ?, char_type = ?, unit = ?, gauge = ?, usl = ?, lsl = ?, target = ?,
+                sample_size = ?, frequency = ?, characteristic = ?, is_critical = ?, in_routine = ?
+          WHERE id = ? AND model_id = ?`,
+        [p.name, p.char_type, p.unit, p.gauge, p.usl, p.lsl, p.target, p.sample_size, p.frequency,
+          p.characteristic, p.is_critical, p.in_routine, cur.id, modelId]
+      );
+      await conn.execute('DELETE FROM checkpoint_category_settings WHERE checkpoint_id = ?', [cur.id]);
+      if (p.settings.length) {
+        await conn.query(
+          'INSERT INTO checkpoint_category_settings (checkpoint_id, category_id, stage, sample_qty) VALUES ?',
+          [p.settings.map((s) => [cur.id, ...s])]
+        );
+      }
+      updatedIds.push(cur.id);
+      if (Number(cur.sample_size) !== p.sample_size) baselineMayBeStale.push({ id: cur.id, name: p.name });
+    }
+    let seq = existing.reduce((m, c) => Math.max(m, c.seq_no), 0);
+    const ids = [];
+    for (const p of toInsert) {
+      seq += 1;
+      const [r] = await conn.execute(
+        `INSERT INTO checkpoints
+           (model_id, seq_no, name, char_type, unit, gauge, usl, lsl, target, sample_size, frequency,
+            characteristic, is_critical, is_active, in_routine)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        [modelId, seq, p.name, p.char_type, p.unit, p.gauge, p.usl, p.lsl, p.target, p.sample_size, p.frequency,
+          p.characteristic, p.is_critical, p.in_routine]
+      );
+      ids.push(r.insertId);
+      if (p.settings.length) {
+        await conn.query(
+          'INSERT INTO checkpoint_category_settings (checkpoint_id, category_id, stage, sample_qty) VALUES ?',
+          [p.settings.map((s) => [r.insertId, ...s])]
+        );
+      }
+    }
+    return { ids, deactivated, updatedIds, baselineMayBeStale };
+  });
+  logWrite(req, `เพิ่มจุดตรวจ ${result.ids.length} จุด / แก้ ${result.updatedIds.length} จุด ให้`, 'models', modelId);
+  notifyMasterChanged(req);
+  res.json({
+    success: true,
+    added: result.ids.length,
+    ids: result.ids,
+    updated: result.updatedIds.length,
+    updatedIds: result.updatedIds,
+    deactivated: result.deactivated,
+    baselineMayBeStale: result.baselineMayBeStale,
+  });
+}));
+
+// เรียงจุดตรวจทั้ง item ใหม่ (ลากเรียงในหน้า Master) — body: { ids: [ลำดับใหม่ ครบทุกจุดของ item] }
+// ⚠️ UNIQUE(model_id, seq_no) — ย้ายไปเลขติดลบชั่วคราวก่อนแล้วค่อยเขียน 1..n (หลักเดียวกับ /checkpoints/:id/move)
+router.put('/models/:id/checkpoints/order', requireMenu('master.items'), wrap(async (req, res) => {
+  if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const modelId = Number(req.params.id);
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number) : null;
+  if (!ids || ids.length === 0 || ids.some((x) => !Number.isInteger(x))) throw new AppError('ids ต้องเป็น array ของ id จุดตรวจ', 400);
+  if (new Set(ids).size !== ids.length) throw new AppError('ids มีจุดซ้ำ', 400);
+
+  await withTransaction(async (conn) => {
+    const [rows] = await conn.query('SELECT id FROM checkpoints WHERE model_id = ? FOR UPDATE', [modelId]);
+    const own = new Set(rows.map((r) => r.id));
+    if (rows.length !== ids.length || ids.some((x) => !own.has(x))) {
+      throw new AppError('ลำดับที่ส่งมาไม่ครบหรือมีจุดของ item อื่น — โหลดหน้าใหม่แล้วลองอีกครั้ง', 409);
+    }
+    await conn.query('UPDATE checkpoints SET seq_no = -seq_no - 1000 WHERE model_id = ?', [modelId]);
+    for (let i = 0; i < ids.length; i += 1) {
+      await conn.execute('UPDATE checkpoints SET seq_no = ? WHERE id = ? AND model_id = ?', [i + 1, ids[i], modelId]);
+    }
+  });
+  logWrite(req, 'เรียงลำดับจุดตรวจของ', 'models', modelId);
+  notifyMasterChanged(req);
+  res.json({ success: true });
+}));
+
+// อ่านไฟล์ Excel ที่ลากมาวาง (ไม่เขียน DB) — body = ไฟล์ดิบ (application/octet-stream)
+// ใบ SET UP → จุดพร้อมค่า Set up PD/QC · ไฟล์ตาราง/แม่แบบ → ตารางข้อความ (หน้าเว็บแมปหัวคอลัมน์เอง)
+router.post(
+  '/models/:id/import/parse',
+  requireMenu('master.items'),
+  express.raw({ type: () => true, limit: '5mb' }),
+  wrap(async (req, res) => {
+    if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw new AppError('ไม่ได้รับไฟล์', 400);
+    const [[model]] = await query('SELECT id, item_no FROM models WHERE id = ?', [Number(req.params.id)]);
+    if (!model) throw new AppError('ไม่พบ item นี้', 404);
+
+    const r = await parseWorkbook(req.body);
+    if (!r.format) throw new AppError(r.reason, 400);
+    if (r.format === 'table') return res.json({ format: 'table', rows: r.rows });
+
+    const [[setup]] = await query("SELECT id FROM check_categories WHERE code = 'setup'");
+    const warnings = [];
+    if (r.itemNo && String(model.item_no).trim() !== r.itemNo) {
+      warnings.push(`Item No ในใบ (${r.itemNo}) ไม่ตรงกับ item ที่เลือก (${model.item_no})`);
+    }
+    if (!setup) warnings.push('ไม่พบหมวด Set up ในระบบ — จำนวนชิ้นของ Set up ไม่ถูกตั้ง');
+    res.json({
+      format: 'setup',
+      itemNo: r.itemNo,
+      warnings,
+      errors: r.errors,
+      points: r.points.map(({ qty, ...p }) => ({
+        ...p,
+        settings: setup && qty ? [
+          { category_id: setup.id, stage: 'pd', sample_qty: qty },
+          { category_id: setup.id, stage: 'qc', sample_qty: qty },
+        ] : [],
+      })),
+    });
+  })
+);
+
+// ไฟล์แม่แบบ (สร้างสด — คอลัมน์หมวดตามที่มีใน DB ตอนนี้)
+router.get('/checkpoint-template', requireMenu('master.items'), wrap(async (req, res) => {
+  const [cats] = await query('SELECT id, name, has_workflow, flow, is_active FROM check_categories ORDER BY sort_order, id');
+  const wb = buildTemplate(cats);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="checkpoint-template.xlsx"; filename*=UTF-8''${encodeURIComponent('แม่แบบจุดตรวจ.xlsx')}`
+  );
+  await wb.xlsx.write(res);
+  res.end();
+}));
+
+// ── ดึงเครื่องจักร / item / เครื่อง↔item จาก Drawing Digital (services/drawingSync.js) ──────────────
+// ⚠️ แตะทั้งเครื่อง (master.base) และ item (master.items) → ต้องมีสิทธิ์ทั้งสอง · apply คำนวณแผนใหม่ใน transaction (ไม่เชื่อแผนจาก client)
+const requireDrawingSync = (req, res, next) => (drawingSync.enabled()
+  ? next()
+  : next(new AppError('ยังไม่ได้ตั้ง DRAWING_DB_NAME ใน backend/.env — ฟีเจอร์ดึงจาก Drawing Digital ปิดอยู่', 400)));
+
+router.get('/drawing-sync/preview', requireMenu('master.base'), requireMenu('master.items'), requireDrawingSync, wrap(async (req, res) => {
+  res.json(await drawingSync.buildPlan((sql, p) => query(sql, p)));
+}));
+
+router.post('/drawing-sync/apply', requireMenu('master.base'), requireMenu('master.items'), requireDrawingSync, wrap(async (req, res) => {
+  const result = await withTransaction(async (conn) => {
+    const plan = await drawingSync.buildPlan((sql, p) => conn.query(sql, p));
+    return { plan, summary: await drawingSync.applyPlan(conn, plan) };
+  });
+  logWrite(req, `ดึงจาก Drawing Digital ${JSON.stringify(result.summary)}`, 'machines/models', '-');
+  notifyMasterChanged(req);
+  res.json({ success: true, summary: result.summary, warnings: result.plan.warnings });
 }));
 
 module.exports = router;

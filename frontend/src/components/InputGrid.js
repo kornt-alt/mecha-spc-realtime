@@ -42,8 +42,10 @@ const leftStyle = (c) => ({ left: `${c.left}rem`, width: `${c.width}rem`, minWid
  * @param stats     { [cpId]: { max, min, avg } } | null — null = ไม่แสดงแถว Max/Average/Min
  * @param colClass  (cp) => className เพิ่มของทั้งคอลัมน์ (เช่นจุดที่ทำแล้วรอบนี้)
  * @param badge     (cp) => node ต่อท้ายชื่อจุดตรวจ
+ * @param sizeLabel (cp) => ข้อความแถว Sample size — ไม่ส่ง = freqLabel ("2 pcs / shift" ของใบตรวจตามรอบ)
+ *                  หน้า Set up ส่ง "N pcs" เอง (ความถี่ตามรอบไม่มีความหมายกับงาน Set up)
  */
-export const GridHead = ({ checkpoints, leftCols, stats = null, colClass = () => '', badge = () => null }) => {
+export const GridHead = ({ checkpoints, leftCols, stats = null, colClass = () => '', badge = () => null, sizeLabel = freqLabel }) => {
   const cols = withOffsets(leftCols);
   const totalWidth = cols.reduce((s, c) => s + c.width, 0);
 
@@ -62,7 +64,7 @@ export const GridHead = ({ checkpoints, leftCols, stats = null, colClass = () =>
   return (
     <thead>
       {labelRow('Equipment', (cp) => cp.gauge || '—')}
-      {labelRow('Sample size', (cp) => freqLabel(cp))}
+      {labelRow('Sample size', sizeLabel)}
       {labelRow('Spec', (cp) => <SpecValue checkpoint={cp} />)}
       {labelRow('Unit', (cp) => cp.unit || '—')}
       {stats && labelRow('Max', (cp) => fmtNum(stats[cp.id]?.max, cpDecimals(cp)))}

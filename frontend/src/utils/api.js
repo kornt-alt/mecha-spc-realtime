@@ -52,9 +52,16 @@ export const apiCall = async (endpoint, options = {}) => {
 
 // apiDownload — ใช้กับ endpoint ที่ตอบเป็นไฟล์ (Excel) ไม่ใช่ JSON
 // แยกจาก apiCall เพราะ apiCall บังคับ parse body เป็น JSON ใช้รับ blob ไม่ได้
+// ⚠️ แนบ Bearer ด้วย — เส้นที่กั้นด้วย requireMenu (เช่นแม่แบบจุดตรวจ หรือ Excel ตอน ADMIN ปิด GUEST ของรายงาน) ต้องรู้ว่าใครขอ
 export const apiDownload = async (endpoint, fallbackName = 'export.xlsx') => {
-  const response = await fetch(`${API_BASE}${endpoint}`);
-  if (!response.ok) throw new Error(messageOf(await parseBody(response), response.status));
+  const token = getToken();
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    if (response.status === 401) clearSession();
+    throw new Error(messageOf(await parseBody(response), response.status));
+  }
 
   // ชื่อไฟล์เป็นภาษาไทยได้ — server ส่งมาในรูป filename*=UTF-8''...
   const disposition = response.headers.get('Content-Disposition') || '';
@@ -71,4 +78,25 @@ export const apiDownload = async (endpoint, fallbackName = 'export.xlsx') => {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+};
+
+// apiUpload — ส่งไฟล์ดิบ (File/Blob) เป็น body ตรง ๆ แล้วรับ JSON กลับ · กติกา token/401 เดียวกับ apiCall
+export const apiUpload = async (endpoint, file) => {
+  const token = getToken();
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: file,
+  });
+  const data = await parseBody(response);
+  if (!response.ok) {
+    if (response.status === 401) clearSession();
+    const err = new Error(messageOf(data, response.status));
+    err.status = response.status;
+    throw err;
+  }
+  return data;
 };

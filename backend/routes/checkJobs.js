@@ -4,7 +4,7 @@
 //   PD เปิดงานด้วยเลข WOS → PD กรอก Production Check → ส่ง → เข้าคิว QC (แจ้งเตือน)
 //   → QC กดรับงาน → QC กรอก QC Confirm → ผ่าน (ปิดงาน) / ไม่ผ่าน (ตีกลับ PD รอบใหม่)
 //
-// ⚠️ ทุกเส้นต้อง login · แยกสิทธิ์ที่ server ด้วย requireRole (PD ทำขั้น PD · QC ทำขั้น QC)
+// ⚠️ ทุกเส้นต้อง login · แยกสิทธิ์ที่ server ด้วย requireRole (PD ทำขั้น PD · QC ทำขั้น QC · ADMIN ทำได้ทั้งสองขั้น)
 // ⚠️ เปลี่ยนสถานะด้วย UPDATE … WHERE status = <ที่คาดไว้> แล้วเช็ค affectedRows เสมอ
 //    0 แถว = มีคนทำขั้นนี้ไปก่อนแล้ว (QC สองคนกดรับงานเดียวกัน) → 409 ไม่ใช่ทับกัน
 // ⚠️ ผลตรวจ + เปลี่ยนสถานะ + เขียน event อยู่ใน transaction เดียวกันเสมอ
@@ -17,7 +17,7 @@ const { query, withTransaction } = require('../db/pool');
 const { insertInspection } = require('../db/inspectionWrite');
 const { evaluateCheckpoint, summarize, validateSubmission, isShift } = require('../services/judgment');
 const { AppError, wrap } = require('../middleware/errorHandler');
-const { requireMenu, requireRole } = require('../middleware/requireLogin');
+const { requireMenu, requireRole, userHasRole } = require('../middleware/requireLogin');
 
 const router = express.Router();
 // สิทธิ์เมนู Set up (ADMIN ตั้งได้) — GUEST ของเมนูนี้ล็อกปิดเสมอ จึงมี req.user ทุกเส้น
@@ -386,7 +386,7 @@ router.post('/:id/decide', wrap(async (req, res) => {
   const stage = flow === 'pd' ? 'pd' : 'qc';
   const role = stage === 'pd' ? 'PD' : 'QC';
   const fromStatus = stage === 'pd' ? 'pd_checking' : 'qc_checking';
-  if (!req.user.roles.includes(role)) throw new AppError(`บัญชีนี้ไม่มีสิทธิ์ (ต้องเป็น ${role})`, 403);
+  if (!userHasRole(req.user, role)) throw new AppError(`บัญชีนี้ไม่มีสิทธิ์ (ต้องเป็น ${role})`, 403);
   if (job.status !== fromStatus) {
     throw new AppError(stage === 'qc' ? 'งานนี้ยังไม่ได้อยู่ขั้น QC ตรวจ (ต้องกดรับงานก่อน)' : 'งานนี้ไม่ได้อยู่ขั้น PD ตรวจ', 409);
   }

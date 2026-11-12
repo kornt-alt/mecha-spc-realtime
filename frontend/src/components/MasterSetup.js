@@ -2,16 +2,16 @@
 //
 // ของเดิมมีปุ่มแก้/ลบให้เฉพาะ spec ส่วน division/machine/part เพิ่มได้อย่างเดียว
 // (จะแก้ต้องเข้าไปทำที่ DB ตรง ๆ) รอบนี้ทำให้ครบทุกชั้น + จัดลำดับจุดตรวจ + baseline
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Container, Row, Col, Card, Form, Button, Table, Badge, Alert, Nav, Modal } from 'react-bootstrap';
-import { apiCall } from '../utils/api';
+import { Container, Row, Col, Card, Form, Button, Table, Badge, Alert, Nav, Modal, Dropdown, Spinner } from 'react-bootstrap';
+import { apiCall, apiDownload } from '../utils/api';
 import { PREFILL_KEYS } from '../utils/useModelParam';
 import { on } from '../utils/socket';
 import { normalizeRows, normalizeCheckpoints, numOrNull, toNum } from '../utils/normalize';
 import {
   UNIT_OPTIONS, mergeOptions, specIssues, readCpMemory, rememberCp,
-  limitsFromTolerance, toleranceFromLimits,
+  limitsFromTolerance, toleranceFromLimits, pointsForCategory, ROUTINE_CATEGORY_ID,
 } from '../utils/checkpointForm';
 import SpecValue from './SpecValue';
 import AppDialog from './AppDialog';
@@ -19,6 +19,9 @@ import UsersTab from './UsersTab';
 import CategoryMatrix from './master/CategoryMatrix';
 import CategoriesTab from './master/CategoriesTab';
 import PermissionsTab from './master/PermissionsTab';
+import CheckpointBulkModal, { importCheckpointFile } from './master/CheckpointBulkModal';
+import CopyFromItemModal from './master/CopyFromItemModal';
+import DrawingSyncModal from './master/DrawingSyncModal';
 import useMenuAccess, { MENU } from '../utils/useMenuAccess';
 import { useUrlParam } from '../utils/useModelParam';
 import SearchSelect from './SearchSelect';
@@ -85,7 +88,15 @@ const blankCheckpoint = (memory = null) => ({
   frequency: 'shift',
   is_critical: false,
   is_active: true,
+  // ส่วน "หมวดการตรวจ" ของฟอร์ม — in_routine = อยู่ในใบตรวจตามรอบ · settings = { '<catId>:<stage>': 'จำนวนชิ้น' }
+  in_routine: true,
+  settings: {},
 });
+
+// ขั้นที่หมวดใช้ตาม flow — ชุดเดียวกับ CategoryMatrix.js / utils/checkpointBulk.js
+const FLOW_STAGES = { pd_qc: ['pd', 'qc'], pd: ['pd'], qc: ['qc'] };
+const STAGE_LABEL = { pd: 'PD', qc: 'QC' };
+const isFileDrag = (e) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
 
 // ไอคอนลูกศรย้ายลำดับ — เดิมเป็นอักขระ ▲▼ ซึ่งขนาดและตำแหน่งเพี้ยนตามฟอนต์ที่เครื่องมี
 const Caret = ({ dir }) => (
@@ -181,6 +192,8 @@ const MasterSetup = () => {
   const [checkpoints, setCheckpoints] = useState([]);
   const [msg, setMsg] = useState(null);
   const [baselineInfo, setBaselineInfo] = useState(null);
+  // กล่อง "ดึงจาก Drawing Digital" (components/master/DrawingSyncModal.js)
+  const [syncShow, setSyncShow] = useState(false);
 
   // setMsg เป็น setter ที่ React การันตีว่าคงที่ ห่อ useMemo ไว้ให้ say/fail คงที่ตาม
   // ไม่งั้น useCallback ที่เรียกใช้จะถูกสร้างใหม่ทุก render แล้ว useEffect วิ่งรัว
@@ -302,6 +315,28 @@ const MasterSetup = () => {
     },
   });
 
+  // ลากเรียงทั้งชุด — ล้ม = โหลดลำดับจริงกลับมา (จอเรียงไปก่อนแล้ว)
+  const reorderCheckpoints = async (ids) => {
+    try {
+      await apiCall(`/master/models/${selectedModel}/checkpoints/order`, { method: 'PUT', body: { ids } });
+    } catch (e) { fail(e); }
+    await loadCheckpoints(selectedModel);
+  };
+
+  // เพิ่มหลายจุด (วาง Excel / นำเข้าไฟล์ / คัดลอกจาก item อื่น) บันทึกสำเร็จ
+  const bulkSaved = async (res) => {
+    const parts = [
+      res.added ? `เพิ่ม ${res.added} จุด` : null,
+      res.updated ? `อัปเดต ${res.updated} จุด` : null,
+      res.deactivated ? `ปิดใช้งานจุดเดิม ${res.deactivated} จุด` : null,
+    ].filter(Boolean);
+    const stale = res.baselineMayBeStale ?? [];
+    say(stale.length ? 'warning' : 'success', `บันทึกจุดตรวจแล้ว: ${parts.join(' · ') || 'ไม่มีอะไรเปลี่ยน'}${stale.length
+      ? ` — เปลี่ยนชิ้น/ครั้งของ ${stale.map((s) => s.name).join(', ')} baseline เดิมอาจใช้ไม่ได้ ตรวจที่ปุ่ม Baseline` : ''}`);
+    await loadAll();
+    await loadCheckpoints(selectedModel);
+  };
+
   const moveCheckpoint = async (id, direction) => {
     try {
       await apiCall(`/master/checkpoints/${id}/move`, { method: 'PUT', body: { direction } });
@@ -399,11 +434,20 @@ const MasterSetup = () => {
         ))}
       </Nav>
       {tab === 'base' && (
-        <Nav variant="pills" activeKey={baseTab} onSelect={setBaseTab} className="mb-3 master-subtabs">
-          {BASE_TABS.map((t) => (
-            <Nav.Item key={t.key}><Nav.Link eventKey={t.key}>{t.label}</Nav.Link></Nav.Item>
-          ))}
-        </Nav>
+        <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
+          <Nav variant="pills" activeKey={baseTab} onSelect={setBaseTab} className="master-subtabs">
+            {BASE_TABS.map((t) => (
+              <Nav.Item key={t.key}><Nav.Link eventKey={t.key}>{t.label}</Nav.Link></Nav.Item>
+            ))}
+          </Nav>
+          {/* เครื่อง / item / เครื่อง↔item อิงระบบ Drawing Digital — ขึ้นเมื่อ backend ตั้ง DRAWING_DB_NAME
+              ⚠️ แตะ item ด้วย → ต้องมีสิทธิ์ master.items (server เช็คทั้งสองเมนู) */}
+          {lookups.drawingSync && (!access.loaded || access.can(MENU.masterItems)) && (
+            <Button size="sm" variant="outline-primary" className="ms-auto" onClick={() => setSyncShow(true)}>
+              ดึงจาก Drawing Digital
+            </Button>
+          )}
+        </div>
       )}
 
       {tab === 'models' && (
@@ -421,6 +465,8 @@ const MasterSetup = () => {
           selectedModel={selectedModel} setSelectedModel={setSelectedModel}
           checkpoints={checkpoints}
           onSave={save} onRemove={remove} onMove={moveCheckpoint} onPurgeVoided={purgeVoided}
+          onReorder={reorderCheckpoints} onBulkSaved={bulkSaved}
+          reloadCheckpoints={() => loadCheckpoints(selectedModel)}
           onPreviewBaseline={previewBaseline} onClearBaseline={clearBaseline}
           categories={workflowCategories} allCategories={allCategories} onMatrixSaved={matrixSaved}
           scopeName={scopeName}
@@ -501,6 +547,18 @@ const MasterSetup = () => {
       />
       {/* ⚠️ กล่องที่ปิดอยู่ต้องไม่ทิ้ง node ไว้เลย — มีเทสยืนยันทั้งหน้าว่าสเปกด้านเดียว
           ต้องไม่มี role="alert" สักตัว (MasterSetup.test.js 'สเปกด้านเดียวต้องไม่มีคำเตือน') */}
+      <DrawingSyncModal
+        show={syncShow}
+        onHide={() => setSyncShow(false)}
+        onDone={async (res) => {
+          setSyncShow(false);
+          const s = res.summary;
+          say('success', `ดึงจาก Drawing Digital แล้ว — เครื่องเพิ่ม ${s.machinesAdded} · ผูก ${s.machinesLinked} · item เพิ่ม ${s.itemsAdded} · ผูก ${s.itemsLinked} · คู่เครื่อง↔item ${s.links}`
+            + (s.machinesDeactivated || s.itemsDeactivated ? ` · ปิดใช้งาน ${s.machinesDeactivated + s.itemsDeactivated}` : ''));
+          await loadAll();
+          await loadCheckpoints(selectedModel);
+        }}
+      />
       <AppDialog dialog={dialog} onHide={closeDialog} />
     </Container>
   );
@@ -644,6 +702,7 @@ const ModelsTab = ({
   specMode, setSpecMode, tolForm, setTolForm,
   models, divisions, customers, selectedModel, setSelectedModel, checkpoints,
   onSave, onRemove, onMove, onPurgeVoided, onPreviewBaseline, onClearBaseline,
+  onReorder, onBulkSaved, reloadCheckpoints,
   categories = [], allCategories = [], onMatrixSaved,
   scopeName,
   onAlert,
@@ -660,6 +719,71 @@ const ModelsTab = ({
   // ค้นหา item ในตารางข้างล่าง — เป็นสเตตชั่วคราวของการมอง ไม่ใช่ของที่กรอกค้างไว้
   // จึงปล่อยให้หายตอนสลับแท็บได้ ต่างจาก modelForm/cpForm ที่ถูกยกขึ้นไปไว้ที่ <MasterSetup>
   const [modelQuery, setModelQuery] = useState('');
+
+  // ── เพิ่มหลายจุด / นำเข้า / คัดลอก ── สเตตชั่วคราว (กล่องเป็น backdrop static สลับแท็บระหว่างเปิดไม่ได้)
+  const [bulk, setBulk] = useState({ show: false, initial: null });
+  const [copyShow, setCopyShow] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const fileRef = useRef(null);
+  const bulkDefaults = useMemo(() => {
+    const m = readCpMemory();
+    return { unit: m.unit, gauge: m.gauge, sample_size: m.sampleSize };
+  }, [bulk.show]); // eslint-disable-line react-hooks/exhaustive-deps -- อ่านวิธีวัดล่าสุดใหม่ทุกครั้งที่เปิดกล่อง
+  // จุดที่เปิดอยู่ (object เต็ม + category_settings) — กล่องเพิ่มหลายจุดจับคู่ชื่อเพื่ออัปเดตทับ
+  const activePoints = useMemo(() => checkpoints.filter((c) => c.is_active), [checkpoints]);
+  const openBulk = (initial = null) => setBulk({ show: true, initial });
+  const importFile = async (file) => {
+    if (!file || !selectedModel) return;
+    setImportBusy(true);
+    try {
+      openBulk(await importCheckpointFile(selectedModel, file, categories));
+    } catch (e) {
+      onAlert({ title: 'นำเข้าไฟล์ไม่ได้', body: e.message });
+    } finally { setImportBusy(false); }
+  };
+  const downloadTemplate = () => apiDownload('/master/checkpoint-template', 'แม่แบบจุดตรวจ.xlsx')
+    .catch((e) => onAlert({ title: 'ดาวน์โหลดแม่แบบไม่ได้', body: e.message }));
+
+  // ลากไฟล์พลาดนอกการ์ด เบราว์เซอร์จะเปิดไฟล์แทนหน้าเว็บ (ฟอร์มที่กรอกค้างหาย) — กันไว้ทั้งหน้าตอนอยู่แท็บนี้
+  useEffect(() => {
+    const block = (e) => { if (isFileDrag(e)) e.preventDefault(); };
+    window.addEventListener('dragover', block);
+    window.addEventListener('drop', block);
+    return () => { window.removeEventListener('dragover', block); window.removeEventListener('drop', block); };
+  }, []);
+
+  // ── กรองตามหมวด + ลากเรียง ──
+  // ⚠️ กรองอยู่ = ปิดลากเรียง/▲▼ — ลำดับคือ seq_no ของทั้งใบ ย้ายในมุมมองที่ซ่อนบางจุดไว้จะดูผิดที่
+  const [catFilter, setCatFilter] = useState('all');
+  useEffect(() => { setCatFilter('all'); }, [selectedModel]);
+  const [orderOverride, setOrderOverride] = useState(null);
+  useEffect(() => { setOrderOverride(null); }, [checkpoints]);
+  const [dragId, setDragId] = useState(null);
+  const [dropAt, setDropAt] = useState(null); // { id, after }
+  const ordered = useMemo(() => {
+    if (!orderOverride) return checkpoints;
+    const byId = new Map(checkpoints.map((c) => [c.id, c]));
+    return orderOverride.map((id) => byId.get(id)).filter(Boolean);
+  }, [checkpoints, orderOverride]);
+  const filterTabs = [
+    { key: 'all', label: 'ทั้งหมด', rows: ordered },
+    { key: String(ROUTINE_CATEGORY_ID), label: 'ตรวจตามรอบ', rows: pointsForCategory(ordered, ROUTINE_CATEGORY_ID) },
+    ...categories.map((c) => ({ key: String(c.id), label: c.name, rows: pointsForCategory(ordered, c.id) })),
+  ];
+  const shownRows = (filterTabs.find((t) => t.key === catFilter) ?? filterTabs[0]).rows;
+  const canReorder = catFilter === 'all' && ordered.length > 1;
+
+  const dropOnRow = (target, after) => {
+    const from = dragId;
+    setDragId(null); setDropAt(null);
+    if (from === null || from === target) return;
+    const ids = ordered.map((c) => c.id).filter((id) => id !== from);
+    ids.splice(ids.indexOf(target) + (after ? 1 : 0), 0, from);
+    if (ids.every((id, i) => id === ordered[i].id)) return;
+    setOrderOverride(ids);
+    onReorder(ids);
+  };
 
   // ตัวเลือกใน <datalist> ทั้งสองช่องงอกเองจากของที่ใช้อยู่จริง ไม่ต้องมี endpoint ใหม่
   // ⚠️ ครึ่งที่มาจาก DB เห็นแค่ item ที่เลือกอยู่ (loadCheckpoints ดึงทีละ model)
@@ -719,6 +843,12 @@ const ModelsTab = ({
     if (!cpForm.name) return setCpErr('กรอกชื่อจุดตรวจ');
     // สเปกกลับหัวบันทึกไปแล้วทุกชิ้นที่วัดจะเป็น NG และ judgment ถูก snapshot ไปแล้ว
     if (issues.blocking) return setCpErr(issues.blocking);
+    const isAttrForm = cpForm.char_type === 'attribute';
+    const badSetting = Object.entries(cpForm.settings ?? {}).find(([, q]) => {
+      const n = Number(q);
+      return !Number.isInteger(n) || n < 1 || n > (isAttrForm ? 1 : 10);
+    });
+    if (badSetting) return setCpErr(isAttrForm ? 'จุดตรวจด้วยตาตรวจได้ 1 ชิ้นต่อขั้น' : 'จำนวนชิ้นของหมวดต้องเป็น 1-10');
 
     const isAttr = cpForm.char_type === 'attribute';
     const data = {
@@ -737,6 +867,7 @@ const ModelsTab = ({
       sample_size: isAttr ? 1 : Number(cpForm.sample_size) || 1,
       is_critical: cpForm.is_critical ? 1 : 0,
       is_active: cpForm.is_active ? 1 : 0,
+      in_routine: cpForm.in_routine ? 1 : 0,
     };
     // seq_no ต่อท้ายอัตโนมัติตอนเพิ่มใหม่ — ลำดับปรับด้วยปุ่มลูกศรทีหลัง
     if (!editingCp) data.seq_no = (checkpoints.reduce((m, c) => Math.max(m, c.seq_no), 0) || 0) + 1;
@@ -746,6 +877,23 @@ const ModelsTab = ({
     if (!r.ok) return setCpErr(r.error);
     // ⚠️ ต้องจำก่อน resetCp (ใน closeCp) เพราะ resetCp เติมฟอร์มจากสิ่งที่จำไว้
     onRemember(data);
+    // ส่วน "หมวดการตรวจ" — คนละ endpoint (แทนทั้งชุดของจุดนี้) · ล้ม = จุดถูกบันทึกแล้ว บอกในกล่องแล้วให้กดซ้ำ
+    const cpId = editingCp ?? r.id;
+    try {
+      await apiCall(`/master/checkpoints/${cpId}/categories`, {
+        method: 'PUT',
+        body: {
+          settings: Object.entries(cpForm.settings ?? {}).map(([k, q]) => {
+            const [categoryId, stage] = k.split(':');
+            return { category_id: Number(categoryId), stage, sample_qty: Number(q) };
+          }),
+        },
+      });
+      await reloadCheckpoints();
+    } catch (e) {
+      setEditingCp(cpId);
+      return setCpErr(`บันทึกจุดตรวจแล้ว แต่ตั้งหมวดการตรวจไม่สำเร็จ: ${e.message} — กดบันทึกอีกครั้ง`);
+    }
     closeCp();
   };
 
@@ -763,8 +911,24 @@ const ModelsTab = ({
       usl: cp.usl ?? '', lsl: cp.lsl ?? '', target: cp.target ?? '',
       sample_size: cp.sample_size ?? 1, frequency: cp.frequency === 'day' ? 'day' : 'shift',
       is_critical: cp.is_critical, is_active: cp.is_active,
+      in_routine: cp.in_routine === undefined || cp.in_routine === null ? true : Number(cp.in_routine) === 1,
+      settings: Object.fromEntries((cp.category_settings ?? []).map((x) => [`${x.category_id}:${x.stage}`, String(x.sample_qty)])),
     });
   };
+
+  // ทำซ้ำ = กล่องเพิ่มจุดที่เติมค่าของจุดนั้นไว้ (ยังไม่บันทึกจนกด) — baseline ไม่ติดมา
+  const startDuplicateCp = (cp) => {
+    startEditCp(cp);
+    setEditingCp(null);
+    setCpForm((f) => ({ ...f, name: `${cp.name} (สำเนา)`, is_active: true }));
+  };
+
+  const setSetting = (key, value) => setCpForm((f) => {
+    const settings = { ...(f.settings ?? {}) };
+    const v = String(value).replace(/\D/g, '');
+    if (v === '' || v === '0') delete settings[key]; else settings[key] = v;
+    return { ...f, settings };
+  });
 
   const cpField = (key) => ({
     value: cpForm[key] ?? '',
@@ -849,6 +1013,7 @@ const ModelsTab = ({
                         {m.item_name} · {m.division_name}
                         {m.customer_name && ` · ${m.customer_name}`} · {toNum(m.checkpoint_count) || 0} จุด
                         {!m.is_active && <Badge bg="secondary" className="ms-1">ปิดใช้งาน</Badge>}
+                        {m.synced_at && <span className="sync-badge" title="ผูกกับระบบ Drawing Digital">Drawing</span>}
                       </div>
                       {/* ใบที่ยกเลิกแล้วยังกิน FK อยู่ ทำให้ลบ item ไม่ได้ — ปุ่มนี้คือทางออก */}
                       {toNum(m.voided_count) > 0 && (
@@ -881,44 +1046,128 @@ const ModelsTab = ({
 
       {/* จุดตรวจ */}
       <Col lg={8}>
-        <Card style={{ opacity: selectedModel ? 1 : 0.6 }}>
-          <Card.Header className="d-flex align-items-center gap-2">
+        {/* ลากไฟล์ Excel มาวางที่การ์ดนี้ = นำเข้าจุดตรวจ (ใบ SET UP / แม่แบบ) → ตารางเพิ่มหลายจุดให้ตรวจก่อนบันทึก */}
+        <Card
+          style={{ opacity: selectedModel ? 1 : 0.6 }}
+          className={`cp-card${dropActive ? ' cp-card--drop' : ''}`}
+          onDragEnter={(e) => { if (selectedModel && isFileDrag(e)) { e.preventDefault(); setDropActive(true); } }}
+          onDragOver={(e) => { if (selectedModel && isFileDrag(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDropActive(false); }}
+          onDrop={(e) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            setDropActive(false);
+            if (selectedModel) importFile(e.dataTransfer.files?.[0]);
+          }}
+        >
+          {dropActive && <div className="cp-card__drop" aria-hidden="true">วางไฟล์ Excel ที่นี่ เพื่อนำเข้าจุดตรวจ</div>}
+          <Card.Header className="d-flex flex-wrap align-items-center gap-2">
             <span>
               จุดตรวจ {selectedModel
                 ? `— ${models.find((m) => String(m.id) === selectedModel)?.item_no ?? ''}`
                 : <span className="small text-muted fw-normal">— เลือก item ทางซ้ายก่อน</span>}
             </span>
-            <Button size="sm" className="ms-auto" disabled={!selectedModel} onClick={openAddCp}>+ เพิ่มจุดตรวจ</Button>
+            <div className="ms-auto d-flex gap-2">
+              <Button size="sm" disabled={!selectedModel} onClick={openAddCp}>+ เพิ่มจุดตรวจ</Button>
+              <Dropdown align="end">
+                <Dropdown.Toggle size="sm" variant="outline-primary" disabled={!selectedModel || importBusy}>
+                  {importBusy && <Spinner size="sm" className="me-1" />}เพิ่มหลายจุด
+                </Dropdown.Toggle>
+                <Dropdown.Menu>
+                  <Dropdown.Item onClick={() => openBulk()}>
+                    วางจาก Excel <small className="d-block text-muted">ก๊อปหลายแถวแล้วกด Ctrl+V ในตาราง</small>
+                  </Dropdown.Item>
+                  <Dropdown.Item onClick={() => fileRef.current?.click()}>
+                    นำเข้าไฟล์ Excel <small className="d-block text-muted">ใบ SET UP หรือไฟล์แม่แบบ · ลากไฟล์มาวางที่การ์ดนี้ก็ได้</small>
+                  </Dropdown.Item>
+                  <Dropdown.Item onClick={() => setCopyShow(true)}>
+                    คัดลอกจาก item อื่น <small className="d-block text-muted">ดึงจุดตรวจที่ตั้งไว้แล้วมาแก้ต่อ</small>
+                  </Dropdown.Item>
+                  <Dropdown.Divider />
+                  <Dropdown.Item onClick={downloadTemplate}>ดาวน์โหลดแม่แบบ (.xlsx)</Dropdown.Item>
+                </Dropdown.Menu>
+              </Dropdown>
+              <input ref={fileRef} type="file" accept=".xlsx" hidden
+                onChange={(e) => { importFile(e.target.files?.[0]); e.target.value = ''; }} />
+            </div>
           </Card.Header>
           <Card.Body>
-            {/* ⚠️ ไม่มีเรียง/กรอง/แบ่งหน้าโดยตั้งใจ — ลำดับแถว = seq_no ของใบตรวจ และปุ่ม ▲▼ ย้ายตามลำดับนี้
-                เรียงใหม่บนจอเมื่อไหร่ "ย้ายขึ้น" จะดูเหมือนย้ายผิดที่ · ตรึงหัว + คอลัมน์ลำดับ/จัดการพอ */}
+            {/* กรองตามหมวด — ดูทีละหมวดว่าจุดไหนตรวจบ้าง (ตัวเลข = จำนวนจุด) */}
+            {selectedModel && checkpoints.length > 0 && (
+              <Nav variant="pills" activeKey={catFilter} onSelect={(k) => setCatFilter(k)} className="mb-2 cp-filter">
+                {filterTabs.map((t) => (
+                  <Nav.Item key={t.key}>
+                    <Nav.Link eventKey={t.key}>{t.label} <span className="cp-filter__n">{t.rows.length}</span></Nav.Link>
+                  </Nav.Item>
+                ))}
+              </Nav>
+            )}
+            {catFilter !== 'all' && (
+              <div className="small text-muted mb-2">กำลังกรองอยู่ — ลากเรียง/ย้ายลำดับได้ที่ "ทั้งหมด"</div>
+            )}
+            {/* ⚠️ ไม่มีเรียงตามคอลัมน์/แบ่งหน้าโดยตั้งใจ — ลำดับแถว = seq_no ของใบตรวจ (ลากเรียง / ▲▼ ย้ายตามลำดับนี้)
+                กรองตามหมวดได้ แต่ระหว่างกรองปิดการย้ายลำดับ · ตรึงหัว + คอลัมน์ลำดับ/จัดการ */}
             <div className="mc-freeze">
             <Table striped bordered hover size="sm" className="mb-0">
               <thead>
                 <tr>
                   <th className="mc-sticky-start" style={{ width: 70 }}>ลำดับ</th><th>จุดตรวจ</th><th>ชนิด</th>
                   <th>LSL ~ USL</th><th>n / ความถี่</th><th>Control limit</th>
-                  <th>หมวดการตรวจ</th><th className="mc-sticky-end" style={{ width: 260 }}>จัดการ</th>
+                  <th>หมวดการตรวจ</th><th className="mc-sticky-end" style={{ width: 320 }}>จัดการ</th>
                 </tr>
               </thead>
               <tbody>
-                {checkpoints.length === 0
-                  ? <tr><td colSpan="8" className="text-center text-muted">ยังไม่มีจุดตรวจ</td></tr>
-                  : checkpoints.map((cp, i) => (
+                {shownRows.length === 0
+                  ? (
+                    <tr><td colSpan="8" className="text-center text-muted">
+                      {checkpoints.length === 0
+                        ? (selectedModel ? 'ยังไม่มีจุดตรวจ — กด "+ เพิ่มจุดตรวจ" หรือ "เพิ่มหลายจุด" (วางจาก Excel / นำเข้าไฟล์ / คัดลอกจาก item อื่น)' : 'ยังไม่มีจุดตรวจ')
+                        : 'ไม่มีจุดตรวจในหมวดนี้'}
+                    </td></tr>
+                  )
+                  : shownRows.map((cp, i) => (
                     <tr
                       key={cp.id}
                       className={[
                         editingCp === cp.id ? 'table-warning' : '',
                         !cp.is_active ? 'text-muted' : '',
+                        dragId === cp.id ? 'cp-row--dragging' : '',
+                        dropAt?.id === cp.id ? (dropAt.after ? 'cp-row--drop-after' : 'cp-row--drop-before') : '',
                       ].filter(Boolean).join(' ')}
+                      onDragOver={(e) => {
+                        if (dragId === null) return;
+                        e.preventDefault();
+                        const r = e.currentTarget.getBoundingClientRect();
+                        const after = e.clientY > r.top + r.height / 2;
+                        if (dropAt?.id !== cp.id || dropAt.after !== after) setDropAt({ id: cp.id, after });
+                      }}
+                      onDrop={(e) => {
+                        if (dragId === null) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        dropOnRow(cp.id, dropAt?.id === cp.id ? dropAt.after : false);
+                      }}
                     >
                       <td className="mc-sticky-start text-nowrap">
+                        {/* ด้ามลาก (เมาส์) · ▲▼ ยังอยู่สำหรับคีย์บอร์ด/จอสัมผัส (HTML5 drag ไม่ทำงานบนจอสัมผัส) */}
+                        {canReorder && (
+                          <span
+                            className="cp-drag" draggable title="ลากเพื่อย้ายลำดับ" aria-hidden="true"
+                            onDragStart={(e) => {
+                              e.dataTransfer.effectAllowed = 'move';
+                              e.dataTransfer.setData('text/plain', String(cp.id));
+                              const row = e.currentTarget.closest('tr');
+                              if (row) e.dataTransfer.setDragImage(row, 16, 16);
+                              setDragId(cp.id);
+                            }}
+                            onDragEnd={() => { setDragId(null); setDropAt(null); }}
+                          >⠿</span>
+                        )}
                         {cp.seq_no}
-                        <Button size="sm" variant="link" className="p-0 ms-1" disabled={i === 0}
+                        <Button size="sm" variant="link" className="p-0 ms-1" disabled={!canReorder || i === 0}
                           aria-label={`ย้าย ${cp.name} ขึ้น`} title="ย้ายขึ้น"
                           onClick={() => onMove(cp.id, 'up')}><Caret dir="up" /></Button>
-                        <Button size="sm" variant="link" className="p-0" disabled={i === checkpoints.length - 1}
+                        <Button size="sm" variant="link" className="p-0" disabled={!canReorder || i === shownRows.length - 1}
                           aria-label={`ย้าย ${cp.name} ลง`} title="ย้ายลง"
                           onClick={() => onMove(cp.id, 'down')}><Caret dir="down" /></Button>
                       </td>
@@ -978,6 +1227,8 @@ const ModelsTab = ({
                       </td>
                       <td className="mc-sticky-end text-nowrap">
                         <Button size="sm" variant="primary" className="me-1" onClick={() => startEditCp(cp)}>แก้</Button>
+                        <Button size="sm" variant="outline-primary" className="me-1" onClick={() => startDuplicateCp(cp)}
+                          title="เพิ่มจุดใหม่ที่ค่าเหมือนจุดนี้">ทำซ้ำ</Button>
                         {/* ⚠️ ปุ่มเดียวเสมอ ไม่สลับเป็น "ล้าง" อีกแล้ว — จุดหนึ่งมี baseline ได้
                             หลายชุด กล่องที่เปิดขึ้นมาเป็นที่เลือกเองว่าจะล็อกของขอบเขตไหน
                             (ปุ่มล้างของแต่ละชุดอยู่ในช่อง Control limit) */}
@@ -1008,6 +1259,26 @@ const ModelsTab = ({
         onAlert={onAlert}
       />
     )}
+
+    {/* ── เพิ่มหลายจุด (วาง Excel / ไฟล์ / คัดลอก) — components/master/CheckpointBulkModal.js ── */}
+    <CheckpointBulkModal
+      show={bulk.show && Boolean(selectedModel)}
+      onHide={() => setBulk({ show: false, initial: null })}
+      modelId={selectedModel}
+      itemLabel={models.find((m) => String(m.id) === selectedModel)?.item_no ?? ''}
+      categories={categories}
+      existingPoints={activePoints}
+      initial={bulk.initial}
+      defaults={bulkDefaults}
+      onSaved={(res) => { setBulk({ show: false, initial: null }); onBulkSaved(res); }}
+    />
+    <CopyFromItemModal
+      show={copyShow}
+      onHide={() => setCopyShow(false)}
+      models={models}
+      currentModelId={selectedModel}
+      onPick={(initial) => { setCopyShow(false); openBulk(initial); }}
+    />
 
     {/* ── กล่องเพิ่ม/แก้ item ── animation={false} ตามกฎ AppDialog · ไม่ใช้ scrollable (ลิสต์ของ SearchSelect โดนตัด) */}
     <Modal show={modelModal} onHide={closeModel} animation={false} backdrop="static">
@@ -1099,37 +1370,50 @@ const ModelsTab = ({
         </Modal.Title>
       </Modal.Header>
       <Modal.Body>
+        {/* ฟอร์มแบ่ง 4 ส่วน (Korn สั่ง 2026-11 "แยกหมวดหมู่ของการ set แต่ละจุด") — เรียงต่อกัน ไม่ใช้แท็บ
+            ⚠️ คำเตือนสเปก/error ต้องไม่ถูกซ่อนอยู่หลังแท็บที่ไม่ได้เปิด */}
         <Form id="cp-form" onSubmit={submitCp}>
+          <div className="cp-section">① ข้อมูลจุด</div>
           <Row className="g-2 mb-2 align-items-end">
-            <Form.Group as={Col} md={3} controlId="cp-name">
+            <Form.Group as={Col} md={4} controlId="cp-name">
               <Form.Label className="small mb-1">ชื่อจุดตรวจ</Form.Label>
               <Form.Control placeholder="เช่น Dimension 3.1" {...cpField('name')} disabled={!selectedModel} />
             </Form.Group>
             {/* Characteristic = แถว 11 ของชีต Input (Slot / OD / Rz) แยกจากชื่อจุด
                 free text + <datalist> ตามหลักเดียวกับหน่วย/เครื่องมือวัด */}
-            <Form.Group as={Col} md={2} controlId="cp-characteristic">
+            <Form.Group as={Col} md={3} controlId="cp-characteristic">
               <Form.Label className="small mb-1">Characteristic</Form.Label>
               <Form.Control list="cp-char-options" placeholder="เช่น OD"
                 {...cpField('characteristic')} disabled={!selectedModel} />
             </Form.Group>
-            <Form.Group as={Col} md={2} controlId="cp-char-type">
+            <Form.Group as={Col} md={3} controlId="cp-char-type">
               <Form.Label className="small mb-1">ชนิด</Form.Label>
               <Form.Select {...cpField('char_type')} disabled={!selectedModel}>
                 {CHAR_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
               </Form.Select>
             </Form.Group>
+            <Col md={2} className="d-flex flex-column gap-1 pb-1">
+              <Form.Check id="cp-critical" label="SC point" checked={cpForm.is_critical} disabled={!selectedModel}
+                onChange={(e) => setCpForm((f) => ({ ...f, is_critical: e.target.checked }))} />
+              <Form.Check id="cp-active" label="ใช้งาน" checked={cpForm.is_active} disabled={!selectedModel}
+                onChange={(e) => setCpForm((f) => ({ ...f, is_active: e.target.checked }))} />
+            </Col>
+          </Row>
+
+          <div className="cp-section">② วิธีวัด</div>
+          <Row className="g-2 mb-2 align-items-end">
             {/* ⚠️ หน่วยกับเครื่องมือวัดเป็น <input list> โดยตั้งใจ ไม่ใช่ <Form.Select>
                 ทั้งสองคอลัมน์เป็น free text มาแต่ไหนแต่ไร บังคับเลือกเมื่อไหร่ ค่าเก่าที่
                 ไม่ตรงลิสต์จะแสดงเป็นช่องว่างแล้วถูกเขียนทับตอนกดบันทึกแก้อย่างอื่น */}
+            <Form.Group as={Col} md={5} controlId="cp-gauge">
+              <Form.Label className="small mb-1">เครื่องมือวัด</Form.Label>
+              <Form.Control list="cp-gauge-options" placeholder="เช่น Micrometer"
+                {...cpField('gauge')} disabled={!selectedModel} />
+            </Form.Group>
             <Form.Group as={Col} md={2} controlId="cp-unit">
               <Form.Label className="small mb-1">หน่วย</Form.Label>
               <Form.Control list="cp-unit-options" placeholder="mm"
                 {...cpField('unit')} disabled={!selectedModel || isAttr} />
-            </Form.Group>
-            <Form.Group as={Col} md={3} controlId="cp-gauge">
-              <Form.Label className="small mb-1">เครื่องมือวัด</Form.Label>
-              <Form.Control list="cp-gauge-options" placeholder="เช่น Micrometer"
-                {...cpField('gauge')} disabled={!selectedModel} />
             </Form.Group>
           </Row>
 
@@ -1146,6 +1430,7 @@ const ModelsTab = ({
           {/* แบบส่วนใหญ่เขียนเป็นค่ากลาง + พิกัด (1.23 +0.5 -0.6) ไม่ใช่เลขสัมบูรณ์
               ให้บวกลบในหัวก่อนพิมพ์คือเปิดช่องให้บวกผิด ซึ่ง judgment ถูก snapshot
               ลงใบตรวจไปแล้วตอนตรวจ แก้ย้อนหลังไม่ได้ */}
+          <div className="cp-section">③ สเปก</div>
           {!isAttr && (
             <div className="d-flex flex-wrap gap-3 mb-2" role="radiogroup" aria-label="รูปแบบการกรอกสเปก">
               {SPEC_MODES.map((m) => (
@@ -1204,24 +1489,6 @@ const ModelsTab = ({
                 </Form.Group>
               </>
             )}
-            <Form.Group as={Col} md={2} controlId="cp-sample-size">
-              {/* n = 1 → กราฟ I-MR · n >= 2 → กราฟ X-bar R (ตาราง A2/D3/D4 มีถึง 10) */}
-              <Form.Label className="small mb-1">ชิ้น/ครั้ง</Form.Label>
-              <Form.Control type="number" min="1" max="10"
-                {...cpField('sample_size')} disabled={!selectedModel || isAttr} />
-            </Form.Group>
-            <Form.Group as={Col} md={2} controlId="cp-frequency">
-              <Form.Label className="small mb-1">ความถี่</Form.Label>
-              <Form.Select {...cpField('frequency')} disabled={!selectedModel}>
-                {FREQUENCIES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
-              </Form.Select>
-            </Form.Group>
-            <Col md="auto" className="d-flex align-items-center gap-3">
-              <Form.Check label="SC point" checked={cpForm.is_critical} disabled={!selectedModel}
-                onChange={(e) => setCpForm((f) => ({ ...f, is_critical: e.target.checked }))} />
-              <Form.Check label="ใช้งาน" checked={cpForm.is_active} disabled={!selectedModel}
-                onChange={(e) => setCpForm((f) => ({ ...f, is_active: e.target.checked }))} />
-            </Col>
           </Row>
 
           {/* ⚠️ ห้ามเป็น <Alert> — ของ react-bootstrap มี role="alert" ติดมา แล้วจะกลายเป็น
@@ -1236,16 +1503,58 @@ const ModelsTab = ({
 
           {!isAttr && (
             <div className="small text-muted mb-2">
-              ชิ้น/ครั้ง 1 = กราฟ I-MR · ตั้งแต่ 2 = กราฟ X̄-R · เว้น LSL หรือ USL ว่างได้ถ้าแบบคุมด้านเดียว
+              เว้น LSL หรือ USL ว่างได้ถ้าแบบคุมด้านเดียว
               {tolMode && ' · ไม่ใส่เครื่องหมาย = พิกัดบนขึ้น พิกัดล่างลง · ใส่ + หรือ - เองได้ถ้าแบบเขียนไว้แบบนั้น (เช่น 10 -0.005 -0.015)'}
             </div>
           )}
+          {isAttr && <div className="small text-muted mb-2">ตรวจด้วยตา — ไม่มีสเปกตัวเลข ผลเป็น OK / NG</div>}
           {issues.blocking && (
             <div className="form-note form-note--danger mb-2">{issues.blocking}</div>
           )}
           {issues.warnings.map((w) => (
             <div key={w} className="form-note form-note--warning mb-2">{w}</div>
           ))}
+
+          {/* ④ ตรวจในหมวดไหนบ้าง — ตรวจตามรอบ = in_routine + ชิ้น/ครั้ง + ความถี่ (คอลัมน์ของ checkpoints)
+              หมวดอื่น = checkpoint_category_settings (PUT /checkpoints/:id/categories หลังบันทึกจุด) · ว่าง = ไม่ตรวจ */}
+          <div className="cp-section">④ หมวดการตรวจ</div>
+          <div className="cp-cats">
+            <div className="cp-cats__row">
+              <Form.Check id="cp-in-routine" className="cp-cats__name" label="ตรวจตามรอบ (Inspection Record)"
+                checked={Boolean(cpForm.in_routine)} disabled={!selectedModel}
+                onChange={(e) => setCpForm((f) => ({ ...f, in_routine: e.target.checked }))} />
+              <Form.Group controlId="cp-sample-size" className="cp-cats__field">
+                {/* n = 1 → กราฟ I-MR · n >= 2 → กราฟ X-bar R (ตาราง A2/D3/D4 มีถึง 10) */}
+                <Form.Label className="small mb-0">ชิ้น/ครั้ง</Form.Label>
+                <Form.Control size="sm" type="number" min="1" max="10"
+                  {...cpField('sample_size')} disabled={!selectedModel || isAttr} />
+              </Form.Group>
+              <Form.Group controlId="cp-frequency" className="cp-cats__field">
+                <Form.Label className="small mb-0">ความถี่</Form.Label>
+                <Form.Select size="sm" {...cpField('frequency')} disabled={!selectedModel}>
+                  {FREQUENCIES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                </Form.Select>
+              </Form.Group>
+              {!isAttr && <span className="small text-muted">1 ชิ้น = กราฟ I-MR · 2 ขึ้นไป = X̄-R</span>}
+            </div>
+            {categories.map((c) => (
+              <div className="cp-cats__row" key={c.id}>
+                <span className="cp-cats__name">{c.name}</span>
+                {(FLOW_STAGES[c.flow] ?? FLOW_STAGES.pd_qc).map((st) => {
+                  const key = `${c.id}:${st}`;
+                  return (
+                    <Form.Group key={st} controlId={`cp-cat-${key}`} className="cp-cats__field">
+                      <Form.Label className="small mb-0">{STAGE_LABEL[st]} (ชิ้น)</Form.Label>
+                      <Form.Control size="sm" className="num" inputMode="numeric" placeholder="ไม่ตรวจ"
+                        value={cpForm.settings?.[key] ?? ''} disabled={!selectedModel}
+                        onChange={(e) => setSetting(key, e.target.value)} />
+                    </Form.Group>
+                  );
+                })}
+              </div>
+            ))}
+            <div className="small text-muted">เว้นว่าง = ไม่ตรวจจุดนี้ในขั้นนั้น{isAttr ? ' · ตรวจด้วยตาใส่ได้แค่ 1' : ''}</div>
+          </div>
         </Form>
         {cpErr && <div className="form-note form-note--danger mt-2" role="status">{cpErr}</div>}
       </Modal.Body>

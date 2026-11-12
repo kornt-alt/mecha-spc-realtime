@@ -1788,3 +1788,72 @@ tbody th.mc-sticky-start {
 .form-note--info { border-left-color: var(--blue); background: var(--blue-tint); }
 .form-note--danger { border-left-color: var(--red); background: var(--red-tint); color: var(--red); }
 .form-note--warning { border-left-color: var(--amber-line); background: var(--amber-tint); color: var(--amber-text); }
+
+/* ── ใบตรวจตามรอบ แนวตั้ง (InspectionSheet · LayoutToggle) ── ช่องกรอกใช้ .cell ตัวเดียวกับแนวนอน */
+.sheet-vgrid__cell { padding: 2px !important; min-width: 84px; }
+.sheet-vgrid__cell .cell { width: 100%; }
+.sheet-vgrid .cell-none { background: var(--surface-alt, var(--mc-surface-alt)); }
+.sheet-vgrid tr.sheet-vgrid__done > td { --bs-table-bg: var(--mc-surface-alt); color: var(--muted); }
+
+/* ── Master › จุดตรวจ: ลากไฟล์มาวาง · ลากเรียง · กรองหมวด (MasterSetup ModelsTab) ── */
+.cp-card { position: relative; }
+.cp-card--drop { outline: 2px dashed var(--blue); outline-offset: -2px; }
+.cp-card__drop {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(var(--blue-rgb, 27, 79, 160), 0.08);
+  color: var(--blue-text); font-weight: 600; font-size: 1.1rem;
+  pointer-events: none; border-radius: inherit;
+}
+.cp-drag {
+  display: inline-block; cursor: grab; color: var(--muted);
+  padding: 0 0.3rem 0 0; user-select: none; line-height: 1;
+}
+.cp-drag:active { cursor: grabbing; }
+tr.cp-row--dragging > td { opacity: 0.45; }
+tr.cp-row--drop-before > td { box-shadow: inset 0 2px 0 var(--blue); }
+tr.cp-row--drop-after > td { box-shadow: inset 0 -2px 0 var(--blue); }
+.cp-filter { flex-wrap: wrap; gap: 0.25rem; }
+.cp-filter .nav-link { padding: 0.2rem 0.65rem; font-size: 0.875rem; }
+.cp-filter__n {
+  display: inline-block; min-width: 1.4em; padding: 0 0.35em; margin-left: 0.25rem;
+  border-radius: 999px; font-size: 0.75rem; text-align: center;
+  background: var(--mc-surface-alt); color: var(--ink);
+}
+.cp-filter .nav-link.active .cp-filter__n { background: rgba(255, 255, 255, 0.25); color: inherit; }
+
+/* ฟอร์มจุดตรวจ 4 ส่วน */
+.cp-section {
+  font-weight: 600; color: var(--blue-text); font-size: 0.9rem;
+  border-bottom: 1px solid var(--line); padding-bottom: 0.2rem; margin: 0.75rem 0 0.5rem;
+}
+.cp-section:first-child { margin-top: 0; }
+.cp-cats { display: flex; flex-direction: column; gap: 0.5rem; }
+.cp-cats__row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 1rem; }
+.cp-cats__name { min-width: 15rem; font-weight: 500; padding-bottom: 0.3rem; }
+.cp-cats__field { width: 7.5rem; }
+
+/* ตารางเพิ่มหลายจุด (CheckpointBulkModal) */
+.bulk-modal { max-width: min(1600px, 96vw); }
+.bulk-grid-wrap { max-height: 58vh; }
+.bulk-grid td { padding: 2px !important; vertical-align: middle; }
+.bulk-grid .form-control, .bulk-grid .form-select { min-width: 0; padding-top: 0.15rem; padding-bottom: 0.15rem; }
+.bulk-grid tr.bulk-grid__bad > td { --bs-table-bg: var(--red-tint); }
+.bulk-grid tr.bulk-grid__msg > td { font-size: 0.8rem; padding: 0.1rem 0.4rem !important; border-top: 0; }
+.bulk-grid__warn { color: var(--amber-text); }
+/* อัปเดตจุดเดิม: ป้าย "แก้" น้ำเงิน · "=" ไม่เปลี่ยน (แถวจาง ไม่บันทึก) */
+.bulk-grid tr.bulk-grid__same > td { opacity: 0.6; }
+.bulk-grid__diff { color: var(--blue-text); }
+.bulk-tag {
+  display: inline-block; margin-left: 0.25rem; padding: 0 0.3rem; border-radius: 0.25rem;
+  font-size: 0.7rem; line-height: 1.3; background: var(--surface); border: 1px solid var(--line); color: var(--muted);
+}
+.bulk-tag--upd { background: var(--blue-tint); border-color: var(--blue-text); color: var(--blue-text); }
+
+/* ── เครื่อง↔item จาก Drawing Digital ── */
+.station__warn { color: var(--amber-text); }
+.sync-list { max-height: 34vh; }
+.sync-badge {
+  display: inline-block; font-size: 0.7rem; padding: 0 0.4em; border-radius: 4px; margin-left: 0.3rem;
+  background: var(--blue-tint); color: var(--blue-text); vertical-align: middle;
+}

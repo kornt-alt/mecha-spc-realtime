@@ -160,7 +160,7 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
   // PD/QC ต้องผูกผู้ตรวจ — ใบตรวจอ้าง inspectors เหมือนเดิม ไม่ผูก = ส่งผลตรวจไม่ได้ (server ตอบ 400)
   const editRole = (u) => showForm({
     title: `สิทธิ์ / ผู้ตรวจ ของ ${u.username}`,
-    body: 'PD / QC ต้องผูกกับรายชื่อผู้ตรวจ — ชื่อนี้จะไปอยู่บนใบตรวจ Set up / Last Piece',
+    body: 'PD / QC (และ ADMIN ที่จะตรวจเอง) ต้องผูกกับรายชื่อผู้ตรวจ — ชื่อนี้จะไปอยู่บนใบตรวจ Set up / Last Piece',
     confirmLabel: 'บันทึก',
     fields: [
       { name: 'role', label: 'สิทธิ์', options: ROLE_OPTIONS, required: true, defaultValue: u.role ?? 'ADMIN' },
@@ -219,7 +219,7 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
               </Form.Select>
             </Form.Group>
             <Form.Group as={Col} md={3} controlId="user-inspector">
-              <Form.Label className="small mb-1">ผู้ตรวจ (PD/QC ต้องเลือก)</Form.Label>
+              <Form.Label className="small mb-1">ผู้ตรวจ (PD/QC หรือ ADMIN ที่ตรวจเอง ต้องเลือก)</Form.Label>
               <Form.Select {...field('inspector_id')}>
                 <option value="">— ไม่ผูก —</option>
                 {inspectorOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}

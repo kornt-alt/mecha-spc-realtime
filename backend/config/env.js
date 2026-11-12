@@ -40,6 +40,10 @@ const env = {
   AUTH_SECRET: process.env.AUTH_SECRET || '',
   // อายุ token (ชั่วโมง) — 12 = หนึ่งกะ
   AUTH_TOKEN_HOURS: Number(process.env.AUTH_TOKEN_HOURS) > 0 ? Number(process.env.AUTH_TOKEN_HOURS) : 12,
+
+  // ชื่อ DB ของระบบ Drawing Digital (MECHA1) บน server เดียวกัน — ดึงเครื่อง/item/เครื่อง↔item (services/drawingSync.js)
+  // ⚠️ ไม่บังคับ · ว่าง = ปิดฟีเจอร์ (ปุ่มไม่ขึ้น) · อ่านอย่างเดียว ไม่เขียนกลับ
+  DRAWING_DB_NAME: (process.env.DRAWING_DB_NAME || '').trim(),
 };
 
 if (!env.AUTH_SECRET) {
