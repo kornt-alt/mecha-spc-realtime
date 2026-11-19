@@ -1,8 +1,9 @@
 // frontend/src/components/SetupJobs.js — หน้า /setup งานตรวจที่ส่งต่อ PD → QC (Set up / Last Piece)
 //
 // ลำดับตามชีต "SET UP & LAST PIECE INSPECTION RECORD":
-//   PD เปิดงานด้วยเลข WOS → กรอก Production Check → ส่ง → คิว QC (badge + toast)
-//   → QC รับงาน → กรอก QC Confirm → ผ่าน / ไม่ผ่าน (ตีกลับ PD เป็นรอบใหม่)
+//   PD เปิดงานด้วยเลข WOS (+ Process / Material) → Set up & Adjust → "เริ่มเช็คงาน" → กรอก Production Check → ส่ง → คิว QC
+//   → QC รับงาน → "เริ่มเช็คงาน" → กรอก QC Confirm → ผ่าน / ไม่ผ่าน (ตีกลับ PD เป็นรอบใหม่ ต้องกดเริ่มเช็คใหม่)
+//   ช่วงเวลาทุกขั้น = utils/jobTimeline.js (การ์ด Timeline)
 //
 // ⚠️ ต้อง login (RequireLogin ที่ App.js) · ปุ่มที่โชว์ตาม role เป็นแค่ UI ตัวกั้นจริงคือ requireRole ฝั่ง backend
 // ⚠️ ไม่ตัดสินอะไรเอง — สีแดงตอนพิมพ์คือ judgeLocal (advisory) ผลจริงมาจาก server
@@ -11,7 +12,7 @@
 // ⚠️ ?job= คือที่อยู่ของงานที่เปิดดู (useUrlParam) — QC กดจาก toast/คิวแล้วรีเฟรชได้ไม่หลุด
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Badge, Button, Card, Col, Container, Form, Row, Spinner, Table, Toast, ToastContainer,
+  Badge, Button, Card, Col, Collapse, Container, Form, Row, Spinner, Table, Toast, ToastContainer,
 } from 'react-bootstrap';
 import { apiCall } from '../utils/api';
 import { hasRole } from '../utils/auth';
@@ -20,7 +21,8 @@ import { useDialog } from '../utils/useDialog';
 import { useUrlParam } from '../utils/useModelParam';
 import { on } from '../utils/socket';
 import { SHIFTS } from '../utils/config';
-import { fmtDateTime } from '../utils/dateFormat';
+import { fmtDateTime, fmtTime } from '../utils/dateFormat';
+import { buildTimeline, fmtDuration, minutesBetween, SEGMENTS, TOTAL_KEYS } from '../utils/jobTimeline';
 import { judgeLocal, normalizeCheckpoints, normalizeRows, toNum } from '../utils/normalize';
 import AppDialog from './AppDialog';
 import MoLookupBar from './MoLookupBar';
@@ -37,12 +39,16 @@ import Pager, { usePager } from './table/Pager';
 // สี: แดง = ไม่ผ่าน (ของเสีย) · เขียว = ผ่าน · น้ำเงิน = งานที่เดินอยู่ · ไม่ใช้เหลือง (แกนเหลืองคือ control limit)
 export const statusInfo = (job) => {
   switch (job.status) {
-    case 'pd_checking':
+    // ขั้นย่อย (stage_started_at = เวลากดเริ่มเช็คของรอบนี้ · ไม่มี = ยังปรับตั้ง / ยังไม่เริ่มเช็ค)
+    case 'pd_checking': {
+      const sub = job.stage_started_at ? 'PD กำลังเช็คงาน' : 'PD กำลัง Set up & Adjust';
       return Number(job.round_no) > 1
-        ? { label: `ตีกลับ — PD ตรวจใหม่ (รอบ ${job.round_no})`, bg: 'danger' }
-        : { label: 'PD กำลังตรวจ', bg: 'secondary' };
+        ? { label: `ตีกลับ รอบ ${job.round_no} — ${sub}`, bg: 'danger' }
+        : { label: sub, bg: 'secondary' };
+    }
     case 'waiting_qc': return { label: 'รอ QC รับงาน', bg: 'primary' };
-    case 'qc_checking': return { label: 'QC กำลังตรวจ', bg: 'info' };
+    case 'qc_checking':
+      return job.stage_started_at ? { label: 'QC กำลังเช็ค', bg: 'info' } : { label: 'QC รับงานแล้ว — ยังไม่เริ่มเช็ค', bg: 'info' };
     case 'passed': return { label: 'ผ่าน', bg: 'success' };
     case 'cancelled': return { label: 'ยกเลิก', bg: 'dark' };
     default: return { label: job.status, bg: 'secondary' };
@@ -51,8 +57,10 @@ export const statusInfo = (job) => {
 
 const ACTION_LABEL = {
   open: 'เปิดงาน',
+  pd_start_check: 'PD ปรับตั้งเสร็จ — เริ่มเช็ค',
   pd_submit: 'PD ส่งให้ QC',
   qc_accept: 'QC รับงาน',
+  qc_start_check: 'QC เริ่มเช็ค',
   qc_pass: 'QC ยืนยัน ผ่าน',
   qc_reject: 'QC ไม่ผ่าน',
   pd_pass: 'PD ยืนยัน ผ่าน',
@@ -67,14 +75,7 @@ const flowOfJob = (job) => job?.category_flow || 'pd_qc';
 const openerRole = (flow) => (flow === 'qc' ? 'QC' : 'PD');
 
 // "รอมา 12 นาที" — นับจากเหตุการณ์ล่าสุดของงาน
-const waitedText = (from, now) => {
-  const t = from ? new Date(from).getTime() : NaN;
-  if (!Number.isFinite(t)) return '—';
-  const min = Math.max(0, Math.floor((now - t) / 60000));
-  if (min < 60) return `${min} นาที`;
-  const h = Math.floor(min / 60);
-  return h < 24 ? `${h} ชม. ${min % 60} นาที` : `${Math.floor(h / 24)} วัน ${h % 24} ชม.`;
-};
+const waitedText = (from, now) => fmtDuration(minutesBetween(from, now));
 
 const useNow = (ms = 30000) => {
   const [now, setNow] = useState(() => Date.now());
@@ -321,6 +322,114 @@ const ResultsTable = ({ checkpoints, inspections, layout }) => {
 };
 
 // ── รายละเอียดงาน + ขั้นที่ต้องทำ ────────────────────────────────────────────
+// ── Timeline ของงาน (Korn สั่ง 2026-11-19) — ช่วงเวลาทั้งหมดคิดที่ utils/jobTimeline.js ──
+// แดง = ไม่ผ่าน/ตีกลับ · เขียว = ผ่าน · น้ำเงิน = ช่วงที่กำลังเดิน · ไม่ใช้เหลือง (แกนเหลืองคือ control limit)
+const OUTCOME_TEXT = { pass: 'ผ่าน', reject: 'ไม่ผ่าน — ตีกลับ', cancel: 'ยกเลิกงาน' };
+const JobTimeline = ({ events, flow }) => {
+  const now = useNow(15000);
+  const [showLog, setShowLog] = useState(false);
+  const tl = useMemo(() => buildTimeline(events, flow, now), [events, flow, now]);
+  const keys = [...TOTAL_KEYS.filter((k) => tl.rounds.some((r) => r.segments.some((sg) => sg.key === k))),
+    ...(tl.totals.pd_legacy ? ['pd_legacy'] : [])];
+  return (
+    <Card className="mb-3">
+      <Card.Header>Timeline</Card.Header>
+      <Card.Body>
+        <div className="job-tl__totals">
+          {keys.map((k) => (
+            <div key={k} className="job-tl__total">
+              <div className="small text-muted">{SEGMENTS[k].label}</div>
+              <div className="num fw-semibold">{fmtDuration(tl.totals[k])}</div>
+            </div>
+          ))}
+          <div className="job-tl__total job-tl__total--lead">
+            <div className="small text-muted">{tl.closed ? 'รวมทั้งงาน' : 'รวมถึงตอนนี้'}</div>
+            <div className="num fw-semibold">{fmtDuration(tl.leadMinutes)}</div>
+          </div>
+        </div>
+        {tl.rounds.map((r) => (
+          <div key={r.round} className="job-tl__round">
+            {tl.rounds.length > 1 && <div className="job-tl__round-title">รอบ {r.round}</div>}
+            <ol className="job-tl">
+              {r.segments.map((sg, i) => (
+                <li key={`${sg.key}-${i}`} className={`job-tl__seg${sg.running ? ' job-tl__seg--running' : ''}`}>
+                  <span className="job-tl__dot" aria-hidden="true" />
+                  <div className="job-tl__time num">{fmtTime(sg.from)}</div>
+                  <div className="job-tl__body">
+                    <div>
+                      <b>{sg.label}</b>
+                      <span className="job-tl__dur num">{sg.running ? `กำลังทำ · ${fmtDuration(sg.minutes)}` : fmtDuration(sg.minutes)}</span>
+                    </div>
+                    <div className="small text-muted">เริ่ม {fmtDateTime(sg.from)} · {sg.by}{sg.to ? ` → ${fmtTime(sg.to)}` : ''}</div>
+                  </div>
+                </li>
+              ))}
+              {r.end && (
+                <li className={`job-tl__seg job-tl__seg--end job-tl__seg--${r.outcome}`}>
+                  <span className="job-tl__dot" aria-hidden="true" />
+                  <div className="job-tl__time num">{fmtTime(r.end.at)}</div>
+                  <div className="job-tl__body">
+                    <b>{OUTCOME_TEXT[r.outcome] ?? ACTION_LABEL[r.end.action]}</b>
+                    <div className="small text-muted">{r.end.user_name}{r.end.note ? ` · ${r.end.note}` : ''}</div>
+                  </div>
+                </li>
+              )}
+            </ol>
+          </div>
+        ))}
+        <Button size="sm" variant="link" className="p-0 no-print" onClick={() => setShowLog((v) => !v)} aria-expanded={showLog}>
+          {showLog ? 'ซ่อนรายการเหตุการณ์' : 'ดูรายการเหตุการณ์ทั้งหมด'}
+        </Button>
+        <Collapse in={showLog}>
+          <div>
+            <div className="mc-freeze mt-2" style={{ maxHeight: '40vh' }}>
+              <Table size="sm" className="mb-0 small text-nowrap">
+                <thead><tr><th>เวลา</th><th>รอบ</th><th>ขั้น</th><th>โดย</th><th>หมายเหตุ</th></tr></thead>
+                <tbody>
+                  {events.map((e) => (
+                    <tr key={e.id}>
+                      <td>{fmtDateTime(e.at)}</td>
+                      <td>{e.round_no}</td>
+                      <td style={['qc_reject', 'pd_reject'].includes(e.action) ? { color: 'var(--red)' }
+                        : ['qc_pass', 'pd_pass'].includes(e.action) ? { color: 'var(--green)' } : undefined}>
+                        {ACTION_LABEL[e.action] ?? e.action}
+                      </td>
+                      <td>{e.user_name}</td>
+                      <td>{e.note || ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </div>
+          </div>
+        </Collapse>
+      </Card.Body>
+    </Card>
+  );
+};
+
+// การ์ดก่อนเริ่มเช็ค — PD: ช่วง Set up & Adjust กำลังเดิน · QC: รับงานแล้วรอเริ่มเช็ค
+const StartCheckCard = ({ stage, since, busy, onStart }) => {
+  const now = useNow(15000);
+  return (
+    <Card className="mb-3 job-start">
+      <Card.Body className="d-flex flex-wrap align-items-center gap-3">
+        <div className="flex-grow-1">
+          <div className="fw-semibold">{stage === 'pd' ? 'กำลัง Set up & Adjust' : 'รับงานแล้ว — ยังไม่เริ่มเช็ค'}</div>
+          <div className="small text-muted">
+            ตั้งแต่ {fmtDateTime(since)} · <span className="num">{waitedText(since, now)}</span>
+            {stage === 'pd' ? ' — ปรับตั้งเครื่องเสร็จแล้วกดปุ่มเพื่อเริ่มเช็คงาน (ระบบแยกเวลาปรับตั้งกับเวลาเช็ค)' : ' — กดเริ่มเช็คตอนลงมือวัดจริง'}
+          </div>
+        </div>
+        <Button size="lg" disabled={busy} onClick={onStart}>
+          {busy && <Spinner size="sm" animation="border" className="me-1" />}
+          {stage === 'pd' ? 'ปรับตั้งเสร็จ — เริ่มเช็คงาน' : 'เริ่มเช็คงาน'}
+        </Button>
+      </Card.Body>
+    </Card>
+  );
+};
+
 const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -364,6 +473,11 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
   const stage = job.status === 'pd_checking' && isPD && flow !== 'qc' ? 'pd'
     : job.status === 'qc_checking' && isQC && mineQc ? 'qc'
       : null;
+  // ยังไม่กดเริ่มเช็คของรอบนี้ = ยังไม่โชว์ฟอร์ม (เวลาเช็คจะได้ตรงกับที่ทำจริง) · server กั้นซ้ำที่ submit/decide
+  const started = Boolean(job.stage_started_at);
+  // จุดเริ่มของช่วงที่รออยู่: PD = เปิดงาน/ตีกลับล่าสุด · QC = รับงานล่าสุด (flow qc รอบใหม่ = ตีกลับล่าสุด)
+  const waitSince = [...events].reverse()
+    .find((e) => (stage === 'pd' ? ['open', 'qc_reject', 'pd_reject'] : ['qc_accept', 'qc_reject']).includes(e.action))?.at;
   const stageCps = stage ? checkpoints[stage] : [];
   const doneCount = stageCps.filter((cp) => isComplete(cp, values)).length;
   const allDone = stageCps.length > 0 && doneCount === stageCps.length;
@@ -393,6 +507,7 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
   }), 'ส่งให้ QC แล้ว — งานเข้าคิว QC');
 
   const accept = () => run(() => apiCall(`/check-jobs/${job.id}/accept`, { method: 'POST' }), null);
+  const startCheck = () => run(() => apiCall(`/check-jobs/${job.id}/start-check`, { method: 'POST' }), null);
 
   const pass = () => run(() => apiCall(`/check-jobs/${job.id}/decide`, {
     method: 'POST', body: { result: 'pass', results: buildResults(stageCps, values) },
@@ -432,12 +547,17 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
             <Badge bg={st.bg}>{st.label}</Badge>
             <span className="small text-muted">งาน #{job.id}</span>
           </div>
+          {/* หัวงานตามหัวใบ SET UP: Part / Process / Machine · Drawing / Date / WOS · Item / Material / Lot Material */}
           <Row className="small mt-2 g-1">
-            <Col md={4}>Item: <b>{job.item_no}</b> {job.item_name}</Col>
-            <Col md={3}>Drawing: {job.drawing_no || '—'}{job.drawing_rev ? ` Rev ${job.drawing_rev}` : ''}</Col>
-            <Col md={2}>เครื่อง: <b>{job.machine_code}</b></Col>
-            <Col md={1}>กะ: <b>{job.shift}</b></Col>
-            <Col md={2}>Lot: {job.lot_no || '—'}</Col>
+            <Col sm={6} lg={4}>Part Name: <b>{job.item_name || '—'}</b></Col>
+            <Col sm={6} lg={4}>Process: <b>{job.process || '—'}</b></Col>
+            <Col sm={6} lg={4}>Machine: <b>{job.machine_code}</b>{job.machine_name ? ` ${job.machine_name}` : ''}</Col>
+            <Col sm={6} lg={4}>Drawing No: {job.drawing_no || '—'}{job.drawing_rev ? ` Rev ${job.drawing_rev}` : ''}</Col>
+            <Col sm={6} lg={4}>Date: {fmtDateTime(job.opened_at)} · กะ <b>{job.shift}</b></Col>
+            <Col sm={6} lg={4}>WOS No: <b>{job.mo_no}</b>{job.lot_no ? ` · Lot ${job.lot_no}` : ''}</Col>
+            <Col sm={6} lg={4}>Item No: <b>{job.item_no}</b></Col>
+            <Col sm={6} lg={4}>Material: {job.material || '—'}</Col>
+            <Col sm={6} lg={4}>Lot Material: {job.material_lot || '—'}</Col>
           </Row>
           {job.status === 'pd_checking' && job.last_reject_note && (
             <div className="small mt-2" style={{ color: 'var(--red)' }}>
@@ -447,11 +567,14 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
         </Card.Body>
       </Card>
 
+      {stage && !started && <StartCheckCard stage={stage} since={waitSince} busy={busy} onStart={startCheck} />}
+
       {/* ── ขั้นที่ต้องทำตอนนี้ ── */}
-      {stage && (
+      {stage && started && (
         <Card className="mb-3">
           <Card.Header className="d-flex flex-wrap align-items-center gap-2">
             <span>{stage === 'pd' ? `Production Check — รอบ ${job.round_no}` : `QC Confirm — รอบ ${job.round_no}`}</span>
+            <span className="small text-muted">เริ่มเช็ค {fmtTime(job.stage_started_at)}</span>
             <span className="ms-auto"><LayoutToggle layout={layout} onChange={setLayout} /></span>
           </Card.Header>
           <Card.Body>
@@ -501,33 +624,12 @@ const JobDetail = ({ jobId, session, onBack, showAlert, showPrompt }) => {
       <Card className="mb-3">
         <Card.Header className="d-flex flex-wrap align-items-center gap-2">
           <span>ผลตรวจที่บันทึกแล้ว</span>
-          {!stage && <span className="ms-auto"><LayoutToggle layout={layout} onChange={setLayout} /></span>}
+          {!(stage && started) && <span className="ms-auto"><LayoutToggle layout={layout} onChange={setLayout} /></span>}
         </Card.Header>
         <Card.Body><ResultsTable checkpoints={checkpoints} inspections={inspections} layout={layout} /></Card.Body>
       </Card>
 
-      <Card className="mb-3">
-        <Card.Header>ลำดับเวลา</Card.Header>
-        <Card.Body className="p-0">
-          <Table size="sm" className="mb-0 small">
-            <thead><tr><th>เวลา</th><th>รอบ</th><th>ขั้น</th><th>โดย</th><th>หมายเหตุ</th></tr></thead>
-            <tbody>
-              {events.map((e) => (
-                <tr key={e.id}>
-                  <td className="text-nowrap">{fmtDateTime(e.at)}</td>
-                  <td>{e.round_no}</td>
-                  <td style={['qc_reject', 'pd_reject'].includes(e.action) ? { color: 'var(--red)' }
-                    : ['qc_pass', 'pd_pass'].includes(e.action) ? { color: 'var(--green)' } : undefined}>
-                    {ACTION_LABEL[e.action] ?? e.action}
-                  </td>
-                  <td>{e.user_name}</td>
-                  <td>{e.note || ''}</td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </Card.Body>
-      </Card>
+      <JobTimeline events={events} flow={flow} />
 
       {open && (
         <div className="no-print mb-4">
@@ -546,6 +648,14 @@ const OpenJob = ({ categoryId, lookups, models, onOpened, showAlert }) => {
   const [machineId, setMachineId] = useState('');
   const [shift, setShift] = useState('');
   const [lotNo, setLotNo] = useState('');
+  // หัวงานตามหัวใบ SET UP — Process บังคับ · Material / Lot Material เผื่อไว้ · ตัวเลือก = ค่าที่เคยกรอก (พิมพ์ใหม่ได้)
+  const [process, setProcess] = useState('');
+  const [material, setMaterial] = useState('');
+  const [materialLot, setMaterialLot] = useState('');
+  const [headOpts, setHeadOpts] = useState({ processes: [], materials: [] });
+  useEffect(() => {
+    apiCall('/check-jobs/header-options').then(setHeadOpts).catch(() => {});
+  }, []);
   const [busy, setBusy] = useState(false);
 
   const model = models.find((m) => String(m.id) === modelId);
@@ -563,7 +673,7 @@ const OpenJob = ({ categoryId, lookups, models, onOpened, showAlert }) => {
   const itemScope = itemsForMachine(models, machine, machineItems, modelId);
 
   const pickModel = useCallback((m) => setModelId(String(m.id)), []);
-  const ready = moNo.trim() && modelId && machineId && shift;
+  const ready = moNo.trim() && modelId && machineId && shift && process.trim();
 
   const submit = async () => {
     setBusy(true);
@@ -572,11 +682,11 @@ const OpenJob = ({ categoryId, lookups, models, onOpened, showAlert }) => {
         method: 'POST',
         body: {
           category_id: categoryId, model_id: modelId, machine_id: machineId, mo_no: moNo.trim(),
-          lot_no: lotNo, shift,
+          lot_no: lotNo, shift, process: process.trim(), material: material.trim(), material_lot: materialLot.trim(),
           mo_item_no: moInfo?.itemNo, mo_item_name: moInfo?.itemName, mo_draw: moInfo?.draw,
         },
       });
-      setMoNo(''); setLotNo('');
+      setMoNo(''); setLotNo(''); setMaterialLot('');
       onOpened(res.id);
     } catch (err) {
       showAlert({ title: 'เปิดงานไม่สำเร็จ', body: err.message });
@@ -619,11 +729,30 @@ const OpenJob = ({ categoryId, lookups, models, onOpened, showAlert }) => {
             </Form.Select>
           </Col>
           <Col md={2}>
-            <Form.Label className="small mb-1" htmlFor="setup-lot">Lot (ถ้ามี)</Form.Label>
+            <Form.Label className="small mb-1" htmlFor="setup-lot">Lot ชิ้นงาน (ถ้ามี)</Form.Label>
             <Form.Control id="setup-lot" value={lotNo} onChange={(e) => setLotNo(e.target.value)} />
           </Col>
         </Row>
-        <Button className="mt-3" disabled={busy || !ready} onClick={submit}>เปิดงาน แล้วกรอก Production Check</Button>
+        {/* ⚠️ <input list> + <datalist> โดยตั้งใจ (free text + ตัวเลือก) — กฎเดียวกับช่อง unit/gauge */}
+        <Row className="g-2 mt-1">
+          <Col md={5}>
+            <Form.Label className="small mb-1" htmlFor="setup-process">Process <span style={{ color: 'var(--red)' }}>*</span></Form.Label>
+            <Form.Control id="setup-process" list="setup-process-list" value={process} maxLength={100}
+              placeholder="เช่น Turning (Complete)" onChange={(e) => setProcess(e.target.value)} />
+            <datalist id="setup-process-list">{headOpts.processes.map((v) => <option key={v} value={v} />)}</datalist>
+          </Col>
+          <Col md={4}>
+            <Form.Label className="small mb-1" htmlFor="setup-material">Material (ถ้ามี)</Form.Label>
+            <Form.Control id="setup-material" list="setup-material-list" value={material} maxLength={100}
+              onChange={(e) => setMaterial(e.target.value)} />
+            <datalist id="setup-material-list">{headOpts.materials.map((v) => <option key={v} value={v} />)}</datalist>
+          </Col>
+          <Col md={3}>
+            <Form.Label className="small mb-1" htmlFor="setup-matlot">Lot Material (ถ้ามี)</Form.Label>
+            <Form.Control id="setup-matlot" value={materialLot} maxLength={100} onChange={(e) => setMaterialLot(e.target.value)} />
+          </Col>
+        </Row>
+        <Button className="mt-3" disabled={busy || !ready} onClick={submit}>เปิดงาน — เริ่ม Set up & Adjust</Button>
       </Card.Body>
     </Card>
   );

@@ -526,7 +526,7 @@ CREATE TABLE IF NOT EXISTS check_job_events (
   id             BIGINT AUTO_INCREMENT PRIMARY KEY,
   job_id         INT NOT NULL,
   round_no       INT NOT NULL,
-  action         ENUM('open','pd_submit','qc_accept','qc_pass','qc_reject','pd_pass','pd_reject','cancel') NOT NULL,
+  action         ENUM('open','pd_start_check','pd_submit','qc_accept','qc_start_check','qc_pass','qc_reject','pd_pass','pd_reject','cancel') NOT NULL,
   user_id        INT NOT NULL,
   user_name      VARCHAR(100) NOT NULL,
   note           VARCHAR(255) NULL,
@@ -583,7 +583,8 @@ INSERT IGNORE INTO menu_permissions (menu_key, role, allowed) VALUES
 ALTER TABLE check_categories ADD COLUMN IF NOT EXISTS description VARCHAR(200) NULL;
 ALTER TABLE check_categories ADD COLUMN IF NOT EXISTS flow ENUM('pd_qc','pd','qc') NOT NULL DEFAULT 'pd_qc';
 -- flow pd: PD ตัดสินผลเอง → event pd_pass / pd_reject (MODIFY รันซ้ำได้ ค่าเดิมยังอยู่ครบ)
-ALTER TABLE check_job_events MODIFY action ENUM('open','pd_submit','qc_accept','qc_pass','qc_reject','pd_pass','pd_reject','cancel') NOT NULL;
+-- pd_start_check / qc_start_check (2026-11-19) = จบ Set up & Adjust / QC เริ่มเช็ค — ขั้นย่อยเป็น event ไม่ใช่ status
+ALTER TABLE check_job_events MODIFY action ENUM('open','pd_start_check','pd_submit','qc_accept','qc_start_check','qc_pass','qc_reject','pd_pass','pd_reject','cancel') NOT NULL;
 
 -- ── อิงเครื่องจักร / item / เครื่อง↔item จากระบบ Drawing Digital (2026-11 · services/drawingSync.js) ─────
 -- synced_at NULL = ไม่ได้มาจาก Drawing (ตั้งมือ / Mecha 2) · allow_all_items 1 = เครื่องนี้รันได้ทุก item (ค่าเริ่ม = พฤติกรรมเดิม)
@@ -610,3 +611,9 @@ ALTER TABLE divisions ADD COLUMN IF NOT EXISTS is_active TINYINT(1) NOT NULL DEF
 ALTER TABLE users ADD COLUMN IF NOT EXISTS pending TINYINT(1) NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reg_emp_code VARCHAR(50) NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reg_division_id INT NULL;
+
+-- หัวงาน Set up ตามหัวใบ SET UP (Korn สั่ง 2026-11-19) — process บังคับตอนเปิดงานใหม่ (ตรวจที่ routes/checkJobs.js)
+-- material / material_lot ไม่บังคับ · งานเก่า = NULL · ตัวเลือก dropdown = ค่าที่เคยใช้ (GET /check-jobs/header-options)
+ALTER TABLE check_jobs ADD COLUMN IF NOT EXISTS process      VARCHAR(100) NULL;
+ALTER TABLE check_jobs ADD COLUMN IF NOT EXISTS material     VARCHAR(100) NULL;
+ALTER TABLE check_jobs ADD COLUMN IF NOT EXISTS material_lot VARCHAR(100) NULL;

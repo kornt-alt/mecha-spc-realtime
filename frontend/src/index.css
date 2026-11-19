@@ -1889,3 +1889,31 @@ tr.cp-row--drop-after > td { box-shadow: inset 0 -2px 0 var(--blue); }
 
 /* แถบทำรายการกับจุดตรวจที่ติ๊กเลือก (Master) */
 .cp-batch { padding: 0.4rem 0.6rem; border: 1px solid var(--line); border-radius: 0.4rem; background: var(--blue-tint); }
+
+/* ── Timeline งาน Set up (SetupJobs JobTimeline · ช่วงเวลาจาก utils/jobTimeline.js) ──
+   เส้นแนวตั้ง + จุด · น้ำเงิน = กำลังเดิน · แดง = ไม่ผ่าน/ตีกลับ · เขียว = ผ่าน · ไม่ใช้เหลือง (แกนคอนโทรล) */
+.job-start { border-left: 4px solid var(--blue-text); }
+.job-tl__totals { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+.job-tl__total { flex: 1 1 8.5rem; padding: 0.4rem 0.6rem; border: 1px solid var(--line); border-radius: 0.4rem; background: var(--surface); }
+.job-tl__total--lead { background: var(--blue-tint); }
+.job-tl__round { margin-bottom: 0.75rem; }
+.job-tl__round-title { font-weight: 600; font-size: 0.85rem; color: var(--blue-text); margin-bottom: 0.25rem; }
+.job-tl { list-style: none; margin: 0; padding: 0; }
+.job-tl__seg { position: relative; display: grid; grid-template-columns: 3.2rem 1fr; gap: 0 0.9rem; padding: 0 0 0.85rem 0; }
+.job-tl__seg::before { content: ''; position: absolute; left: 3.95rem; top: 0.9rem; bottom: -0.1rem; width: 2px; background: var(--line); }
+.job-tl__seg:last-child::before { display: none; }
+.job-tl__dot { position: absolute; left: 3.6rem; top: 0.3rem; width: 0.75rem; height: 0.75rem; border-radius: 50%;
+  background: var(--surface); border: 2px solid var(--muted); }
+.job-tl__time { font-size: 0.85rem; color: var(--muted); padding-top: 0.05rem; }
+.job-tl__body { min-width: 0; padding-left: 0.6rem; overflow-wrap: anywhere; }
+.job-tl__dur { margin-left: 0.5rem; padding: 0 0.45rem; border-radius: 1rem; font-size: 0.8rem; background: var(--blue-tint); color: var(--blue-text); white-space: nowrap; }
+.job-tl__seg--running .job-tl__dot { border-color: var(--blue-text); background: var(--blue-text); }
+.job-tl__seg--running .job-tl__dur { background: var(--blue-text); color: var(--surface); }
+.job-tl__seg--pass .job-tl__dot { border-color: var(--green); background: var(--green); }
+.job-tl__seg--pass b { color: var(--green); }
+.job-tl__seg--reject .job-tl__dot, .job-tl__seg--cancel .job-tl__dot { border-color: var(--red); background: var(--red); }
+.job-tl__seg--reject b, .job-tl__seg--cancel b { color: var(--red); }
+@media (prefers-reduced-motion: no-preference) {
+  .job-tl__seg--running .job-tl__dot { animation: job-tl-pulse 1.6s ease-in-out infinite; }
+}
+@keyframes job-tl-pulse { 50% { box-shadow: 0 0 0 0.3rem rgba(var(--blue-rgb, 27, 79, 160), 0.2); } }

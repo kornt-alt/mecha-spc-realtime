@@ -93,6 +93,23 @@ const transition = async (conn, jobId, from, setSql, params = []) => {
   }
 };
 
+// ขั้นย่อยของงาน (2026-11-19) — เป็น event ไม่ใช่ status: pd_checking ก่อน pd_start_check = Set up & Adjust
+//   qc_checking ก่อน qc_start_check = QC รับงานแล้วแต่ยังไม่เริ่มเช็ค · ช่วงเวลาทั้งหมดคิดที่ frontend utils/jobTimeline.js
+// ⚠️ submit / decide ต้องมี start ของ "รอบปัจจุบัน" — รอบใหม่หลังตีกลับต้องกดเริ่มเช็คใหม่ (เวลาปรับตั้งรอบ 2 ถึงแยกได้)
+const START_ACTION = { pd: 'pd_start_check', qc: 'qc_start_check' };
+const startedAt = async (job, stage, db = { query }) => {
+  const [[row]] = await db.query(
+    'SELECT at FROM check_job_events WHERE job_id = ? AND round_no = ? AND action = ? ORDER BY id DESC LIMIT 1',
+    [job.id, job.round_no, START_ACTION[stage]]
+  );
+  return row?.at ?? null;
+};
+const assertStarted = async (job, stage) => {
+  if (!(await startedAt(job, stage))) {
+    throw new AppError(stage === 'pd' ? 'ยังไม่ได้กด "ปรับตั้งเสร็จ — เริ่มเช็คงาน"' : 'ยังไม่ได้กด "เริ่มเช็คงาน"', 409);
+  }
+};
+
 const loadJob = async (id, db = { query }) => {
   const [[job]] = await db.query('SELECT * FROM check_jobs WHERE id = ?', [Number(id)]);
   if (!job) throw new AppError('ไม่พบงานนี้', 404);
@@ -146,7 +163,11 @@ const SELECT_JOBS = `
          (SELECT e.action FROM check_job_events e WHERE e.job_id = j.id ORDER BY e.id DESC LIMIT 1) AS last_action,
          (SELECT e.user_name FROM check_job_events e WHERE e.job_id = j.id ORDER BY e.id DESC LIMIT 1) AS last_user_name,
          (SELECT e.note FROM check_job_events e
-           WHERE e.job_id = j.id AND e.action IN ('qc_reject','pd_reject') ORDER BY e.id DESC LIMIT 1) AS last_reject_note
+           WHERE e.job_id = j.id AND e.action IN ('qc_reject','pd_reject') ORDER BY e.id DESC LIMIT 1) AS last_reject_note,
+         (SELECT MAX(e.at) FROM check_job_events e
+           WHERE e.job_id = j.id AND e.round_no = j.round_no
+             AND e.action = CASE j.status WHEN 'pd_checking' THEN 'pd_start_check'
+                                          WHEN 'qc_checking' THEN 'qc_start_check' END) AS stage_started_at
     FROM check_jobs j
     JOIN check_categories cat ON cat.id = j.category_id
     JOIN models m             ON m.id  = j.model_id
@@ -215,6 +236,20 @@ router.get('/form', wrap(async (req, res) => {
   res.json({ pd, qc });
 }));
 
+// ตัวเลือก dropdown ของหัวงาน = ค่าที่เคยกรอก (ใช้ล่าสุดก่อน) — พิมพ์ค่าใหม่ได้เสมอ (datalist)
+// ⚠️ ต้องอยู่ก่อน /:id
+router.get('/header-options', wrap(async (req, res) => {
+  const pick = async (col) => {
+    const [rows] = await query(
+      `SELECT ${col} AS v, MAX(opened_at) AS last FROM check_jobs
+        WHERE ${col} IS NOT NULL AND ${col} <> '' GROUP BY ${col} ORDER BY last DESC LIMIT 100`
+    );
+    return rows.map((r) => r.v);
+  };
+  const [processes, materials] = await Promise.all([pick('process'), pick('material')]);
+  res.json({ processes, materials });
+}));
+
 // งานเดียว: หัว + timeline + ผลตรวจทุกใบ (ทุกรอบ ทั้ง PD/QC) + จุดตรวจของแต่ละขั้น
 router.get('/:id', wrap(async (req, res) => {
   if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
@@ -275,7 +310,8 @@ const requireOpener = (req, res, next) => {
     .catch(next);
 };
 
-// เปิดงาน — body: { category_id, model_id, machine_id, mo_no, lot_no?, shift, mo_item_no?, mo_item_name?, mo_draw? }
+// เปิดงาน — body: { category_id, model_id, machine_id, mo_no, lot_no?, shift, process, material?, material_lot?,
+//                   mo_item_no?, mo_item_name?, mo_draw? } · หัวงานตามหัวใบ SET UP (process บังคับ)
 router.post('/', requireOpener, wrap(async (req, res) => {
   const b = req.body ?? {};
   for (const [key, label] of [['category_id', 'หมวด'], ['model_id', 'item'], ['machine_id', 'เครื่อง']]) {
@@ -285,6 +321,9 @@ router.post('/', requireOpener, wrap(async (req, res) => {
   if (!moNo) throw new AppError('ยังไม่ได้กรอกเลข WOS', 400);
   if (!b.shift) throw new AppError('ยังไม่ได้เลือกกะ', 400);
   if (!isShift(b.shift)) throw new AppError(`กะ "${b.shift}" ไม่ใช่กะที่ระบบรับ`, 400);
+  const head = (v) => textOrNull(v)?.slice(0, 100) ?? null;
+  const process = head(b.process);
+  if (!process) throw new AppError('ยังไม่ได้กรอก Process', 400);
 
   const [[cat]] = await query('SELECT id, name, has_workflow, flow FROM check_categories WHERE id = ? AND is_active = 1', [Number(b.category_id)]);
   if (!cat || !Number(cat.has_workflow)) throw new AppError('หมวดนี้ไม่ใช่งานที่ต้องส่งต่อ PD → QC', 400);
@@ -313,9 +352,10 @@ router.post('/', requireOpener, wrap(async (req, res) => {
   const job = await withTransaction(async (conn) => {
     const [r] = await conn.execute(
       `INSERT INTO check_jobs
-         (category_id, model_id, machine_id, mo_no, lot_no, shift, mo_item_no, mo_item_name, mo_draw, opened_by, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [cat.id, model.id, machine.id, moNo, textOrNull(b.lot_no), b.shift,
+         (category_id, model_id, machine_id, mo_no, lot_no, shift, process, material, material_lot,
+          mo_item_no, mo_item_name, mo_draw, opened_by, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [cat.id, model.id, machine.id, moNo, textOrNull(b.lot_no), b.shift, process, head(b.material), head(b.material_lot),
         textOrNull(b.mo_item_no), textOrNull(b.mo_item_name), textOrNull(b.mo_draw), req.user.id,
         flow === 'qc' ? 'qc_checking' : 'pd_checking']
     );
@@ -339,6 +379,7 @@ router.post('/:id/submit', requirePD, wrap(async (req, res) => {
     throw new AppError('หมวดนี้ PD ตัดสินผลเอง ไม่ต้องส่ง QC — ใช้ปุ่มผ่าน/ไม่ผ่าน', 409);
   }
 
+  await assertStarted(job, 'pd');
   const evaluated = evaluateStage(await stageCheckpoints(job.model_id, job.category_id, 'pd'), req.body?.results, { required: true });
 
   const saved = await withTransaction(async (conn) => {
@@ -364,6 +405,43 @@ router.post('/:id/accept', requireQC, wrap(async (req, res) => {
   });
 
   notify(req, { ...job, status: 'qc_checking' }, 'qc_accept');
+  res.json({ success: true });
+}));
+
+// ปรับตั้งเสร็จ / QC เริ่มเช็ค — ขั้นอ่านจากสถานะงาน (pd_checking → PD · qc_checking → QC คนที่รับงานล่าสุด)
+// ⚠️ ล็อกแถวงาน (FOR UPDATE) แล้วเช็คซ้ำในนั้น — กดพร้อมกันสองเครื่องต้องได้ start เดียวต่อรอบ
+router.post('/:id/start-check', wrap(async (req, res) => {
+  if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const job = await loadJob(req.params.id);
+  const flow = await flowOf(job.category_id);
+  const stage = job.status === 'pd_checking' && flow !== 'qc' ? 'pd'
+    : job.status === 'qc_checking' ? 'qc'
+      : null;
+  if (!stage) throw new AppError('งานนี้ไม่ได้อยู่ในขั้นที่ต้องเริ่มเช็ค', 409);
+  const role = stage === 'pd' ? 'PD' : 'QC';
+  if (!userHasRole(req.user, role)) throw new AppError(`บัญชีนี้ไม่มีสิทธิ์ (ต้องเป็น ${role})`, 403);
+  if (stage === 'qc') {
+    const [[accept]] = await query(
+      "SELECT user_id, user_name FROM check_job_events WHERE job_id = ? AND action = 'qc_accept' ORDER BY id DESC LIMIT 1",
+      [job.id]
+    );
+    if (accept && Number(accept.user_id) !== Number(req.user.id)) {
+      throw new AppError(`งานนี้ ${accept.user_name} รับไว้ — ให้คนที่รับงานเป็นคนเริ่มเช็ค`, 409);
+    }
+  }
+
+  const action = START_ACTION[stage];
+  await withTransaction(async (conn) => {
+    const [[locked]] = await conn.query('SELECT status, round_no FROM check_jobs WHERE id = ? FOR UPDATE', [job.id]);
+    if (!locked || locked.status !== job.status || Number(locked.round_no) !== Number(job.round_no)) {
+      throw new AppError('งานนี้ถูกเปลี่ยนสถานะไปแล้ว — กดรีเฟรชเพื่อดูสถานะล่าสุด', 409);
+    }
+    if (await startedAt(job, stage, conn)) throw new AppError('รอบนี้กดเริ่มเช็คไปแล้ว', 409);
+    await conn.execute('UPDATE check_jobs SET updated_at = NOW() WHERE id = ?', [job.id]);
+    await addEvent(conn, job, job.round_no, action, req.user);
+  });
+
+  notify(req, job, action);
   res.json({ success: true });
 }));
 
@@ -399,6 +477,8 @@ router.post('/:id/decide', wrap(async (req, res) => {
       throw new AppError(`งานนี้ ${accept.user_name} รับไว้ — ให้คนที่รับงานเป็นคนยืนยันผล`, 409);
     }
   }
+
+  await assertStarted(job, stage);
 
   const submitted = Array.isArray(req.body?.results) ? req.body.results : [];
   const evaluated = submitted.length || result === 'pass'

@@ -54,6 +54,7 @@ const REQUIRED = {
   check_jobs: [
     'id', 'category_id', 'model_id', 'machine_id', 'mo_no', 'lot_no', 'shift',
     'round_no', 'status', 'result', 'opened_by', 'opened_at', 'closed_at',
+    'process', 'material', 'material_lot',
   ],
   check_job_events: ['id', 'job_id', 'round_no', 'action', 'user_id', 'user_name', 'note', 'inspection_id', 'at'],
   inspection_result_edits: [
