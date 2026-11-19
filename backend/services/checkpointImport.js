@@ -115,7 +115,11 @@ const parseSetupSheet = (ws) => {
       in_routine: spc ? 1 : 0,
     });
   }
-  return { itemNo, points, errors };
+  // หัวใบ (H4 Part Name · H6 Drawing No · O6 Rev) — ใช้ตอนสร้าง item จากใบ (นำเข้าที่การ์ด Item)
+  const header = {
+    item_name: text(cellValue(ws, 4, 8)), drawing_no: text(cellValue(ws, 6, 8)), drawing_rev: text(cellValue(ws, 6, 15)),
+  };
+  return { itemNo, header, points, errors };
 };
 
 // ตารางหัวคอลัมน์ → array ของแถว (ข้อความล้วน) ตัดแถวว่างหัว/ท้าย · ชีตชื่อ CHECKPOINTS มาก่อน ไม่มีใช้ชีตแรก
@@ -172,7 +176,7 @@ const TEMPLATE_COLUMNS = [
   { header: 'พิกัดล่าง', width: 10, example: ['-0.01', ''] },
   { header: 'ชิ้น/ครั้ง', width: 10, example: [2, 1] },
   { header: 'ความถี่ (กะ/วัน)', width: 14, example: ['กะ', 'วัน'] },
-  { header: 'ตรวจตามรอบ (Y/N)', width: 16, example: ['Y', 'N'] },
+  { header: 'Regular time (Y/N)', width: 16, example: ['Y', 'N'] },
   { header: 'SC point (Y/N)', width: 14, example: ['N', 'N'] },
 ];
 const STAGE_LABEL = { pd: 'PD', qc: 'QC' };
@@ -252,5 +256,5 @@ const buildTemplate = (categories = [], points = null) => {
 module.exports = {
   parseWorkbook, parseSetupSheet, buildTemplate, TEMPLATE_SHEET,
   // ใช้ต่อใน services/masterExport.js (ไฟล์ item + master) และ /items/import/parse
-  TEMPLATE_COLUMNS, catColumns, pointRow, sheetToTable, loadWorkbook,
+  TEMPLATE_COLUMNS, catColumns, pointRow, sheetToTable, loadWorkbook, looksLikeSetup,
 };

@@ -252,7 +252,7 @@ const CategoryMatrix = ({
       const res = await apiCall(`/master/models/${modelId}/category-matrix`, { method: 'PUT', body });
       if (res.sampleSizeChangedWithData?.length) {
         onAlert({
-          title: 'จำนวนชิ้นตรวจตามรอบเปลี่ยน — ต้อง Re-baseline',
+          title: 'จำนวนชิ้น Regular time เปลี่ยน — ต้อง Re-baseline',
           body: `จุดที่มีผลตรวจอยู่แล้วและเปลี่ยน n: ${res.sampleSizeChangedWithData.join(', ')}\n\n`
             + 'กราฟของจุดเหล่านี้จะผสม n เดิมกับ n ใหม่ไม่ได้ ให้กด Re-baseline (และดูช่วงข้อมูล) ที่ตารางจุดตรวจ',
         });
@@ -269,7 +269,7 @@ const CategoryMatrix = ({
 
   // กลุ่มคอลัมน์ตามฟอร์ม: Inspection Record · <หมวด> Production Check / QC Confirm
   const groups = [
-    ...(routineCat ? [{ key: ROUTINE_KEY, cat: 'Inspection Record', sub: 'ตรวจตามรอบ' }] : []),
+    ...(routineCat ? [{ key: ROUTINE_KEY, cat: 'Inspection Record', sub: 'Regular time' }] : []),
     ...flowCats.flatMap((c) => STAGES
       .filter((st) => (FLOW_STAGES[c.flow] ?? FLOW_STAGES.pd_qc).includes(st.key))
       .map((st) => ({ key: keyOf(c.id, st.key), cat: c.name, sub: st.label }))),

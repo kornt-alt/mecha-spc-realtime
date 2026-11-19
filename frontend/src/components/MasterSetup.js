@@ -498,7 +498,8 @@ const MasterSetup = () => {
           onPreviewBaseline={previewBaseline} onClearBaseline={clearBaseline}
           categories={workflowCategories} allCategories={allCategories} onMatrixSaved={matrixSaved}
           scopeName={scopeName}
-          onAlert={showAlert}
+          onAlert={showAlert} onConfirm={showConfirm}
+          onBatchDone={async (text, variant = 'success') => { say(variant, text); await loadAll(); await loadCheckpoints(selectedModel); }}
         />
       )}
       {tab === 'base' && baseTab === 'divisions' && (
@@ -746,7 +747,7 @@ const ModelsTab = ({
   onReorder, onBulkSaved, onItemsImported, reloadCheckpoints,
   categories = [], allCategories = [], onMatrixSaved,
   scopeName,
-  onAlert,
+  onAlert, onConfirm, onBatchDone,
 }) => {
   // error ของกล่อง — ชั่วคราว หายตอนสลับแท็บได้ (ของที่พิมพ์ไม่หาย อยู่ที่ <MasterSetup>)
   const [modelErr, setModelErr] = useState(null);
@@ -788,16 +789,17 @@ const ModelsTab = ({
       onAlert({ title: 'นำเข้าไฟล์ไม่ได้', body: e.message });
     } finally { setImportBusy(false); }
   };
-  const downloadTemplate = () => apiDownload('/master/checkpoint-template', 'แม่แบบจุดตรวจ.xlsx')
-    .catch((e) => onAlert({ title: 'ดาวน์โหลดแม่แบบไม่ได้', body: e.message }));
   // จุดตรวจปัจจุบันเป็น Excel → แก้ → ลากกลับมา (กล่องเพิ่มหลายจุด โหมดอัปเดตจุดเดิม)
   const downloadCurrent = () => apiDownload(`/master/models/${selectedModel}/checkpoints/export`, 'checkpoints.xlsx')
     .catch((e) => onAlert({ title: 'ดาวน์โหลดจุดตรวจไม่ได้', body: e.message }));
+  // จุดตรวจเป็นใบ SET UP & LAST PIECE (หน้าตาแบบใบจริงที่นำเข้า) — พิมพ์ใช้ได้ ลากกลับมานำเข้าได้
+  const downloadSetupSheet = () => apiDownload(`/master/models/${selectedModel}/setup-sheet`, 'SET-UP.xlsx')
+    .catch((e) => onAlert({ title: 'ดาวน์โหลดใบ SET UP ไม่ได้', body: e.message }));
   // item ที่เห็นในลิสต์ (ตามช่องค้นหา) + จุดตรวจ → ไฟล์ item (แก้แล้วลากกลับมานำเข้า item ได้)
+  const downloadSetupSheets = (ids) => apiDownload('/master/setup-sheets', 'SET-UP.xlsx', { method: 'POST', body: { ids } })
+    .catch((e) => onAlert({ title: 'ดาวน์โหลดใบ SET UP ไม่ได้', body: e.message }));
   const downloadItems = (ids) => apiDownload('/master/export', 'items.xlsx', { method: 'POST', body: { table: 'models', ids } })
     .catch((e) => onAlert({ title: 'ดาวน์โหลด item ไม่ได้', body: e.message }));
-  const downloadItemTemplate = () => apiDownload('/master/item-template', 'item-template.xlsx')
-    .catch((e) => onAlert({ title: 'ดาวน์โหลดแม่แบบไม่ได้', body: e.message }));
 
   // ลากไฟล์พลาดนอกการ์ด เบราว์เซอร์จะเปิดไฟล์แทนหน้าเว็บ (ฟอร์มที่กรอกค้างหาย) — กันไว้ทั้งหน้าตอนอยู่แท็บนี้
   useEffect(() => {
@@ -822,11 +824,57 @@ const ModelsTab = ({
   }, [checkpoints, orderOverride]);
   const filterTabs = [
     { key: 'all', label: 'ทั้งหมด', rows: ordered },
-    { key: String(ROUTINE_CATEGORY_ID), label: 'ตรวจตามรอบ', rows: pointsForCategory(ordered, ROUTINE_CATEGORY_ID) },
+    { key: String(ROUTINE_CATEGORY_ID), label: 'Regular time', rows: pointsForCategory(ordered, ROUTINE_CATEGORY_ID) },
     ...categories.map((c) => ({ key: String(c.id), label: c.name, rows: pointsForCategory(ordered, c.id) })),
   ];
   const shownRows = (filterTabs.find((t) => t.key === catFilter) ?? filterTabs[0]).rows;
   const canReorder = catFilter === 'all' && ordered.length > 1;
+
+  // ── ติ๊กเลือกหลายจุด → เปิด/ปิดใช้งาน/ลบ ทีเดียว (POST /master/models/:id/checkpoints/batch) ──
+  // เลือกค้างเฉพาะจุดที่ยังอยู่ · เปลี่ยน item = ล้าง · "เลือกทั้งหมด" = แถวที่เห็นตามตัวกรองหมวด
+  const [picked, setPicked] = useState(() => new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  useEffect(() => { setPicked(new Set()); }, [selectedModel]);
+  useEffect(() => {
+    setPicked((prev) => {
+      const alive = new Set(checkpoints.map((c) => c.id));
+      const next = new Set([...prev].filter((id) => alive.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [checkpoints]);
+  const pickedRows = shownRows.filter((c) => picked.has(c.id));
+  const allPicked = shownRows.length > 0 && pickedRows.length === shownRows.length;
+  const togglePick = (id) => setPicked((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleAll = () => setPicked(allPicked ? new Set() : new Set(shownRows.map((c) => c.id)));
+  const runBatch = async (action) => {
+    setBatchBusy(true);
+    try {
+      const r = await apiCall(`/master/models/${selectedModel}/checkpoints/batch`, {
+        method: 'POST', body: { ids: pickedRows.map((c) => c.id), action },
+      });
+      const verb = { activate: 'เปิดใช้งาน', deactivate: 'ปิดใช้งาน', delete: 'ลบ' }[action];
+      setPicked(new Set(r.skipped.map((x) => x.id)));
+      await onBatchDone(
+        `${verb}แล้ว ${r.changed} จุด` + (r.skipped.length
+          ? ` — ข้าม ${r.skipped.length} จุดที่มีผลตรวจแล้ว (${r.skipped.slice(0, 5).map((x) => x.name).join(', ')}${r.skipped.length > 5 ? '…' : ''}) ใช้ "ปิดใช้งาน" แทน หรือกด "ลบ" ทีละจุด`
+          : ''),
+        r.skipped.length ? 'warning' : 'success'
+      );
+    } catch (e) {
+      onAlert({ title: 'ทำรายการไม่ได้', body: e.message });
+    } finally { setBatchBusy(false); }
+  };
+  const batchDelete = () => onConfirm({
+    title: `ลบจุดตรวจ ${pickedRows.length} จุด ?`,
+    body: `${pickedRows.slice(0, 10).map((c) => c.name).join(', ')}${pickedRows.length > 10 ? ` … และอีก ${pickedRows.length - 10} จุด` : ''}\n\n`
+      + 'ลบถาวร กู้คืนไม่ได้ · จุดที่มีผลตรวจแล้วจะถูกข้าม (ไม่ลบใบตรวจ)',
+    confirmLabel: 'ลบถาวร',
+    onConfirm: () => runBatch('delete'),
+  });
 
   const dropOnRow = (target, after) => {
     const from = dragId;
@@ -1070,25 +1118,30 @@ const ModelsTab = ({
           {itemDrop && <div className="cp-card__drop" aria-hidden="true">วางไฟล์ Excel ที่นี่ เพื่อนำเข้า item</div>}
           <Card.Header className="d-flex align-items-center gap-2">
             <span>Item</span>
+            {/* เมนูเดียวของการ์ด Item: เพิ่มเอง / จาก Excel (ใบ SET UP = สร้าง item + จุดตรวจ · ไฟล์ item หลายตัว) / ดาวน์โหลด */}
             <Dropdown align="end" className="ms-auto">
-              <Dropdown.Toggle size="sm" variant="outline-primary">Excel</Dropdown.Toggle>
+              <Dropdown.Toggle size="sm">+ เพิ่ม Item</Dropdown.Toggle>
               <Dropdown.Menu>
+                <Dropdown.Item onClick={openAddModel}>กรอกเอง</Dropdown.Item>
                 <Dropdown.Item onClick={() => itemFileRef.current?.click()}>
-                  นำเข้า item จาก Excel <small className="d-block text-muted">item + จุดตรวจ · ลากไฟล์มาวางที่การ์ดนี้ก็ได้</small>
+                  จากไฟล์ Excel <small className="d-block text-muted">ใบ SET UP หรือไฟล์ item · ลากมาวางที่การ์ดนี้ก็ได้</small>
                 </Dropdown.Item>
-                <Dropdown.Divider />
-                <Dropdown.Item onClick={() => downloadItems(visibleModels.map((m) => m.id))} disabled={visibleModels.length === 0}>
-                  ดาวน์โหลด item (แก้ใน Excel)
-                  <small className="d-block text-muted">
-                    {modelQuery.trim() ? `${visibleModels.length} item ตามที่ค้นหา` : `ทั้งหมด ${visibleModels.length} item`} พร้อมจุดตรวจ
-                  </small>
+              </Dropdown.Menu>
+            </Dropdown>
+            <Dropdown align="end">
+              <Dropdown.Toggle size="sm" variant="outline-primary" disabled={visibleModels.length === 0}
+                title={`${visibleModels.length} item${modelQuery.trim() ? ' ตามที่ค้นหา' : ''}`}>ดาวน์โหลด</Dropdown.Toggle>
+              <Dropdown.Menu>
+                <Dropdown.Item onClick={() => downloadSetupSheets(visibleModels.map((m) => m.id))}>
+                  ใบ SET UP <small className="d-block text-muted">ชีตละ item · หน้าตาแบบใบจริง</small>
                 </Dropdown.Item>
-                <Dropdown.Item onClick={downloadItemTemplate}>ดาวน์โหลดแม่แบบ item เปล่า (.xlsx)</Dropdown.Item>
+                <Dropdown.Item onClick={() => downloadItems(visibleModels.map((m) => m.id))}>
+                  ตาราง Excel <small className="d-block text-muted">แก้หลาย item แล้วนำเข้ากลับ</small>
+                </Dropdown.Item>
               </Dropdown.Menu>
             </Dropdown>
             <input ref={itemFileRef} type="file" accept=".xlsx" hidden
               onChange={(e) => { if (e.target.files?.[0]) setItemFile(e.target.files[0]); e.target.value = ''; }} />
-            <Button size="sm" onClick={openAddModel}>+ เพิ่ม Item</Button>
           </Card.Header>
           <Card.Body>
             {/* ลิสต์ item ยาวเป็นร้อยแถว เลื่อนหาช้ากว่าพิมพ์ — ค้นได้ทั้งเลข item ชื่อ และ division */}
@@ -1167,26 +1220,27 @@ const ModelsTab = ({
                 : <span className="small text-muted fw-normal">— เลือก item ทางซ้ายก่อน</span>}
             </span>
             <div className="ms-auto d-flex gap-2">
-              <Button size="sm" disabled={!selectedModel} onClick={openAddCp}>+ เพิ่มจุดตรวจ</Button>
+              {/* สองเมนู: เพิ่ม (ทีละจุด / หลายจุด / ไฟล์ / คัดลอก) กับ ดาวน์โหลด (ตาราง Excel / ใบ SET UP) */}
               <Dropdown align="end">
-                <Dropdown.Toggle size="sm" variant="outline-primary" disabled={!selectedModel || importBusy}>
-                  {importBusy && <Spinner size="sm" className="me-1" />}เพิ่มหลายจุด
+                <Dropdown.Toggle size="sm" disabled={!selectedModel || importBusy}>
+                  {importBusy && <Spinner size="sm" className="me-1" />}+ เพิ่มจุดตรวจ
                 </Dropdown.Toggle>
                 <Dropdown.Menu>
-                  <Dropdown.Item onClick={() => openBulk()}>
-                    วางจาก Excel <small className="d-block text-muted">ก๊อปหลายแถวแล้วกด Ctrl+V ในตาราง</small>
-                  </Dropdown.Item>
+                  <Dropdown.Item onClick={openAddCp}>ทีละจุด</Dropdown.Item>
+                  <Dropdown.Item onClick={() => openBulk()}>หลายจุด (วางจาก Excel)</Dropdown.Item>
                   <Dropdown.Item onClick={() => fileRef.current?.click()}>
-                    นำเข้าไฟล์ Excel <small className="d-block text-muted">ใบ SET UP หรือไฟล์แม่แบบ · ลากไฟล์มาวางที่การ์ดนี้ก็ได้</small>
+                    จากไฟล์ Excel <small className="d-block text-muted">ใบ SET UP หรือไฟล์ที่ดาวน์โหลดไป · ลากมาวางก็ได้</small>
                   </Dropdown.Item>
-                  <Dropdown.Item onClick={() => setCopyShow(true)}>
-                    คัดลอกจาก item อื่น <small className="d-block text-muted">ดึงจุดตรวจที่ตั้งไว้แล้วมาแก้ต่อ</small>
-                  </Dropdown.Item>
-                  <Dropdown.Divider />
-                  <Dropdown.Item onClick={downloadCurrent} disabled={checkpoints.every((c) => !c.is_active)}>
-                    ดาวน์โหลดจุดตรวจ (แก้ใน Excel) <small className="d-block text-muted">แก้แล้วลากไฟล์กลับมา = อัปเดตจุดเดิมตามชื่อ</small>
-                  </Dropdown.Item>
-                  <Dropdown.Item onClick={downloadTemplate}>ดาวน์โหลดแม่แบบเปล่า (.xlsx)</Dropdown.Item>
+                  <Dropdown.Item onClick={() => setCopyShow(true)}>คัดลอกจาก item อื่น</Dropdown.Item>
+                </Dropdown.Menu>
+              </Dropdown>
+              <Dropdown align="end">
+                <Dropdown.Toggle size="sm" variant="outline-primary" disabled={!selectedModel || checkpoints.every((c) => !c.is_active)}>
+                  ดาวน์โหลด
+                </Dropdown.Toggle>
+                <Dropdown.Menu>
+                  <Dropdown.Item onClick={downloadSetupSheet}>ใบ SET UP <small className="d-block text-muted">หน้าตาแบบใบจริง พิมพ์ใช้ได้</small></Dropdown.Item>
+                  <Dropdown.Item onClick={downloadCurrent}>ตาราง Excel <small className="d-block text-muted">แก้หลายจุดแล้วนำเข้ากลับ</small></Dropdown.Item>
                 </Dropdown.Menu>
               </Dropdown>
               <input ref={fileRef} type="file" accept=".xlsx" hidden
@@ -1209,11 +1263,23 @@ const ModelsTab = ({
             )}
             {/* ⚠️ ไม่มีเรียงตามคอลัมน์/แบ่งหน้าโดยตั้งใจ — ลำดับแถว = seq_no ของใบตรวจ (ลากเรียง / ▲▼ ย้ายตามลำดับนี้)
                 กรองตามหมวดได้ แต่ระหว่างกรองปิดการย้ายลำดับ · ตรึงหัว + คอลัมน์ลำดับ/จัดการ */}
+            {pickedRows.length > 0 && (
+              <div className="cp-batch mb-2 d-flex flex-wrap align-items-center gap-2">
+                <span className="fw-semibold">เลือก {pickedRows.length} จุด</span>
+                <Button size="sm" variant="outline-primary" disabled={batchBusy} onClick={() => runBatch('activate')}>เปิดใช้งาน</Button>
+                <Button size="sm" variant="outline-primary" disabled={batchBusy} onClick={() => runBatch('deactivate')}>ปิดใช้งาน</Button>
+                <Button size="sm" variant="danger" disabled={batchBusy} onClick={batchDelete}>ลบ</Button>
+                <Button size="sm" variant="link" disabled={batchBusy} onClick={() => setPicked(new Set())}>ยกเลิกการเลือก</Button>
+              </div>
+            )}
             <div className="mc-freeze">
             <Table striped bordered hover size="sm" className="mb-0">
               <thead>
                 <tr>
-                  <th className="mc-sticky-start" style={{ width: 70 }}>ลำดับ</th><th>จุดตรวจ</th><th>ชนิด</th>
+                  <th className="mc-sticky-start text-nowrap" style={{ width: 96 }}>
+                    <Form.Check inline className="me-1" aria-label="เลือกทุกจุดที่แสดง" disabled={shownRows.length === 0}
+                      checked={allPicked} onChange={toggleAll} />
+                    ลำดับ</th><th>จุดตรวจ</th><th>ชนิด</th>
                   <th>LSL ~ USL</th><th>n / ความถี่</th><th>Control limit</th>
                   <th>หมวดการตรวจ</th><th className="mc-sticky-end" style={{ width: 320 }}>จัดการ</th>
                 </tr>
@@ -1251,6 +1317,8 @@ const ModelsTab = ({
                       }}
                     >
                       <td className="mc-sticky-start text-nowrap">
+                        <Form.Check inline className="me-1" aria-label={`เลือก ${cp.name}`}
+                          checked={picked.has(cp.id)} onChange={() => togglePick(cp.id)} />
                         {/* ด้ามลาก (เมาส์) · ▲▼ ยังอยู่สำหรับคีย์บอร์ด/จอสัมผัส (HTML5 drag ไม่ทำงานบนจอสัมผัส) */}
                         {canReorder && (
                           <span
@@ -1314,7 +1382,7 @@ const ModelsTab = ({
                       <td className="small text-nowrap">
                         {/* สรุปอ่านอย่างเดียว — แก้ที่ "ตารางหมวดการตรวจ" ใต้การ์ดนี้ */}
                         <div className={Number(cp.in_routine ?? 1) ? '' : 'text-muted'}>
-                          ตามรอบ: {Number(cp.in_routine ?? 1) ? `${cp.char_type === 'attribute' ? 1 : cp.sample_size} / ${freqShort(cp.frequency)}` : 'ไม่ตรวจ'}
+                          Regular time: {Number(cp.in_routine ?? 1) ? `${cp.char_type === 'attribute' ? 1 : cp.sample_size} / ${freqShort(cp.frequency)}` : 'ไม่ตรวจ'}
                         </div>
                         {categories.map((c) => {
                           const pd = cp.category_settings?.find((x) => x.category_id === c.id && x.stage === 'pd');
@@ -1637,7 +1705,7 @@ const ModelsTab = ({
           )}
           <div className="cp-cats">
             <div className="cp-cats__row">
-              <Form.Check id="cp-in-routine" className="cp-cats__name" label="ตรวจตามรอบ (Inspection Record)"
+              <Form.Check id="cp-in-routine" className="cp-cats__name" label="Regular time (Inspection Record)"
                 checked={Boolean(cpForm.in_routine)} disabled={!selectedModel}
                 onChange={(e) => setCpForm((f) => ({ ...f, in_routine: e.target.checked }))} />
               <Form.Group controlId="cp-sample-size" className="cp-cats__field">

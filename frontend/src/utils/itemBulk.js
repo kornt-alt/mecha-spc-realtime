@@ -9,7 +9,7 @@
 //    (item เลขเดียวกันมีได้ทั้ง Mecha 1 และ Mecha 2 — กฎเดียวกับ resolveMoItem)
 // ⚠️ ไม่สร้าง Division / ลูกค้าให้เอง — ชื่อไม่ตรง = แถวแดง
 // จุดตรวจ: ใช้ tableToDrafts + validateAll ของ checkpointBulk.js ตัวเดิม (upsert ตามชื่อ)
-import { gridColumns, tableToDrafts, validateAll, draftToPayload } from './checkpointBulk';
+import { gridColumns, tableToDrafts, validateAll, draftToPayload, draftFromParsed } from './checkpointBulk';
 
 const normH = (s) => String(s ?? '').toLowerCase().replace(/[()]/g, ' ').replace(/[\s_]+/g, ' ').trim();
 const keyOf = (divisionId, itemNo) => `${divisionId}|${String(itemNo ?? '').trim().toLowerCase()}`;
@@ -196,6 +196,38 @@ export const parseItemTables = (tables, ctx) => {
   return { entries, pointRows, fileErrors, unknownHeaders };
 };
 
+// ใบ SET UP ใบเดียว (res.format === 'setup') → parsed รูปเดียวกับ parseItemTables (item เดียว)
+// divisionId = ที่คนเลือกในกล่อง ('' = ยังไม่เลือก) · setupDivisionGuess() = ค่าเริ่ม (Item No นี้มีอยู่ Division เดียว)
+// item ที่มีอยู่แล้ว: เติมเฉพาะ drawing ที่ใบมี (ชื่อ item เดิมไม่ทับด้วย Part Name ของใบ) · item ใหม่: ชื่อ = Part Name
+export const setupDivisionGuess = (res, models = []) => {
+  const k = String(res.itemNo ?? '').trim().toLowerCase();
+  const ids = new Set(models.filter((m) => String(m.item_no).trim().toLowerCase() === k).map((m) => m.division_id));
+  return ids.size === 1 ? String([...ids][0]) : '';
+};
+export const parseSetupImport = (res, ctx, divisionId) => {
+  const { divisions = [], models = [] } = ctx;
+  const itemNo = String(res.itemNo ?? '').trim();
+  const division = divisions.find((d) => String(d.id) === String(divisionId)) ?? null;
+  const key = division ? keyOf(division.id, itemNo) : 'setup';
+  const match = division ? models.find((m) => keyOf(m.division_id, m.item_no) === key) ?? null : null;
+  const h = res.header ?? {};
+  const fields = {};
+  if (!match && h.item_name) fields.item_name = h.item_name.slice(0, 150);
+  if (h.drawing_no) fields.drawing_no = h.drawing_no.slice(0, 100);
+  if (h.drawing_rev) fields.drawing_rev = h.drawing_rev.slice(0, 20);
+  const errors = [];
+  if (!itemNo) errors.push('ใบนี้ไม่มี Item No (ช่อง H8)');
+  if (!division) errors.push('เลือก Division ของ item นี้ก่อน');
+  const rowErrors = res.errors ?? [];
+  const drafts = (res.points ?? []).map((p) => ({
+    ...draftFromParsed(p, rowErrors.filter((e) => e.row === p.row)), sheetRow: p.row,
+  }));
+  return {
+    entries: [{ key, sheetRow: null, division, item_no: itemNo, fields, provided: Object.keys(fields), errors, match, fromItems: true, drafts }],
+    pointRows: [], fileErrors: [], unknownHeaders: [],
+  };
+};
+
 // id ของ item เดิมที่ต้องโหลดจุดตรวจมาเทียบ (เฉพาะที่มีแถวจุดตรวจ)
 export const modelIdsNeedingPoints = (parsed) => parsed.entries.filter((e) => e.match && e.drafts.length).map((e) => e.match.id);
 
@@ -263,7 +295,7 @@ export const buildItemPlan = (parsed, { existingPoints = new Map(), catLabels = 
 
 // plan → body ของ POST /master/items/bulk (เฉพาะ item ที่มีอะไรเปลี่ยน · จุดตรวจเฉพาะที่เพิ่ม/แก้)
 export const planPayload = (plan) => ({
-  items: plan.entries.filter((e) => e.willSend).map((e) => ({
+  items: plan.entries.filter((e) => e.willSend && e.division).map((e) => ({
     division_id: e.division.id,
     item_no: e.item_no,
     data: e.view,

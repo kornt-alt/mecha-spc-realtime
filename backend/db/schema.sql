@@ -468,7 +468,7 @@ CREATE TABLE IF NOT EXISTS check_categories (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT IGNORE INTO check_categories (id, code, name, has_workflow, sort_order) VALUES
-  (1, 'routine',    'ตรวจตามรอบ',  0, 1),
+  (1, 'routine',    'Regular time', 0, 1),
   (2, 'setup',      'Set up',      1, 2),
   (3, 'last_piece', 'Last Piece',  1, 3);
 

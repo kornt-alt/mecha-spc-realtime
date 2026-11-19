@@ -57,7 +57,7 @@ const App = () => (
           <Route path="/" element={<CategoryHome />} />
           {/* ทุกหน้ากั้นตามสิทธิ์เมนูที่ ADMIN ตั้ง (Master › ผู้ใช้ & สิทธิ์) — เมนูที่เปิดให้คนไม่ login ผ่านเลย
               ค่าเริ่มต้น: ใบตรวจ/Dashboard/SC/รายงาน ไม่ต้อง login · Set up = PD/QC/ADMIN · Master = ADMIN */}
-          <Route path="/inspect" element={<RequireLogin menu={MENU.inspect} title="เข้าสู่ระบบ — ใบตรวจตามรอบ"><InspectionSheet /></RequireLogin>} />
+          <Route path="/inspect" element={<RequireLogin menu={MENU.inspect} title="เข้าสู่ระบบ — ใบตรวจ Regular time"><InspectionSheet /></RequireLogin>} />
           <Route path="/dashboard" element={<RequireLogin menu={MENU.dashboard} title="เข้าสู่ระบบ — Dashboard"><Dashboard /></RequireLogin>} />
           <Route path="/sc" element={<RequireLogin menu={MENU.sc} title="เข้าสู่ระบบ — SC Chart"><ScSheet /></RequireLogin>} />
           <Route path="/report" element={<RequireLogin menu={MENU.report} title="เข้าสู่ระบบ — รายงาน"><ReportPage /></RequireLogin>} />

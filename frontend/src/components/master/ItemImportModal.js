@@ -4,10 +4,12 @@
 // ⚠️ โหลด lookups/models แบบ all=1 เอง — item/ลูกค้าที่ปิดใช้งานต้องจับคู่ได้ (ไฟล์ที่ export ออกไปมีของที่ปิดด้วย)
 // ⚠️ animation={false} + backdrop="static" ตามกฎกล่องของทั้งแอป · ข้อความใช้ .form-note ไม่ใช่ <Alert>
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, Button, Spinner } from 'react-bootstrap';
+import { Modal, Button, Spinner, Form } from 'react-bootstrap';
 import { apiCall, apiUpload } from '../../utils/api';
 import { categoryColumns } from '../../utils/checkpointBulk';
-import { parseItemTables, modelIdsNeedingPoints, buildItemPlan, planPayload } from '../../utils/itemBulk';
+import {
+  parseItemTables, parseSetupImport, setupDivisionGuess, modelIdsNeedingPoints, buildItemPlan, planPayload,
+} from '../../utils/itemBulk';
 
 const CHUNK = 300;
 
@@ -17,11 +19,14 @@ const ItemImportModal = ({ file, onHide, onDone }) => {
   const [err, setErr] = useState('');
   const [plan, setPlan] = useState(null);
   const [open, setOpen] = useState(() => new Set());
+  // ไฟล์ที่อ่านแล้ว + master ตอนนั้น · ใบ SET UP ต้องรู้ Division (เลือกในกล่อง) → คิดแผนใหม่ทุกครั้งที่เปลี่ยน
+  const [src, setSrc] = useState(null);
+  const [divisionId, setDivisionId] = useState('');
 
   useEffect(() => {
     if (!file) return undefined;
     let cancelled = false;
-    setPlan(null); setErr(''); setOpen(new Set()); setLoading(true);
+    setPlan(null); setSrc(null); setErr(''); setOpen(new Set()); setLoading(true);
     (async () => {
       try {
         const [tables, lookups, models] = await Promise.all([
@@ -29,8 +34,27 @@ const ItemImportModal = ({ file, onHide, onDone }) => {
           apiCall('/master/lookups?all=1'),
           apiCall('/master/models?all=1'),
         ]);
+        if (cancelled) return;
+        if (tables.format === 'setup') setDivisionId(setupDivisionGuess(tables, models));
+        setSrc({ tables, lookups, models });
+      } catch (e) {
+        if (!cancelled) { setErr(e.message); setLoading(false); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [file]);
+
+  const isSetup = src?.tables.format === 'setup';
+  useEffect(() => {
+    if (!src) return undefined;
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const { tables, lookups, models } = src;
         const categories = lookups.categories ?? [];
-        const parsed = parseItemTables(tables, { divisions: lookups.divisions, customers: lookups.customers, models, categories });
+        const ctx = { divisions: lookups.divisions, customers: lookups.customers, models, categories };
+        const parsed = tables.format === 'setup' ? parseSetupImport(tables, ctx, divisionId) : parseItemTables(tables, ctx);
         const ids = modelIdsNeedingPoints(parsed);
         const existingPoints = new Map();
         for (let i = 0; i < ids.length; i += CHUNK) {
@@ -49,7 +73,7 @@ const ItemImportModal = ({ file, onHide, onDone }) => {
       }
     })();
     return () => { cancelled = true; };
-  }, [file]);
+  }, [src, divisionId]);
 
   const s = plan?.summary;
   const payload = useMemo(() => (plan ? planPayload(plan) : { items: [] }), [plan]);
@@ -83,6 +107,18 @@ const ItemImportModal = ({ file, onHide, onDone }) => {
       </Modal.Header>
       <Modal.Body>
         {loading && <div className="text-muted"><Spinner size="sm" className="me-2" />กำลังอ่านไฟล์…</div>}
+        {isSetup && (
+          <div className="d-flex flex-wrap align-items-center gap-2 mb-2">
+            <span>ใบ SET UP ของ item <b>{src.tables.itemNo}</b> — Division</span>
+            <Form.Select size="sm" style={{ width: 'auto' }} aria-label="Division ของ item" value={divisionId}
+              disabled={busy} onChange={(e) => setDivisionId(e.target.value)}>
+              <option value="">-- เลือก --</option>
+              {(src.lookups.divisions ?? [])
+                .filter((d) => Number(d.is_active ?? 1) === 1 || String(d.id) === divisionId)
+                .map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </Form.Select>
+          </div>
+        )}
         {plan && (
           <>
             <div className="form-note form-note--info mb-2">

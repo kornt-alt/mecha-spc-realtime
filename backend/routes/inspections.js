@@ -68,7 +68,7 @@ router.post('/', requireMenu('inspect'), wrap(async (req, res) => {
   const submittedById = new Map();
   for (const item of submitted) {
     const cp = byId.get(Number(item.checkpoint_id));
-    if (!cp) throw new AppError(`จุดตรวจ id=${item.checkpoint_id} ไม่ได้อยู่ในใบตรวจตามรอบของ item นี้ (หรือถูกปิดใช้งาน)`, 400);
+    if (!cp) throw new AppError(`จุดตรวจ id=${item.checkpoint_id} ไม่ได้อยู่ในใบตรวจ Regular timeของ item นี้ (หรือถูกปิดใช้งาน)`, 400);
     if (submittedById.has(cp.id)) throw new AppError(`ส่งจุดตรวจ "${cp.name}" ซ้ำ`, 400);
     submittedById.set(cp.id, item);
   }
@@ -92,7 +92,7 @@ router.post('/', requireMenu('inspect'), wrap(async (req, res) => {
     if (old.voided_at) throw new AppError(`ใบ #${old.id} ถูกยกเลิกไปแล้ว แก้ซ้ำไม่ได้`, 400);
     if (Number(old.model_id) !== Number(b.model_id)) throw new AppError('ใบเดิมเป็นคนละ item กับใบนี้', 400);
     // ใบ Set up / Last Piece แทนจากหน้าใบตรวจตามรอบไม่ได้ — ใบแทนจะกลายเป็นหมวดตรวจตามรอบ
-    if (Number(old.category_id) !== ROUTINE_CATEGORY) throw new AppError(`ใบ #${old.id} ไม่ใช่ใบตรวจตามรอบ แก้จากหน้านี้ไม่ได้`, 400);
+    if (Number(old.category_id) !== ROUTINE_CATEGORY) throw new AppError(`ใบ #${old.id} ไม่ใช่ใบตรวจ Regular time แก้จากหน้านี้ไม่ได้`, 400);
     replaced = {
       ...old,
       reason: replaceReason,

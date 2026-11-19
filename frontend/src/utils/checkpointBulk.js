@@ -34,7 +34,7 @@ export const BASE_COLUMNS = [
   { key: 'usl', label: 'USL', width: 80, kind: 'num', aliases: ['usl', 'max', 'สูงสุด', 'upper limit'] },
   { key: 'sample_size', label: 'ชิ้น/ครั้ง', width: 64, kind: 'qty', aliases: ['ชิ้น/ครั้ง', 'ชิ้น', 'n', 'sample', 'sample size', 'pcs'] },
   { key: 'frequency', label: 'ความถี่', width: 70, kind: 'freq', aliases: ['ความถี่', 'frequency', 'freq'] },
-  { key: 'in_routine', label: 'ตามรอบ', width: 60, kind: 'bool', aliases: ['ตรวจตามรอบ', 'ตามรอบ', 'routine', 'inspection record'] },
+  { key: 'in_routine', label: 'Regular', width: 64, kind: 'bool', aliases: ['regular time', 'regular', 'ตรวจตามรอบ', 'ตามรอบ', 'routine', 'inspection record'] },
   { key: 'is_critical', label: 'SC', width: 44, kind: 'bool', aliases: ['sc point', 'sc', 'critical', 'critical point', 'spc'] },
 ];
 // คอลัมน์ที่อ่านได้ตอนวาง/นำเข้า แต่ไม่มีในตาราง (แปลงเป็น LSL/Target/USL ให้)
@@ -272,7 +272,7 @@ export const mergeOnto = (base, d) => {
 const FIELD_LABEL = {
   name: 'ชื่อ', characteristic: 'Characteristic', char_type: 'ชนิด', unit: 'หน่วย', gauge: 'เครื่องมือวัด',
   lsl: 'LSL', target: 'Target', usl: 'USL', sample_size: 'ชิ้น/ครั้ง', frequency: 'ความถี่',
-  in_routine: 'ตามรอบ', is_critical: 'SC point',
+  in_routine: 'Regular time', is_critical: 'SC point',
 };
 const showVal = (k, v) => {
   if (v === null || v === undefined || v === '') return '—';

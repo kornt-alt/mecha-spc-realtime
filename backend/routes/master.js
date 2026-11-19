@@ -495,7 +495,7 @@ router.put('/models/:id/category-matrix', requireMenu('master.items'), wrap(asyn
     const inRoutine = p.in_routine ? 1 : 0;
     // attribute มีผลเดียวต่อใบเสมอ — n ของจุด attribute = 1
     const n = cp.char_type === 'attribute' ? 1 : Number(p.sample_size);
-    if (!Number.isInteger(n) || n < 1 || n > 10) throw new AppError(`จำนวนชิ้นตรวจตามรอบต้องเป็น 1-10${label}`, 400);
+    if (!Number.isInteger(n) || n < 1 || n > 10) throw new AppError(`จำนวนชิ้น Regular time ต้องเป็น 1-10${label}`, 400);
     const freq = p.frequency === 'day' ? 'day' : 'shift';
     updates.push({ id: cp.id, inRoutine, n, freq, nChanged: Number(cp.sample_size) !== n, name: cp.name });
     settings.push(...settingRows(cp.id, p.settings ?? [], catById, label));
@@ -668,7 +668,7 @@ router.put('/categories/:id', requireMenu('master.categories'), wrap(async (req,
   if (!cat) throw new AppError('ไม่พบหมวดนี้', 404);
   const f = categoryFields(req.body ?? {}, { isNew: false });
   if (id === ROUTINE_CATEGORY_ID) {
-    if (f.is_active === 0) throw new AppError('หมวดตรวจตามรอบปิดไม่ได้ (ใบตรวจ/กราฟ SPC ทั้งระบบใช้หมวดนี้)', 400);
+    if (f.is_active === 0) throw new AppError('หมวด Regular time ปิดไม่ได้ (ใบตรวจ/กราฟ SPC ทั้งระบบใช้หมวดนี้)', 400);
     delete f.flow; // ตรวจตามรอบไม่ใช่งานส่งต่อ PD → QC
   }
   const cols = Object.keys(f);
@@ -856,6 +856,38 @@ const upsertCheckpoints = async (conn, modelId, points, mode) => {
   }
 };
 
+// ทำกับจุดตรวจหลายจุดที่ติ๊กเลือก — body: { ids: [...], action: 'activate' | 'deactivate' | 'delete' }
+// ⚠️ delete ลบเฉพาะจุดที่ยังไม่มีผลตรวจ — จุดที่มีผลแล้ว "ข้าม" (คืนใน skipped) ไม่ลบใบตรวจตาม
+//    ลบพร้อมใบต้องทำทีละจุดผ่านกล่องลบ (DeleteMasterModal · ADMIN + พิมพ์ชื่อ) · ทั้งหมดใน transaction เดียว
+router.post('/models/:id/checkpoints/batch', requireMenu('master.items'), wrap(async (req, res) => {
+  if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const modelId = Number(req.params.id);
+  const ids = Array.isArray(req.body?.ids) ? [...new Set(req.body.ids.map(Number))] : [];
+  const action = req.body?.action;
+  if (!ids.length || ids.some((x) => !Number.isInteger(x))) throw new AppError('ids ต้องเป็น array ของ id จุดตรวจ', 400);
+  if (!['activate', 'deactivate', 'delete'].includes(action)) throw new AppError('action ต้องเป็น activate / deactivate / delete', 400);
+
+  const result = await withTransaction(async (conn) => {
+    const [rows] = await conn.query('SELECT id, name FROM checkpoints WHERE model_id = ? AND id IN (?) FOR UPDATE', [modelId, ids]);
+    if (rows.length !== ids.length) throw new AppError('มีจุดที่ไม่ใช่ของ item นี้ — โหลดหน้าใหม่แล้วลองอีกครั้ง', 409);
+    if (action !== 'delete') {
+      const [r] = await conn.query('UPDATE checkpoints SET is_active = ? WHERE id IN (?)', [action === 'activate' ? 1 : 0, ids]);
+      return { changed: r.affectedRows, skipped: [] };
+    }
+    const [used] = await conn.query('SELECT DISTINCT checkpoint_id FROM inspection_results WHERE checkpoint_id IN (?)', [ids]);
+    const usedIds = new Set(used.map((u) => u.checkpoint_id));
+    const free = ids.filter((x) => !usedIds.has(x));
+    if (free.length) {
+      await conn.query('DELETE FROM checkpoint_baselines WHERE checkpoint_id IN (?)', [free]);
+      await conn.query('DELETE FROM checkpoints WHERE id IN (?)', [free]);
+    }
+    return { changed: free.length, skipped: rows.filter((r) => usedIds.has(r.id)) };
+  });
+  logWrite(req, `${action} จุดตรวจ ${result.changed} จุด (ข้าม ${result.skipped.length}) ของ`, 'models', modelId);
+  notifyMasterChanged(req);
+  res.json({ success: true, action, ...result });
+}));
+
 // เรียงจุดตรวจทั้ง item ใหม่ (ลากเรียงในหน้า Master) — body: { ids: [ลำดับใหม่ ครบทุกจุดของ item] }
 // ⚠️ UNIQUE(model_id, seq_no) — ย้ายไปเลขติดลบชั่วคราวก่อนแล้วค่อยเขียน 1..n (หลักเดียวกับ /checkpoints/:id/move)
 router.put('/models/:id/checkpoints/order', requireMenu('master.items'), wrap(async (req, res) => {
@@ -960,12 +992,71 @@ router.get('/models/:id/checkpoints/export', requireMenu('master.items'), wrap(a
   res.end();
 }));
 
+// จุดตรวจของ item เป็นใบ "SET UP & LAST PIECE INSPECTION RECORD" (หน้าตาแบบใบจริง — services/setupSheetExport.js)
+// จำนวนชิ้น = ที่ตั้งไว้ของหมวด Set up (PD / QC) · ไม่ได้ตั้ง = sample_size · ลากกลับมาที่การ์ดจุดตรวจได้ (ตัวอ่านใบ SET UP เดิม)
+// จุดตรวจที่เปิดใช้งาน + จำนวนชิ้นของหมวด Set up (PD/QC) ของหลาย item → Map(model_id → points)
+const loadSetupPoints = async (modelIds) => {
+  const out = new Map(modelIds.map((id) => [id, []]));
+  if (!modelIds.length) return out;
+  const [points] = await query(
+    `SELECT id, model_id, name, characteristic, char_type, unit, gauge, lsl, target, usl, sample_size, is_critical
+       FROM checkpoints WHERE model_id IN (?) AND is_active = 1 ORDER BY model_id, seq_no`, [modelIds]
+  );
+  const [settings] = points.length
+    ? await query(
+      `SELECT s.checkpoint_id, s.stage, s.sample_qty FROM checkpoint_category_settings s
+         JOIN check_categories c ON c.id = s.category_id
+        WHERE c.code = 'setup' AND s.checkpoint_id IN (?)`, [points.map((p) => p.id)]
+    )
+    : [[]];
+  const qty = new Map(settings.map((s) => [`${s.checkpoint_id}:${s.stage}`, s.sample_qty]));
+  for (const p of points) {
+    p.qty = qty.get(`${p.id}:pd`) ?? null;
+    p.qcQty = qty.get(`${p.id}:qc`) ?? null;
+    out.get(p.model_id).push(p);
+  }
+  return out;
+};
+const safeFile = (v) => String(v || 'item').replace(/[^\w.-]+/g, '_');
+const sendXlsx = async (res, wb, fname) => {
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${fname}"; filename*=UTF-8''${encodeURIComponent(fname)}`);
+  await wb.xlsx.write(res);
+  res.end();
+};
+
+router.get('/models/:id/setup-sheet', requireMenu('master.items'), wrap(async (req, res) => {
+  if (!isIntLike(req.params.id)) throw new AppError('id ไม่ถูกต้อง', 400);
+  const modelId = Number(req.params.id);
+  const [[model]] = await query('SELECT id, item_no, item_name, drawing_no, drawing_rev FROM models WHERE id = ?', [modelId]);
+  if (!model) throw new AppError('ไม่พบ item นี้', 404);
+  const { buildSetupSheet } = require('../services/setupSheetExport');
+  const wb = buildSetupSheet(model, (await loadSetupPoints([modelId])).get(modelId));
+  await sendXlsx(res, wb, `${safeFile(model.item_no)}-SET-UP.xlsx`);
+}));
+
+// ใบ SET UP ของหลาย item ในไฟล์เดียว (ชีตละ item) — body: { ids: [model id ที่เห็นในลิสต์] } · ข้าม item ที่ไม่มีจุดตรวจ
+router.post('/setup-sheets', requireMenu('master.items'), wrap(async (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? [...new Set(req.body.ids.map(Number))].filter(Number.isInteger) : [];
+  if (!ids.length) throw new AppError('ไม่มี item ให้ดาวน์โหลด', 400);
+  if (ids.length > 200) throw new AppError('ดาวน์โหลดใบ SET UP ได้ครั้งละไม่เกิน 200 item — ค้นหาให้แคบลงก่อน', 400);
+  const [models] = await query(
+    'SELECT id, item_no, item_name, drawing_no, drawing_rev FROM models WHERE id IN (?) ORDER BY item_no', [ids]
+  );
+  const pts = await loadSetupPoints(models.map((m) => m.id));
+  const list = models.map((model) => ({ model, points: pts.get(model.id) })).filter((x) => x.points.length);
+  if (!list.length) throw new AppError('item ที่เลือกยังไม่มีจุดตรวจ', 400);
+  const { buildSetupWorkbook } = require('../services/setupSheetExport');
+  const stampNow = new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10).replace(/-/g, '');
+  await sendXlsx(res, buildSetupWorkbook(list), list.length === 1 ? `${safeFile(list[0].model.item_no)}-SET-UP.xlsx` : `SET-UP-${list.length}items-${stampNow}.xlsx`);
+}));
+
 // ── ดาวน์โหลด master / นำเข้า item หลายตัว (services/masterExport.js) ─────────────────────────────
 // ไฟล์ item = ชีต ITEMS + ITEM_CHECKPOINTS · ไฟล์ master รวม = Division/เครื่อง/ผู้ตรวจ/ลูกค้า + ไฟล์ item
 // ⚠️ ไฟล์ที่โหลดออกไปลากกลับมานำเข้า item ได้ (ชีตอื่นไม่สนใจ) — หน้าเว็บแมป/ตรวจ/merge เอง (utils/itemBulk.js)
 //    server รับค่าเต็มที่ merge แล้ว (หลักเดียวกับ checkpoints/bulk)
 const { buildMasterWorkbook, buildItemTemplate, ITEM_SHEET, ITEM_POINT_SHEET } = require('../services/masterExport');
-const { sheetToTable, loadWorkbook } = require('../services/checkpointImport');
+const { sheetToTable, loadWorkbook, looksLikeSetup, parseSetupSheet } = require('../services/checkpointImport');
 
 const EXPORT_TABLES = ['divisions', 'machines', 'inspectors', 'customers', 'models'];
 const ITEM_PARSE_ROWS = 20000;
@@ -1093,8 +1184,26 @@ router.post(
     if (!wb || wb.worksheets.length === 0) throw new AppError('เปิดไฟล์ไม่ได้ — ต้องเป็นไฟล์ Excel .xlsx', 400);
     const find = (name) => wb.worksheets.find((w) => w.name.trim().toUpperCase() === name);
     const wsItems = find(ITEM_SHEET);
+    // ใบ SET UP ใบเดียว = item เดียว + จุดตรวจ (หัวใบให้ Item No / ชื่อ / Drawing) — หน้าเว็บถาม Division ถ้ายังไม่มี item นี้
+    if (!wsItems && looksLikeSetup(wb.worksheets[0])) {
+      const r = parseSetupSheet(wb.worksheets[0]);
+      const [[setup]] = await query("SELECT id FROM check_categories WHERE code = 'setup'");
+      return res.json({
+        format: 'setup',
+        itemNo: r.itemNo,
+        header: r.header,
+        errors: r.errors,
+        points: r.points.map(({ qty, ...p }) => ({
+          ...p,
+          settings: setup && qty ? [
+            { category_id: setup.id, stage: 'pd', sample_qty: qty },
+            { category_id: setup.id, stage: 'qc', sample_qty: qty },
+          ] : [],
+        })),
+      });
+    }
     if (!wsItems) {
-      throw new AppError('ไม่พบชีต ITEMS — ใช้ไฟล์จาก "ดาวน์โหลดแม่แบบ item" หรือ "ดาวน์โหลด item" · ไฟล์จุดตรวจของ item เดียวให้นำเข้าที่การ์ดจุดตรวจ', 400);
+      throw new AppError('ไฟล์นี้ไม่ใช่ใบ SET UP และไม่มีชีต ITEMS — ใช้ใบ SET UP หรือไฟล์จาก "ดาวน์โหลด item" · ไฟล์จุดตรวจของ item เดียวให้นำเข้าที่การ์ดจุดตรวจ', 400);
     }
     const wsPoints = find(ITEM_POINT_SHEET);
     // ⚠️ ไฟล์ทั้งระบบ (ดาวน์โหลด Master) มีจุดตรวจเป็นพันแถว — อ่านได้ถึง ITEM_PARSE_ROWS · เกิน = ปฏิเสธ ไม่ตัดเงียบ ๆ

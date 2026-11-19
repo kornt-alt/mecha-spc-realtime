@@ -32,7 +32,7 @@ const FLOW_TEXT = {
 const VIEW = {
   routine: {
     title: 'Inspection Record',
-    sub: 'ตรวจตามรอบ',
+    sub: 'Regular time',
     desc: 'สแกน MO แล้วกรอกค่าวัดตามจุดที่ถึงรอบ ผลขึ้นกราฟ SPC ทันที',
     icon: 'clipboard',
   },
@@ -51,7 +51,7 @@ const VIEW = {
 };
 
 const FALLBACK = [
-  { id: 1, code: 'routine', name: 'ตรวจตามรอบ', has_workflow: 0 },
+  { id: 1, code: 'routine', name: 'Regular time', has_workflow: 0 },
   { id: 2, code: 'setup', name: 'Set up', has_workflow: 1 },
   { id: 3, code: 'last_piece', name: 'Last Piece', has_workflow: 1 },
 ];

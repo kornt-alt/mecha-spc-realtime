@@ -49,7 +49,7 @@ const filterFrom = (q) => ({
 // ⚠️ baseline ล็อกได้เฉพาะหมวดตรวจตามรอบ — ข้อมูล Set up ห้ามกลายเป็นเส้น control limit ของงานจริง
 const assertRoutine = (f) => {
   if (f.category_id && Number(f.category_id) !== 1) {
-    throw new AppError('ล็อก baseline ได้เฉพาะข้อมูลตรวจตามรอบ', 400);
+    throw new AppError('ล็อก baseline ได้เฉพาะข้อมูล Regular time', 400);
   }
 };
 

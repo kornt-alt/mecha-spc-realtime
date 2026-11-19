@@ -99,7 +99,7 @@ const CategoriesTab = ({ showForm, say, fail }) => {
                     <b>{c.name}</b> <span className="small text-muted">({c.code})</span>
                   </td>
                   <td className="small">{c.description || <span className="text-muted">—</span>}</td>
-                  <td className="small">{c.id === ROUTINE ? 'ใบตรวจตามรอบ (ไม่ต้อง login)' : flowLabel(c.flow)}</td>
+                  <td className="small">{c.id === ROUTINE ? 'ใบตรวจ Regular time (ไม่ต้อง login)' : flowLabel(c.flow)}</td>
                   <td className="text-center num">{c.id === ROUTINE ? '—' : c.job_count}</td>
                   <td>{Number(c.is_active) ? <Badge bg="success">ใช้งาน</Badge> : <Badge bg="secondary">ปิด</Badge>}</td>
                   <td className="mc-sticky-end text-nowrap">

@@ -15,7 +15,7 @@ const ROLES = ['GUEST', 'ADMIN', 'PD', 'QC'];
 
 const ALL = ['GUEST', 'ADMIN', 'PD', 'QC'];
 const MENUS = [
-  { key: 'inspect', label: 'Inspection Record (ใบตรวจตามรอบ)', defaults: ALL },
+  { key: 'inspect', label: 'Inspection Record (ใบตรวจ Regular time)', defaults: ALL },
   { key: 'setup', label: 'Set up / Last Piece', defaults: ['ADMIN', 'PD', 'QC'] },
   { key: 'dashboard', label: 'Dashboard', defaults: ALL },
   { key: 'sc', label: 'SC Chart', defaults: ALL },

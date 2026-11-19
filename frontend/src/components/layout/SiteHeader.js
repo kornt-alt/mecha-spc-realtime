@@ -127,7 +127,7 @@ const SiteHeader = () => {
                 >
                   <MenuItem to="/" title="เลือกหมวดที่จะตรวจ" desc="Inspection Record · Set up · Last Piece" active={pathname === '/'} />
                   {see(MENU.inspect) && (
-                    <MenuItem to={modelHref('/inspect', modelId)} title="Inspection Record" desc="ตรวจตามรอบ — สแกน MO แล้วกรอกค่าวัด" active={pathname === '/inspect'} />
+                    <MenuItem to={modelHref('/inspect', modelId)} title="Inspection Record" desc="Regular time — สแกน MO แล้วกรอกค่าวัด" active={pathname === '/inspect'} />
                   )}
                   {see(MENU.setup) && (
                     <MenuItem to="/setup" title="Set up / Last Piece" desc="งานตรวจส่งต่อ PD → QC" active={pathname === '/setup'} badge={setupBadge} />

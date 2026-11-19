@@ -1886,3 +1886,6 @@ tr.cp-row--drop-after > td { box-shadow: inset 0 -2px 0 var(--blue); }
 
 /* ── นำเข้า item จาก Excel (ItemImportModal) — คลิกแถว item = กางจุดตรวจ ── */
 .item-import__row { cursor: pointer; }
+
+/* แถบทำรายการกับจุดตรวจที่ติ๊กเลือก (Master) */
+.cp-batch { padding: 0.4rem 0.6rem; border: 1px solid var(--line); border-radius: 0.4rem; background: var(--blue-tint); }
