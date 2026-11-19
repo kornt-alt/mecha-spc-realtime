@@ -196,6 +196,8 @@ const MasterSetup = () => {
   const [baselineInfo, setBaselineInfo] = useState(null);
   // กล่อง "ดึงจาก Drawing Digital" (components/master/DrawingSyncModal.js)
   const [syncShow, setSyncShow] = useState(false);
+  // คำขอสมัครที่รออนุมัติ (ป้ายบนแท็บผู้ใช้) — เฉพาะคนที่มีสิทธิ์เมนูนั้น · โหลดใหม่ตอนเปลี่ยนแท็บ (อนุมัติแล้วกลับมา)
+  const [pendingCount, setPendingCount] = useState(0);
 
   // setMsg เป็น setter ที่ React การันตีว่าคงที่ ห่อ useMemo ไว้ให้ say/fail คงที่ตาม
   // ไม่งั้น useCallback ที่เรียกใช้จะถูกสร้างใหม่ทุก render แล้ว useEffect วิ่งรัว
@@ -237,6 +239,11 @@ const MasterSetup = () => {
   }, [prefill, setParams]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+  const canUsers = !access.loaded || access.can(MENU.masterUsers);
+  useEffect(() => {
+    if (!canUsers) { setPendingCount(0); return; }
+    apiCall('/users').then((rows) => setPendingCount(rows.filter((u) => Number(u.pending)).length)).catch(() => {});
+  }, [canUsers, tab]);
   useEffect(() => on('master_updated', loadAll), [loadAll]);
   useEffect(() => { loadCheckpoints(selectedModel); }, [selectedModel, loadCheckpoints]);
 
@@ -458,7 +465,12 @@ const MasterSetup = () => {
       {/* 4 แท็บตามสิทธิ์เมนู (Master › ผู้ใช้ & สิทธิ์) — แท็บที่ไม่มีสิทธิ์ไม่ขึ้น · แท็บที่เปิดอยู่จำใน ?tab= */}
       <Nav variant="tabs" activeKey={tab} onSelect={setTab} className="mb-3">
         {visibleTabs.map((t) => (
-          <Nav.Item key={t.key}><Nav.Link eventKey={t.key}>{t.label}</Nav.Link></Nav.Item>
+          <Nav.Item key={t.key}>
+            <Nav.Link eventKey={t.key}>
+              {t.label}
+              {t.key === 'users' && pendingCount > 0 && <Badge bg="danger" pill className="ms-1" title="คำขอสมัครรออนุมัติ">{pendingCount}</Badge>}
+            </Nav.Link>
+          </Nav.Item>
         ))}
       </Nav>
       {tab === 'base' && (

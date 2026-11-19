@@ -10,6 +10,7 @@ import ScSheet from './components/ScSheet';
 import MasterSetup from './components/MasterSetup';
 import RequireLogin from './components/RequireLogin';
 import SetupJobs from './components/SetupJobs';
+import RegisterPage from './components/RegisterPage';
 import { apiCall } from './utils/api';
 import SiteHeader from './components/layout/SiteHeader';
 import SiteFooter from './components/layout/SiteFooter';
@@ -67,6 +68,8 @@ const App = () => (
               <SetupJobs />
             </RequireLogin>
           )} />
+          {/* สมัครใช้งาน — ไม่ครอบ RequireLogin (บัญชีที่ได้เป็น pending จนกว่า ADMIN อนุมัติ) */}
+          <Route path="/register" element={<RegisterPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </PageTransition>

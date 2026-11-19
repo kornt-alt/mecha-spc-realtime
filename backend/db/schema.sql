@@ -603,3 +603,10 @@ CREATE TABLE IF NOT EXISTS machine_items (
 -- ── ปิดใช้งาน Division (Master › ลบ = ปิดใช้งาน / ลบถาวร · 2026-11-12) ──
 -- DEFAULT 1 = พฤติกรรมเดิม · ปิดแล้วไม่ขึ้นในช่องเลือก division ของ master ใหม่ ของเดิมที่อ้างอยู่ยังแสดงปกติ
 ALTER TABLE divisions ADD COLUMN IF NOT EXISTS is_active TINYINT(1) NOT NULL DEFAULT 1;
+
+-- สมัครใช้งานเอง (หน้า /register · Korn สั่ง 2026-11-19) — บัญชีเกิดมาเป็น pending = 1 + is_active = 0 login ไม่ได้
+-- จนกว่า ADMIN อนุมัติที่ Master › ผู้ใช้ & สิทธิ์ (ตอนนั้นผูก/สร้างผู้ตรวจจาก reg_emp_code แล้วล้าง reg_*)
+-- ⚠️ ปฏิเสธ = ลบแถวได้เฉพาะ pending = 1 (ยังไม่เคย login) · บัญชีจริงยังไม่มีการลบ
+ALTER TABLE users ADD COLUMN IF NOT EXISTS pending TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reg_emp_code VARCHAR(50) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reg_division_id INT NULL;

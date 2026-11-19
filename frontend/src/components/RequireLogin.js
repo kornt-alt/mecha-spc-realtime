@@ -12,6 +12,7 @@ import { apiCall } from '../utils/api';
 import { clearSession, getSession, hasRole, LOGOUT_EVENT, onSessionChange, setSession } from '../utils/auth';
 import BrandLogo from './layout/BrandLogo';
 import useMenuAccess from '../utils/useMenuAccess';
+import { APP_BASE } from '../utils/config';
 
 // เข้าได้ 2 ทาง: passkey ช่องเดียว หรือ ชื่อผู้ใช้ + รหัสผ่าน — แยกเป็นสองฟอร์มคนละปุ่ม
 // ไม่รวมเป็นฟอร์มเดียวที่ "เดาเอา" ว่าคนตั้งใจใช้ทางไหนจากช่องที่กรอก
@@ -69,6 +70,8 @@ export const LoginForm = ({ onDone, idPrefix = 'login' }) => {
     </Form>
     {/* ⚠️ ไม่ใช้ <Alert> — พ่วง role="alert" มาด้วย (กฎเดียวกับ AppDialog) */}
     {error && <div className="small mt-2" style={{ color: 'var(--red)' }}>{error}</div>}
+    {/* สมัครเอง = บัญชีรอ ADMIN อนุมัติ (RegisterPage) · <a> ไม่ใช่ <Link> — LoginForm อยู่นอก Router ได้ */}
+    <div className="text-center small mt-3">ยังไม่มีบัญชี? <a href={`${APP_BASE}/register`}>สมัครใช้งาน</a></div>
     </>
   );
 };

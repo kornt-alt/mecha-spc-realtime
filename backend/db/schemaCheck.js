@@ -19,7 +19,7 @@ const REQUIRED = {
   machines: ['id', 'division_id', 'code', 'name', 'is_active', 'allow_all_items', 'synced_at'],
   machine_items: ['machine_id', 'model_id'],
   inspectors: ['id', 'emp_code', 'name', 'is_active'],
-  users: ['id', 'username', 'password_hash', 'display_name', 'is_active', 'passkey_hash', 'role', 'inspector_id'],
+  users: ['id', 'username', 'password_hash', 'display_name', 'is_active', 'passkey_hash', 'role', 'inspector_id', 'pending', 'reg_emp_code', 'reg_division_id'],
   customers: ['id', 'name', 'min_cp', 'min_cpk', 'min_cp_ctf', 'min_cpk_ctf', 'ocs_rule_set', 'is_active'],
   models: [
     'id', 'division_id', 'item_no', 'item_name', 'is_active',

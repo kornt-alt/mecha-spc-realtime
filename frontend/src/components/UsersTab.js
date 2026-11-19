@@ -1,7 +1,7 @@
 // frontend/src/components/UsersTab.js — แท็บ "ผู้ใช้" ในหน้า Master: บัญชีที่ login หน้า Master ได้
 //
-// ⚠️ ไม่มีหน้าสมัครสาธารณะโดยตั้งใจ — คนที่ login อยู่เป็นคนเพิ่มบัญชีให้คนอื่น
-//    (หน้าเว็บเปิดได้ทุกเครื่องในโรงงาน สมัครเองได้ = login ไม่ได้กันอะไร)
+// บัญชีเกิดจาก: ADMIN เพิ่มที่นี่ · หรือคนสมัครเองที่ /register → การ์ด "คำขอสมัคร" ข้างบน (pending — login ไม่ได้จนกว่าอนุมัติ)
+//    (หน้าเว็บเปิดได้ทุกเครื่องในโรงงาน สมัครแล้วใช้ได้ทันที = login ไม่ได้กันอะไร)
 // ⚠️ ใช้ /users ไม่ใช่ generic CRUD /master/add — รหัสผ่านต้อง hash ที่ server
 // ไม่มีปุ่มลบ ใช้ปิดใช้งานแทน · ปิดบัญชีตัวเองไม่ได้ (server กันอีกชั้น)
 import React, { useCallback, useEffect, useState } from 'react';
@@ -11,6 +11,7 @@ import { getSession } from '../utils/auth';
 import { fmtDateTime } from '../utils/dateFormat';
 import { useDataTable, FilterBar } from './table/useDataTable';
 import Pager, { usePager } from './table/Pager';
+import ApproveUserModal from './master/ApproveUserModal';
 
 const MIN_PASSWORD = 6; // เท่ากับ backend/routes/users.js
 const MIN_PASSKEY = 6;  // เท่ากับ backend/routes/users.js
@@ -44,14 +45,19 @@ const USER_COLS = {
 };
 
 const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
-  const [users, setUsers] = useState([]);
+  const [allUsers, setUsers] = useState([]);
+  // คำขอสมัคร (pending) แยกการ์ด — ตารางบัญชีโชว์เฉพาะบัญชีจริง
+  const pendingUsers = allUsers.filter((u) => Number(u.pending));
+  const users = allUsers.filter((u) => !Number(u.pending));
+  const [approving, setApproving] = useState(null);
+  const [divisions, setDivisions] = useState([]);
   const dt = useDataTable(users, USER_COLS);
   const pg = usePager(dt.rows, dt.resetKey);
   const [form, setForm] = useState(blank);
   const me = getSession()?.user?.id;
   const [inspectors, setInspectors] = useState([]);
   useEffect(() => {
-    apiCall('/master/lookups').then((lk) => setInspectors(lk.inspectors ?? [])).catch(() => {});
+    apiCall('/master/lookups').then((lk) => { setInspectors(lk.inspectors ?? []); setDivisions(lk.divisions ?? []); }).catch(() => {});
   }, []);
   const inspectorOptions = inspectors.map((i) => ({ value: String(i.id), label: `${i.emp_code} ${i.name}` }));
 
@@ -191,7 +197,69 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
     onConfirm: () => setActive(u, false),
   });
 
+  const reject = (u) => showConfirm({
+    title: `ปฏิเสธคำขอของ ${u.username} ?`,
+    body: 'ลบคำขอนี้ทิ้ง (บัญชียังไม่เคยใช้งาน) — ถ้าเป็นคนจริง เขาสมัครใหม่ได้',
+    confirmLabel: 'ปฏิเสธ',
+    cancelLabel: 'ปิด',
+    onConfirm: async () => {
+      try {
+        await apiCall(`/users/${u.id}/pending`, { method: 'DELETE' });
+        say('success', `ปฏิเสธคำขอของ ${u.username} แล้ว`);
+        await load();
+      } catch (e) { fail(e); }
+    },
+  });
+
   return (
+    <>
+    {pendingUsers.length > 0 && (
+      <Card className="mb-3 user-requests">
+        <Card.Header>คำขอสมัคร <Badge bg="danger" pill>{pendingUsers.length}</Badge>
+          <span className="small text-muted ms-2">สมัครจากหน้า "สมัครใช้งาน" — เข้าสู่ระบบได้หลังอนุมัติ</span>
+        </Card.Header>
+        <Card.Body>
+          <div className="mc-freeze" style={{ maxHeight: '40vh' }}>
+            <Table bordered hover size="sm" className="mb-0 text-nowrap">
+              <thead>
+                <tr>
+                  <th className="mc-sticky-start">ชื่อผู้ใช้</th><th>ชื่อ-นามสกุล</th><th>รหัสพนักงาน</th><th>Division</th>
+                  <th>ขอเป็น</th><th>สมัครเมื่อ</th><th className="mc-sticky-end">จัดการ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingUsers.map((u) => (
+                  <tr key={u.id}>
+                    <td className="mc-sticky-start">{u.username}</td>
+                    <td>{u.display_name ?? '—'}</td>
+                    <td>{u.reg_emp_code ?? '—'}{u.matched_inspector_id ? <span className="small text-muted ms-1">(มีผู้ตรวจรหัสนี้)</span> : null}</td>
+                    <td>{u.reg_division_name ?? '—'}</td>
+                    <td>{roleLabel(u.role)}</td>
+                    <td className="num">{fmtTime(u.created_at)}</td>
+                    <td className="mc-sticky-end">
+                      <Button size="sm" className="me-1" onClick={() => setApproving(u)}>อนุมัติ</Button>
+                      <Button size="sm" variant="outline-danger" onClick={() => reject(u)}>ปฏิเสธ</Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </div>
+        </Card.Body>
+      </Card>
+    )}
+    <ApproveUserModal
+      user={approving}
+      inspectors={inspectors}
+      divisions={divisions}
+      onHide={() => setApproving(null)}
+      onDone={async (u) => {
+        setApproving(null);
+        say('success', `อนุมัติ ${u.username} แล้ว — เข้าสู่ระบบได้เลย`);
+        await load();
+        apiCall('/master/lookups').then((lk) => setInspectors(lk.inspectors ?? [])).catch(() => {});
+      }}
+    />
     <Card>
       <Card.Body>
         <Form onSubmit={add} autoComplete="off">
@@ -282,6 +350,7 @@ const UsersTab = ({ say, fail, showForm, showConfirm, onAlert }) => {
         <Pager pg={pg} />
       </Card.Body>
     </Card>
+    </>
   );
 };
 
